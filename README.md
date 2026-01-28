@@ -1,0 +1,140 @@
+# 🛡️ 脆弱性管理AIエージェント
+
+SIDfmからの脆弱性通知を自動処理し、SBOMと突合して担当者に通知するAIエージェントです。
+
+## 概要
+
+| 項目 | 内容 |
+|------|------|
+| プラットフォーム | Google Cloud Vertex AI Agent Engine |
+| モデル | Gemini 2.5 Flash |
+| フレームワーク | Google ADK (Agent Development Kit) |
+
+## アーキテクチャ
+```
+┌─────────────────────────────────────────────────────────────┐
+│              Vertex AI Agent Engine                         │
+│  ┌───────────────────────────────────────────────────────┐  │
+│  │     Vulnerability Management Agent (gemini-2.5-flash) │  │
+│  │                                                       │  │
+│  │   ┌───────────┐  ┌───────────┐  ┌───────────┐        │  │
+│  │   │Gmail Tools│  │Sheets Tool│  │Chat Tools │        │  │
+│  │   └─────┬─────┘  └─────┬─────┘  └─────┬─────┘        │  │
+│  └─────────┼──────────────┼──────────────┼──────────────┘  │
+└────────────┼──────────────┼──────────────┼──────────────────┘
+             ▼              ▼              ▼
+        Gmail API     Google Sheets    Google Chat
+        (SIDfm監視)   (SBOM/担当者)    (通知送信)
+```
+
+## 機能
+
+1. **脆弱性検知** - SIDfmメールの監視と解析
+2. **影響分析** - SBOMとの突合で影響システムを特定
+3. **担当者特定** - パターンマッチングで担当者を自動特定
+4. **優先度判定** - CVSSスコアに基づく優先度決定
+5. **担当者通知** - Google Chatでアラート送信
+
+## 前提条件
+
+- Google Cloud アカウント（課金有効）
+- Google Cloud プロジェクト
+- Cloud Shell または gcloud CLI
+
+---
+
+## デプロイ手順
+
+### Step 1: Google Cloud プロジェクトの準備
+
+Cloud Shell を開く: https://console.cloud.google.com/
+```bash
+# プロジェクトIDを設定（あなたのプロジェクトIDに置き換え）
+gcloud config set project YOUR_PROJECT_ID
+
+# 変数に保存
+PROJECT_ID=$(gcloud config get-value project)
+echo "Project: $PROJECT_ID"
+```
+
+### Step 2: 必要なAPIを有効化
+```bash
+gcloud services enable \
+    aiplatform.googleapis.com \
+    gmail.googleapis.com \
+    sheets.googleapis.com \
+    chat.googleapis.com
+```
+
+### Step 3: ステージングバケットを作成
+```bash
+gcloud storage buckets create gs://${PROJECT_ID}-agent-staging --location=asia-northeast1
+```
+
+### Step 4: リポジトリをクローン
+```bash
+cd ~
+git clone https://github.com/YOUR_USERNAME/vuln-agent-engine.git
+cd vuln-agent-engine
+```
+
+### Step 5: Python環境をセットアップ
+```bash
+python3 -m venv .venv
+source .venv/bin/activate
+
+pip install --upgrade pip
+pip install google-adk
+pip install "google-cloud-aiplatform[agent_engines,adk]"
+pip install google-api-python-client google-auth packaging
+```
+
+### Step 6: スプレッドシートを準備
+
+1. Google Sheets で新規スプレッドシートを作成
+2. スプレッドシート名: `脆弱性管理SBOM`（任意）
+
+#### シート1: SBOM
+シート名を `SBOM` に変更し、以下のヘッダーを1行目に入力:
+
+| A | B | C | D | E |
+|---|---|---|---|---|
+| type | name | version | release | purl |
+
+サンプルデータ（2行目以降）:
+```
+maven | log4j-core | 2.14.1 | 1 | pkg:maven/org.apache.logging.log4j/log4j-core@2.14.1
+npm | lodash | 4.17.21 | | pkg:npm/lodash@4.17.21
+```
+
+#### シート2: 担当者マッピング
+新しいシートを追加し、名前を `担当者マッピング` に変更:
+
+| A | B | C | D | E |
+|---|---|---|---|---|
+| pattern | system_name | owner_email | owner_name | notes |
+
+サンプルデータ:
+```
+pkg:maven/org.apache.logging.* | ログ基盤 | your-email@example.com | 担当太郎 | Log4j等
+pkg:npm/* | Webフロント | your-email@example.com | 担当太郎 | npm全般
+* | その他 | your-email@example.com | 担当太郎 | デフォルト
+```
+
+#### スプレッドシートIDをメモ
+URLの `https://docs.google.com/spreadsheets/d/【ここがID】/edit` 部分
+
+#### アクセス権限を設定
+共有 → 「リンクを知っている全員」→「閲覧者」に設定
+
+### Step 7: 環境変数を設定
+```bash
+cd ~/vuln-agent-engine/agent
+
+cat > .env << EOF
+GMAIL_USER_EMAIL=your-email@example.com
+SIDFM_SENDER_EMAIL=noreply@sidfm.com
+SBOM_SPREADSHEET_ID=あなたのスプレッドシートID
+SBOM_SHEET_NAME=SBOM
+OWNER_SHEET_NAME=担当者マッピング
+DEFAULT_CHAT_SPACE_ID=spaces/your-space-id

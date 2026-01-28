@@ -1,0 +1,226 @@
+"""
+Google Chat Tools - 脆弱性アラート送信
+
+Vertex AI Agent Engine版
+"""
+
+import os
+import logging
+from typing import Any
+from datetime import datetime, timedelta
+
+from google.oauth2 import service_account
+from googleapiclient.discovery import build
+
+logger = logging.getLogger(__name__)
+
+# 重大度設定
+SEVERITY_COLORS = {
+    "緊急": "#D32F2F",
+    "高": "#F57C00",
+    "中": "#FBC02D",
+    "低": "#388E3C",
+}
+
+SEVERITY_DEADLINES = {
+    "緊急": timedelta(days=1),
+    "高": timedelta(days=3),
+    "中": timedelta(days=7),
+    "低": timedelta(days=30),
+}
+
+
+def _get_chat_service():
+    """Chat APIサービスを構築"""
+    sa_path = os.environ.get("GOOGLE_APPLICATION_CREDENTIALS")
+    
+    if sa_path and os.path.exists(sa_path):
+        credentials = service_account.Credentials.from_service_account_file(
+            sa_path,
+            scopes=["https://www.googleapis.com/auth/chat.bot"]
+        )
+    else:
+        from google.auth import default
+        credentials, _ = default(scopes=["https://www.googleapis.com/auth/chat.bot"])
+    
+    return build("chat", "v1", credentials=credentials)
+
+
+def send_vulnerability_alert(
+    vulnerability_id: str,
+    title: str,
+    severity: str,
+    affected_systems: list[str],
+    cvss_score: float = None,
+    description: str = None,
+    remediation: str = None,
+    owners: list[str] = None,
+    space_id: str = None,
+) -> dict[str, Any]:
+    """
+    脆弱性アラートをGoogle Chatスペースに送信します。
+    
+    Args:
+        vulnerability_id: CVE番号等
+        title: 脆弱性のタイトル
+        severity: 重大度（緊急/高/中/低）
+        affected_systems: 影響を受けるシステム名のリスト
+        cvss_score: CVSSスコア（オプション）
+        description: 脆弱性の説明（オプション）
+        remediation: 推奨される対策（オプション）
+        owners: 担当者メールアドレス（オプション）
+        space_id: 送信先スペースID（省略時はデフォルト）
+    
+    Returns:
+        送信結果
+    """
+    try:
+        service = _get_chat_service()
+        
+        # スペースID
+        if not space_id:
+            space_id = os.environ.get("DEFAULT_CHAT_SPACE_ID", "")
+        
+        if not space_id:
+            return {"status": "error", "message": "Chat space ID not configured"}
+        
+        if not space_id.startswith("spaces/"):
+            space_id = f"spaces/{space_id}"
+        
+        # 対応期限
+        deadline = _calculate_deadline(severity)
+        
+        # カードメッセージを構築
+        card = _build_card(
+            vulnerability_id, title, severity, cvss_score,
+            affected_systems, description, remediation, deadline, owners
+        )
+        
+        # メンション
+        text = f"🚨 新しい脆弱性が検出されました: {vulnerability_id}"
+        if owners:
+            mentions = [f"<users/{email}>" for email in owners]
+            text = f"📢 {', '.join(mentions)} 対応をお願いします。\n\n" + text
+        
+        # 送信
+        response = service.spaces().messages().create(
+            parent=space_id,
+            body={"text": text, "cardsV2": [card]}
+        ).execute()
+        
+        logger.info(f"Sent alert to {space_id}: {vulnerability_id}")
+        
+        return {
+            "status": "sent",
+            "message_id": response.get("name"),
+            "space_id": space_id,
+            "vulnerability_id": vulnerability_id
+        }
+        
+    except Exception as e:
+        logger.error(f"Failed to send chat message: {e}")
+        return {"status": "error", "message": str(e), "vulnerability_id": vulnerability_id}
+
+
+def send_simple_message(message: str, space_id: str = None) -> dict[str, Any]:
+    """
+    シンプルなテキストメッセージを送信します。
+    
+    Args:
+        message: 送信するメッセージ
+        space_id: 送信先スペースID（省略時はデフォルト）
+    
+    Returns:
+        送信結果
+    """
+    try:
+        service = _get_chat_service()
+        
+        if not space_id:
+            space_id = os.environ.get("DEFAULT_CHAT_SPACE_ID", "")
+        
+        if not space_id:
+            return {"status": "error", "message": "Chat space ID not configured"}
+        
+        if not space_id.startswith("spaces/"):
+            space_id = f"spaces/{space_id}"
+        
+        response = service.spaces().messages().create(
+            parent=space_id,
+            body={"text": message}
+        ).execute()
+        
+        return {"status": "sent", "message_id": response.get("name")}
+        
+    except Exception as e:
+        logger.error(f"Failed to send message: {e}")
+        return {"status": "error", "message": str(e)}
+
+
+def _build_card(
+    vulnerability_id: str,
+    title: str,
+    severity: str,
+    cvss_score: float | None,
+    affected_systems: list[str],
+    description: str | None,
+    remediation: str | None,
+    deadline: str,
+    owners: list[str] | None
+) -> dict:
+    """脆弱性カードを構築"""
+    
+    color = SEVERITY_COLORS.get(severity, "#757575")
+    
+    # 概要セクション
+    overview = [
+        {"decoratedText": {"topLabel": "重大度", "text": f"<font color='{color}'><b>{severity}</b></font>"}}
+    ]
+    if cvss_score is not None:
+        overview.append({"decoratedText": {"topLabel": "CVSSスコア", "text": f"<b>{cvss_score}</b>"}})
+    overview.append({"decoratedText": {"topLabel": "対応期限", "text": f"<b>{deadline}</b>"}})
+    
+    # 影響システム
+    systems_text = "\n".join([f"• {s}" for s in affected_systems[:10]])
+    if len(affected_systems) > 10:
+        systems_text += f"\n... 他 {len(affected_systems) - 10} システム"
+    
+    sections = [
+        {"header": "概要", "widgets": overview},
+        {"header": "📋 影響を受けるシステム", "widgets": [{"textParagraph": {"text": systems_text or "該当なし"}}]}
+    ]
+    
+    if description:
+        sections.append({"header": "📝 説明", "widgets": [{"textParagraph": {"text": description[:500]}}]})
+    
+    if remediation:
+        sections.append({"header": "✅ 推奨対策", "widgets": [{"textParagraph": {"text": remediation[:500]}}]})
+    
+    if owners:
+        sections.append({"header": "👤 担当者", "widgets": [{"textParagraph": {"text": "\n".join(f"• {o}" for o in owners)}}]})
+    
+    # アクションボタン
+    sections.append({
+        "widgets": [{
+            "buttonList": {
+                "buttons": [{
+                    "text": "🔍 NVDで詳細確認",
+                    "onClick": {"openLink": {"url": f"https://nvd.nist.gov/vuln/detail/{vulnerability_id}"}}
+                }]
+            }
+        }]
+    })
+    
+    return {
+        "cardId": f"vuln-{vulnerability_id}",
+        "card": {
+            "header": {"title": f"🛡️ {vulnerability_id}", "subtitle": title[:100] if title else ""},
+            "sections": sections
+        }
+    }
+
+
+def _calculate_deadline(severity: str) -> str:
+    """対応期限を計算"""
+    delta = SEVERITY_DEADLINES.get(severity, timedelta(days=7))
+    return (datetime.now() + delta).strftime("%Y年%m月%d日")

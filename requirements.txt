@@ -1,0 +1,5 @@
+google-adk>=1.0.0
+google-cloud-aiplatform[agent_engines,adk]>=1.38.0
+google-api-python-client>=2.100.0
+google-auth>=2.25.0
+packaging>=23.0

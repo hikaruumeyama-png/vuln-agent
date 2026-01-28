@@ -1,0 +1,25 @@
+# 環境変数（機密情報）
+.env
+agent/.env
+
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+*.egg-info/
+
+# 一時ファイル
+agent_tmp*/
+*.log
+
+# IDE
+.vscode/
+.idea/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# テスト
+test_agent.py

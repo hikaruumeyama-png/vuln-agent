@@ -1,0 +1,6 @@
+# Cloud Functions
+functions-framework>=3.0.0
+
+# Vertex AI
+google-cloud-aiplatform[agent_engines]>=1.112.0
+vertexai>=1.38.0
