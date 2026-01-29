@@ -1,0 +1,89 @@
+{
+  "name": "vulnerability_management_agent",
+  "displayName": "脆弱性管理エージェント",
+  "description": "組織のソフトウェア資産を脆弱性から保護するAIエージェント。SBOMと照合して影響分析を行い、担当者に通知します。",
+  "version": "1.0.0",
+  "capabilities": [
+    {
+      "name": "vulnerability_detection",
+      "description": "SIDfmからの脆弱性通知メールを監視し、新しい脆弱性を検出",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "max_results": {
+            "type": "integer",
+            "description": "取得する最大件数",
+            "default": 10
+          }
+        }
+      }
+    },
+    {
+      "name": "impact_analysis",
+      "description": "SBOMと照合して影響を受けるシステムを特定",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "purl": {
+            "type": "string",
+            "description": "Package URL（例: pkg:maven/org.apache.logging.log4j/log4j-core@2.14.0）"
+          },
+          "product_name": {
+            "type": "string",
+            "description": "製品名（例: log4j）"
+          }
+        }
+      }
+    },
+    {
+      "name": "owner_identification",
+      "description": "担当者マッピングから適切な担当者を特定",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "purl_pattern": {
+            "type": "string",
+            "description": "PURLパターン（例: pkg:maven/org.apache.*）"
+          }
+        }
+      }
+    },
+    {
+      "name": "notification",
+      "description": "Google Chatで担当者に脆弱性アラートを送信",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "vulnerability_id": {
+            "type": "string",
+            "description": "CVE番号"
+          },
+          "severity": {
+            "type": "string",
+            "enum": ["緊急", "高", "中", "低"],
+            "description": "重大度"
+          },
+          "owners": {
+            "type": "array",
+            "items": {"type": "string"},
+            "description": "担当者メールアドレス"
+          }
+        },
+        "required": ["vulnerability_id", "severity"]
+      }
+    }
+  ],
+  "supportedProtocols": ["a2a"],
+  "authentication": {
+    "type": "service_account",
+    "scopes": [
+      "https://www.googleapis.com/auth/gmail.modify",
+      "https://www.googleapis.com/auth/spreadsheets.readonly",
+      "https://www.googleapis.com/auth/chat.bot"
+    ]
+  },
+  "contact": {
+    "email": "security-team@example.com"
+  },
+  "tags": ["security", "vulnerability", "sbom", "notification"]
+}

@@ -2,19 +2,38 @@
 Tools package for Vulnerability Management Agent
 """
 
-from .gmail_tools import get_sidfm_emails, mark_email_as_read
+from .gmail_tools import (
+    get_sidfm_emails,
+    get_unread_emails,
+    mark_email_as_read,
+    check_gmail_connection,
+)
 from .sheets_tools import (
     search_sbom_by_purl,
     search_sbom_by_product,
     get_affected_systems,
     get_owner_mapping,
 )
-from .chat_tools import send_vulnerability_alert, send_simple_message
+from .chat_tools import (
+    send_vulnerability_alert,
+    send_simple_message,
+    check_chat_connection,
+    list_space_members,
+)
+from .a2a_tools import (
+    register_remote_agent,
+    call_remote_agent,
+    list_registered_agents,
+    create_jira_ticket_request,
+    create_approval_request,
+)
 
 __all__ = [
     # Gmail
     "get_sidfm_emails",
+    "get_unread_emails",
     "mark_email_as_read",
+    "check_gmail_connection",
     # Sheets
     "search_sbom_by_purl",
     "search_sbom_by_product",
@@ -23,4 +42,12 @@ __all__ = [
     # Chat
     "send_vulnerability_alert",
     "send_simple_message",
+    "check_chat_connection",
+    "list_space_members",
+    # A2A
+    "register_remote_agent",
+    "call_remote_agent",
+    "list_registered_agents",
+    "create_jira_ticket_request",
+    "create_approval_request",
 ]

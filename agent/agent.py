@@ -12,13 +12,22 @@ from google.adk.tools import FunctionTool
 
 from .tools import (
     get_sidfm_emails,
+    get_unread_emails,
     mark_email_as_read,
+    check_gmail_connection,
     search_sbom_by_purl,
     search_sbom_by_product,
     get_affected_systems,
     get_owner_mapping,
     send_vulnerability_alert,
     send_simple_message,
+    check_chat_connection,
+    list_space_members,
+    register_remote_agent,
+    call_remote_agent,
+    list_registered_agents,
+    create_jira_ticket_request,
+    create_approval_request,
 )
 
 # エージェントの指示（システムプロンプト）
@@ -79,12 +88,28 @@ AGENT_INSTRUCTION = """あなたは脆弱性管理を専門とするセキュリ
 - 「脆弱性スキャンを実行して」→ SIDfmメールをチェック
 - 「担当者マッピングを確認して」→ `get_owner_mapping` で現在の設定を表示
 
+## A2A連携（Agent-to-Agent）
+
+他のエージェントと連携して、より高度な自動化が可能です：
+
+### 連携可能なエージェント
+- **jira_agent**: Jiraチケット作成（優先度・担当者の自動設定）
+- **approval_agent**: 承認ワークフロー（緊急パッチ適用の承認等）
+- **patch_agent**: パッチ管理（自動パッチ適用の指示）
+- **report_agent**: 報告書作成（週次/月次レポート）
+
+### A2A連携の使い方
+1. `list_registered_agents` で利用可能なエージェントを確認
+2. `create_jira_ticket_request` または `create_approval_request` でリクエストを構築
+3. `call_remote_agent` でエージェントを呼び出し
+
 ## 注意事項
 
 - 同じ脆弱性を二重に通知しないよう、メールは処理後に既読にする
 - 担当者が特定できない場合（パターンにマッチしない場合）はデフォルトの担当者に通知
 - 技術的な詳細は正確に、対応方法は具体的に記載
 - 複数の担当者に影響がある場合は、それぞれの担当者に個別に通知
+- A2A連携時は、相手エージェントの応答を待ってから次の処理を行う
 """
 
 
@@ -95,7 +120,9 @@ def create_vulnerability_agent() -> Agent:
     tools = [
         # Gmail Tools
         FunctionTool(get_sidfm_emails),
+        FunctionTool(get_unread_emails),
         FunctionTool(mark_email_as_read),
+        FunctionTool(check_gmail_connection),
         
         # Sheets Tools (SBOM & 担当者マッピング)
         FunctionTool(search_sbom_by_purl),
@@ -106,6 +133,15 @@ def create_vulnerability_agent() -> Agent:
         # Chat Tools
         FunctionTool(send_vulnerability_alert),
         FunctionTool(send_simple_message),
+        FunctionTool(check_chat_connection),
+        FunctionTool(list_space_members),
+
+        # A2A Tools (Agent-to-Agent連携)
+        FunctionTool(register_remote_agent),
+        FunctionTool(call_remote_agent),
+        FunctionTool(list_registered_agents),
+        FunctionTool(create_jira_ticket_request),
+        FunctionTool(create_approval_request),
     ]
     
     # エージェント作成
