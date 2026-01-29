@@ -224,3 +224,94 @@ def _calculate_deadline(severity: str) -> str:
     """対応期限を計算"""
     delta = SEVERITY_DEADLINES.get(severity, timedelta(days=7))
     return (datetime.now() + delta).strftime("%Y年%m月%d日")
+
+
+def check_chat_connection(space_id: str = None) -> dict[str, Any]:
+    """
+    Google Chat APIへの接続を確認します。
+
+    Args:
+        space_id: 確認するスペースID（省略時はデフォルト）
+
+    Returns:
+        接続状態とスペース情報
+    """
+    try:
+        service = _get_chat_service()
+
+        if not space_id:
+            space_id = os.environ.get("DEFAULT_CHAT_SPACE_ID", "")
+
+        if not space_id:
+            return {
+                "status": "error",
+                "message": "Chat space ID not configured. Set DEFAULT_CHAT_SPACE_ID environment variable."
+            }
+
+        if not space_id.startswith("spaces/"):
+            space_id = f"spaces/{space_id}"
+
+        # スペース情報を取得
+        space = service.spaces().get(name=space_id).execute()
+
+        return {
+            "status": "connected",
+            "space_id": space_id,
+            "space_name": space.get("displayName", ""),
+            "space_type": space.get("spaceType", ""),
+            "member_count": space.get("membershipCount", 0),
+        }
+
+    except Exception as e:
+        logger.error(f"Chat connection check failed: {e}")
+        return {
+            "status": "error",
+            "message": str(e)
+        }
+
+
+def list_space_members(space_id: str = None) -> dict[str, Any]:
+    """
+    スペースのメンバー一覧を取得します。
+
+    Args:
+        space_id: スペースID（省略時はデフォルト）
+
+    Returns:
+        メンバー一覧
+    """
+    try:
+        service = _get_chat_service()
+
+        if not space_id:
+            space_id = os.environ.get("DEFAULT_CHAT_SPACE_ID", "")
+
+        if not space_id:
+            return {"status": "error", "message": "Chat space ID not configured"}
+
+        if not space_id.startswith("spaces/"):
+            space_id = f"spaces/{space_id}"
+
+        # メンバー一覧を取得
+        response = service.spaces().members().list(parent=space_id).execute()
+        members = response.get("memberships", [])
+
+        member_list = []
+        for m in members:
+            member_info = m.get("member", {})
+            if member_info.get("type") == "HUMAN":
+                member_list.append({
+                    "name": member_info.get("displayName", ""),
+                    "email": member_info.get("email", ""),
+                })
+
+        return {
+            "status": "success",
+            "space_id": space_id,
+            "members": member_list,
+            "count": len(member_list),
+        }
+
+    except Exception as e:
+        logger.error(f"Failed to list members: {e}")
+        return {"status": "error", "message": str(e)}
