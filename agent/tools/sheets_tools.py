@@ -23,7 +23,8 @@ logger = logging.getLogger(__name__)
 # キャッシュ
 _sbom_cache = None
 _owner_mapping_cache = None
-_cache_timestamp = None
+_sbom_cache_timestamp = None
+_owner_mapping_cache_timestamp = None
 
 
 def _get_sheets_service():
@@ -48,14 +49,14 @@ def _load_sbom(force_refresh: bool = False) -> list[dict]:
     
     シート構成: type | name | version | release | purl
     """
-    global _sbom_cache, _cache_timestamp
+    global _sbom_cache, _sbom_cache_timestamp
     
     import time
     current_time = time.time()
     
     # 5分間キャッシュ
-    if _sbom_cache and _cache_timestamp and not force_refresh:
-        if current_time - _cache_timestamp < 300:
+    if _sbom_cache and _sbom_cache_timestamp and not force_refresh:
+        if current_time - _sbom_cache_timestamp < 300:
             return _sbom_cache
     
     spreadsheet_id = os.environ.get("SBOM_SPREADSHEET_ID", "")
@@ -93,7 +94,7 @@ def _load_sbom(force_refresh: bool = False) -> list[dict]:
             })
         
         _sbom_cache = sbom_entries
-        _cache_timestamp = current_time
+        _sbom_cache_timestamp = current_time
         
         logger.info(f"Loaded {len(sbom_entries)} SBOM entries")
         return sbom_entries
@@ -109,14 +110,14 @@ def _load_owner_mapping(force_refresh: bool = False) -> list[dict]:
     
     シート構成: pattern | system_name | owner_email | owner_name | notes
     """
-    global _owner_mapping_cache, _cache_timestamp
+    global _owner_mapping_cache, _owner_mapping_cache_timestamp
     
     import time
     current_time = time.time()
     
     # 5分間キャッシュ
-    if _owner_mapping_cache and _cache_timestamp and not force_refresh:
-        if current_time - _cache_timestamp < 300:
+    if _owner_mapping_cache and _owner_mapping_cache_timestamp and not force_refresh:
+        if current_time - _owner_mapping_cache_timestamp < 300:
             return _owner_mapping_cache
     
     spreadsheet_id = os.environ.get("SBOM_SPREADSHEET_ID", "")
@@ -157,6 +158,7 @@ def _load_owner_mapping(force_refresh: bool = False) -> list[dict]:
         mappings.sort(key=lambda x: (x["pattern"] == "*", -len(x["pattern"])))
         
         _owner_mapping_cache = mappings
+        _owner_mapping_cache_timestamp = current_time
         
         logger.info(f"Loaded {len(mappings)} owner mappings")
         return mappings
@@ -426,19 +428,25 @@ def _version_matches_range(version_str: str, range_spec: str) -> bool:
         # 条件チェック
         for condition in range_spec.split(","):
             condition = condition.strip()
-            
+
             if condition.endswith((".x", ".*")):
                 if not str(v).startswith(condition[:-2]):
                     return False
                 continue
-            
+            matched = False
+
             for op, func in [(">=", lambda a, b: a >= b), ("<=", lambda a, b: a <= b),
                             (">", lambda a, b: a > b), ("<", lambda a, b: a < b)]:
                 if condition.startswith(op):
                     target = pkg_version.parse(re.sub(r"^[^\d]+", "", condition[len(op):]) or "0")
                     if not func(v, target):
                         return False
+                    matched = True
                     break
+            if not matched:
+                target = pkg_version.parse(re.sub(r"^[^\d]+", "", condition) or "0")
+                if v != target:
+                    return False
         
         return True
     except Exception:

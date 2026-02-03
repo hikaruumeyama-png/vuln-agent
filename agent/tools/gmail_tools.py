@@ -297,16 +297,22 @@ def _extract_body(payload: dict) -> str:
     body = ""
 
     if "body" in payload and payload["body"].get("data"):
-        body = base64.urlsafe_b64decode(payload["body"]["data"]).decode("utf-8")
+        body = _decode_body(payload["body"]["data"])
     elif "parts" in payload:
         for part in payload["parts"]:
             if part["mimeType"] == "text/plain" and "data" in part.get("body", {}):
-                body = base64.urlsafe_b64decode(part["body"]["data"]).decode("utf-8")
+                body = _decode_body(part["body"]["data"])
                 break
             elif part["mimeType"] == "text/html" and not body and "data" in part.get("body", {}):
-                body = base64.urlsafe_b64decode(part["body"]["data"]).decode("utf-8")
+                body = _decode_body(part["body"]["data"])
 
     return body
+
+
+def _decode_body(encoded: str) -> str:
+    """Gmailの本文データを安全にデコード"""
+    padding = "=" * (-len(encoded) % 4)
+    return base64.urlsafe_b64decode(encoded + padding).decode("utf-8", errors="replace")
 
 
 def _parse_sidfm_content(body: str) -> list[dict[str, Any]]:
@@ -314,7 +320,7 @@ def _parse_sidfm_content(body: str) -> list[dict[str, Any]]:
     vulnerabilities = []
 
     # CVE番号を抽出
-    cve_ids = list(set(re.findall(r"CVE-\d{4}-\d{4,7}", body)))
+    cve_ids = list(dict.fromkeys(re.findall(r"CVE-\d{4}-\d{4,7}", body)))
 
     # CVSSスコアを抽出
     cvss_matches = re.findall(r"CVSS[:\s]*v?\d*\.?\d*[:\s]*(\d+\.?\d*)", body, re.IGNORECASE)

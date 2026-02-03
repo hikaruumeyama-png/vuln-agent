@@ -10,7 +10,7 @@ from fastapi.middleware.cors import CORSMiddleware
 import vertexai
 from vertexai import Client
 
-from live_api import GeminiLiveClient
+from .live_api import GeminiLiveClient
 
 GCP_PROJECT_ID = os.environ.get("GCP_PROJECT_ID")
 GCP_LOCATION = os.environ.get("GCP_LOCATION", "asia-northeast1")
@@ -78,6 +78,7 @@ async def websocket_endpoint(websocket: WebSocket):
         last_response_index = 0
 
         async def _stream():
+            nonlocal response_task
             async for response in live_client.stream_transcription(audio_queue):
                 if response.text:
                     transcript_parts.append(response.text)
