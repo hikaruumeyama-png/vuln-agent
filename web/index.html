@@ -1,0 +1,61 @@
+<!doctype html>
+<html lang="ja">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Vulnerability Agent Live UI</title>
+    <link rel="stylesheet" href="style.css" />
+  </head>
+  <body>
+    <main class="container">
+      <header>
+        <h1>Vulnerability Agent Live UI</h1>
+        <p>WebSocket で Live Gateway と接続し、テキストで問い合わせします。</p>
+      </header>
+
+      <section class="status">
+        <span id="status-indicator" class="indicator offline"></span>
+        <span id="status-text">Disconnected</span>
+      </section>
+
+      <section class="controls">
+        <label class="input-label">
+          Gateway URL
+          <input id="gateway-url" type="url" placeholder="wss://YOUR_RUN_URL/ws" />
+        </label>
+        <button id="connect-button">Connect</button>
+        <button id="disconnect-button" disabled>Disconnect</button>
+      </section>
+
+      <section class="audio-controls">
+        <button id="start-audio" disabled>Start Audio</button>
+        <button id="stop-audio" disabled>Stop Audio</button>
+        <span id="audio-status" class="audio-status">Audio: idle</span>
+      </section>
+
+      <section class="chat">
+        <div id="messages" class="messages"></div>
+        <form id="chat-form" class="chat-form">
+          <input
+            id="chat-input"
+            type="text"
+            placeholder="例: CVE-2024-12345の影響を教えて"
+            required
+          />
+          <button type="submit">Send</button>
+        </form>
+      </section>
+
+      <section class="note">
+        <h2>音声/Barge-inについて</h2>
+        <p>
+          対話開始時にエージェントが挨拶し、発話中でも返答が割り込んでくる
+          双方向ストリームに対応しています。ユーザーが話し始めると再生は停止し、
+          そのまま聞き取りを続けます。短い無音区間で返答が入りやすいテンポに調整しています。
+        </p>
+      </section>
+    </main>
+
+    <script src="app.js"></script>
+  </body>
+</html>
