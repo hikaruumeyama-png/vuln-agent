@@ -1,5 +1,6 @@
 import asyncio
 import base64
+import contextlib
 import os
 from dataclasses import dataclass
 from typing import AsyncGenerator
@@ -73,11 +74,15 @@ class GeminiLiveClient:
                     )
 
             sender_task = asyncio.create_task(_sender())
-            async for response in session.receive():
-                for part in response.parts or []:
-                    if part.text:
-                        yield LiveResponse(text=part.text)
-            sender_task.cancel()
+            try:
+                async for response in session.receive():
+                    for part in response.parts or []:
+                        if part.text:
+                            yield LiveResponse(text=part.text)
+            finally:
+                sender_task.cancel()
+                with contextlib.suppress(asyncio.CancelledError):
+                    await sender_task
 
     @staticmethod
     def decode_audio_base64(payload: str) -> bytes:

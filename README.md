@@ -99,15 +99,73 @@ SIDfmの脆弱性通知メールを自動で解析し、SBOMと突合して担�
 - ブラウザからWebSocketで接続し、テキスト/音声対話が可能。
 - 音声のバージイン（割り込み）にも対応。
 
-## セットアップ概要
+## セットアップ & デプロイ前チェックリスト
 
-詳しい手順は `docs/` 内のガイドを参照してください。
+以下のチェックリストを満たしていれば、Google Cloud へのデプロイ後も問題なく動作します。
 
-- Gmail OAuth設定: `docs/SETUP_GMAIL.md`
-- Google Chat設定: `docs/SETUP_CHAT.md`
-- Cloud Scheduler設定: `docs/SETUP_SCHEDULER.md`
-- A2A連携設定: `docs/SETUP_A2A.md`
-- Live Gateway + Web UI: `docs/LIVE_VOICE_SETUP.md`
+### 1) 必須の環境変数
+
+`agent/.env` に設定します（`deploy.sh` がテンプレートを生成します）。
+
+```bash
+# 共通
+GCP_PROJECT_ID=your-project-id
+GCP_LOCATION=asia-northeast1
+AGENT_RESOURCE_NAME=projects/your-project/locations/asia-northeast1/reasoningEngines/AGENT_ID
+
+# Gmail（OAuth or Workspace）
+GMAIL_OAUTH_TOKEN=...               # 個人Gmailのときのみ
+GMAIL_USER_EMAIL=security@domain    # Workspace委任のときのみ
+SIDFM_SENDER_EMAIL=noreply@sidfm.com
+
+# Sheets
+SBOM_SPREADSHEET_ID=your-spreadsheet-id
+SBOM_SHEET_NAME=SBOM
+OWNER_SHEET_NAME=担当者マッピング
+
+# Chat
+DEFAULT_CHAT_SPACE_ID=spaces/AAAA_BBBBB
+
+# Live API
+GEMINI_API_KEY=your-gemini-api-key
+GEMINI_LIVE_MODEL=gemini-2.0-flash-live-001
+
+# A2A（任意）
+REMOTE_AGENT_JIRA=projects/your-project/locations/us-central1/reasoningEngines/jira-agent-id
+REMOTE_AGENT_APPROVAL=projects/your-project/locations/us-central1/reasoningEngines/approval-agent-id
+REMOTE_AGENT_PATCH=projects/your-project/locations/us-central1/reasoningEngines/patch-agent-id
+REMOTE_AGENT_REPORT=projects/your-project/locations/us-central1/reasoningEngines/report-agent-id
+```
+
+### 2) 必要なAPI/権限
+
+最小構成で必要なAPI:
+
+- Gmail API
+- Google Sheets API
+- Google Chat API
+- Vertex AI / Agent Engine
+- (Live Gateway を使う場合) Gemini Live API
+
+サービスアカウントに必要な権限例:
+
+- `roles/aiplatform.user`（Agent Engine 呼び出し）
+- `roles/iam.serviceAccountUser`（Cloud Functions/Runなどでの実行）
+- Gmail/Chat/Sheets APIに必要なアクセス権
+
+### 3) 疎通確認（デプロイ後）
+
+```bash
+./test_agent.sh "Gmailへの接続を確認して"
+./test_agent.sh "Chat接続を確認して"
+./test_agent.sh "未読メールを3件取得して"
+```
+
+---
+
+## セットアップ詳細ガイド（統合版）
+
+以下は `docs/` 内のセットアップガイドを README に統合したものです。
 
 ### 必須の環境変数（例）
 
@@ -121,6 +179,242 @@ SBOM_SHEET_NAME=SBOM
 OWNER_SHEET_NAME=担当者マッピング
 DEFAULT_CHAT_SPACE_ID=spaces/your-space-id
 ```
+
+## Gmail連携（個人Gmail）セットアップ
+
+### Step 1: OAuth クライアントIDの作成
+
+1. https://console.cloud.google.com/apis/credentials
+2. 「認証情報を作成」→「OAuth クライアントID」
+3. アプリケーションの種類: **デスクトップアプリ**
+4. 名前: `vuln-agent-gmail`
+5. JSON をダウンロードして `credentials.json` にリネーム
+
+```bash
+mv ~/Downloads/client_secret_xxx.json /path/to/vuln-agent/credentials.json
+```
+
+### Step 2: Gmail API 有効化
+
+https://console.cloud.google.com/apis/library/gmail.googleapis.com を有効化
+
+### Step 3: OAuth 同意画面の設定
+
+1. https://console.cloud.google.com/apis/credentials/consent
+2. ユーザータイプ: **外部**（個人Gmailの場合）
+3. スコープに `https://www.googleapis.com/auth/gmail.modify` を追加
+4. テストユーザーに利用するGmailを追加（必須）
+
+### Step 4: セットアップスクリプトの実行
+
+```bash
+python setup_gmail_oauth.py
+```
+
+### Step 5: 再デプロイ
+
+```bash
+./deploy.sh
+```
+
+---
+
+## Google Chat 通知セットアップ
+
+### Step 1: Chat API 有効化
+
+https://console.cloud.google.com/apis/library/chat.googleapis.com を有効化
+
+### Step 2: Chat Bot 設定
+
+https://console.cloud.google.com/apis/api/chat.googleapis.com/hangouts-chat
+
+| 項目 | 値 |
+|------|-----|
+| アプリ名 | 脆弱性管理Bot |
+| 説明 | 脆弱性通知を送信するBot |
+| スペースとグループの会話でアプリを有効化 | ✅ |
+| 1:1 でのメッセージの受信 | ✅（任意） |
+| 公開設定 | 特定ユーザーのみ |
+
+### Step 3: スペースに Bot を追加
+
+Google Chat上でスペースを作成し、Botを追加してください。
+
+### Step 4: スペースIDを取得
+
+URLの `room/` 以降がIDです。環境変数には `spaces/XXXX` 形式で設定します。
+
+### Step 5: 環境変数追加 & 再デプロイ
+
+```bash
+DEFAULT_CHAT_SPACE_ID=spaces/AAAA_BBBBB
+./deploy.sh
+```
+
+---
+
+## 定期実行（Cloud Scheduler + Cloud Functions）
+
+### 簡単セットアップ（推奨）
+
+```bash
+gcloud ai reasoning-engines list --location=asia-northeast1
+./setup_scheduler.sh
+```
+
+### 手動セットアップ
+
+1) API有効化
+
+```bash
+gcloud services enable cloudfunctions.googleapis.com
+gcloud services enable cloudscheduler.googleapis.com
+gcloud services enable cloudbuild.googleapis.com
+gcloud services enable run.googleapis.com
+```
+
+2) サービスアカウント作成と権限付与
+
+```bash
+PROJECT_ID=$(gcloud config get-value project)
+gcloud iam service-accounts create vuln-agent-scheduler-sa \
+  --display-name="Vulnerability Agent Scheduler"
+gcloud projects add-iam-policy-binding $PROJECT_ID \
+  --member="serviceAccount:vuln-agent-scheduler-sa@${PROJECT_ID}.iam.gserviceaccount.com" \
+  --role="roles/aiplatform.user"
+```
+
+3) Cloud Functions デプロイ
+
+```bash
+cd scheduler
+gcloud functions deploy vuln-agent-scheduler \
+  --gen2 \
+  --runtime=python312 \
+  --region=asia-northeast1 \
+  --source=. \
+  --entry-point=run_vulnerability_scan \
+  --trigger-http \
+  --allow-unauthenticated=false \
+  --service-account="vuln-agent-scheduler-sa@${PROJECT_ID}.iam.gserviceaccount.com" \
+  --set-env-vars="GCP_PROJECT_ID=${PROJECT_ID},GCP_LOCATION=asia-northeast1,AGENT_RESOURCE_NAME=projects/${PROJECT_ID}/locations/asia-northeast1/reasoningEngines/YOUR_AGENT_ID" \
+  --memory=512MB \
+  --timeout=540s
+cd ..
+```
+
+4) Cloud Scheduler ジョブ作成
+
+```bash
+FUNCTION_URL=$(gcloud functions describe vuln-agent-scheduler \
+  --region=asia-northeast1 \
+  --format='value(serviceConfig.uri)')
+gcloud scheduler jobs create http vuln-agent-scan \
+  --location=asia-northeast1 \
+  --schedule="0 * * * *" \
+  --time-zone="Asia/Tokyo" \
+  --uri="$FUNCTION_URL" \
+  --http-method=POST \
+  --oidc-service-account-email="vuln-agent-scheduler-sa@${PROJECT_ID}.iam.gserviceaccount.com" \
+  --oidc-token-audience="$FUNCTION_URL"
+```
+
+---
+
+## A2A連携（Agent-to-Agent）
+
+### 1) 連携エージェントのデプロイ
+
+例: Jira連携エージェント
+
+```python
+from google.adk import Agent
+from google.adk.tools import FunctionTool
+
+def create_jira_ticket(...):
+    ...
+
+agent = Agent(
+    name="jira_agent",
+    model="gemini-2.5-flash",
+    instruction="Jiraチケットを作成するエージェント",
+    tools=[FunctionTool(create_jira_ticket)],
+)
+```
+
+```bash
+adk deploy --project=YOUR_PROJECT --location=us-central1
+```
+
+### 2) 環境変数の設定
+
+```bash
+REMOTE_AGENT_JIRA=projects/your-project/locations/us-central1/reasoningEngines/jira-agent-id
+REMOTE_AGENT_APPROVAL=projects/your-project/locations/us-central1/reasoningEngines/approval-agent-id
+REMOTE_AGENT_PATCH=projects/your-project/locations/us-central1/reasoningEngines/patch-agent-id
+REMOTE_AGENT_REPORT=projects/your-project/locations/us-central1/reasoningEngines/report-agent-id
+```
+
+### 3) 動作確認
+
+```bash
+./test_agent.sh "登録されているエージェントを教えて"
+```
+
+---
+
+## Live API + Web UI（音声対話）
+
+### 1) Live Gateway をローカル起動
+
+```bash
+cd live_gateway
+python -m venv .venv
+source .venv/bin/activate
+pip install -r requirements.txt
+
+export GCP_PROJECT_ID=YOUR_PROJECT_ID
+export GCP_LOCATION=asia-northeast1
+export AGENT_RESOURCE_NAME=projects/PROJECT/locations/asia-northeast1/reasoningEngines/AGENT_ID
+export GEMINI_API_KEY=YOUR_API_KEY
+export GEMINI_LIVE_MODEL=gemini-2.0-flash-live-001
+
+python app.py
+```
+
+### 2) Web UI を起動
+
+```bash
+cd web
+python -m http.server 8081
+```
+
+ブラウザで `http://localhost:8081` を開き、Gateway URL に
+`ws://localhost:8000/ws` を指定して接続します。
+
+### 3) Cloud Run へデプロイ
+
+```bash
+cd live_gateway
+gcloud run deploy vuln-agent-live-gateway \
+  --source=. \
+  --region=asia-northeast1 \
+  --set-env-vars=GCP_PROJECT_ID=YOUR_PROJECT_ID,GCP_LOCATION=asia-northeast1,AGENT_RESOURCE_NAME=projects/PROJECT/locations/asia-northeast1/reasoningEngines/AGENT_ID,GEMINI_API_KEY=YOUR_API_KEY \
+  --allow-unauthenticated
+```
+
+### 4) Web UI のホスティング（GCS例）
+
+```bash
+gsutil mb gs://YOUR_PROJECT_ID-live-ui
+gsutil web set -m index.html -e index.html gs://YOUR_PROJECT_ID-live-ui
+gsutil rsync -R web gs://YOUR_PROJECT_ID-live-ui
+```
+
+公開URLにアクセスし、Cloud Run の `wss://.../ws` を入力します。
+
+---
 
 ## デプロイ
 
