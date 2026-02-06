@@ -56,6 +56,7 @@ def send_vulnerability_alert(
     remediation: str = None,
     owners: list[str] = None,
     space_id: str = None,
+    record_history: bool = True,
 ) -> dict[str, Any]:
     """
     脆弱性アラートをGoogle Chatスペースに送信します。
@@ -110,13 +111,40 @@ def send_vulnerability_alert(
         
         logger.info(f"Sent alert to {space_id}: {vulnerability_id}")
         
-        return {
+        result = {
             "status": "sent",
             "message_id": response.get("name"),
             "space_id": space_id,
             "vulnerability_id": vulnerability_id
         }
+
+        if record_history:
+            try:
+                from .history_tools import log_vulnerability_history
+
+                history_result = log_vulnerability_history(
+                    vulnerability_id=vulnerability_id,
+                    title=title,
+                    severity=severity,
+                    affected_systems=affected_systems,
+                    cvss_score=cvss_score,
+                    description=description,
+                    remediation=remediation,
+                    owners=owners,
+                    status="notified",
+                    source="chat_alert",
+                    extra={
+                        "message_id": response.get("name"),
+                        "space_id": space_id,
+                    },
+                )
+                result["history"] = history_result
+            except Exception as history_error:
+                logger.error(f"Failed to record history: {history_error}")
+                result["history"] = {"status": "error", "message": str(history_error)}
         
+        return result
+
     except Exception as e:
         logger.error(f"Failed to send chat message: {e}")
         return {"status": "error", "message": str(e), "vulnerability_id": vulnerability_id}
