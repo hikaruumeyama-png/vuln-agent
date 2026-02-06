@@ -23,6 +23,7 @@ from .tools import (
     send_simple_message,
     check_chat_connection,
     list_space_members,
+    log_vulnerability_history,
     register_remote_agent,
     call_remote_agent,
     list_registered_agents,
@@ -135,6 +136,7 @@ def create_vulnerability_agent() -> Agent:
         FunctionTool(send_simple_message),
         FunctionTool(check_chat_connection),
         FunctionTool(list_space_members),
+        FunctionTool(log_vulnerability_history),
 
         # A2A Tools (Agent-to-Agent連携)
         FunctionTool(register_remote_agent),

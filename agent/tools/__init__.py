@@ -20,6 +20,7 @@ from .chat_tools import (
     check_chat_connection,
     list_space_members,
 )
+from .history_tools import log_vulnerability_history
 from .a2a_tools import (
     register_remote_agent,
     call_remote_agent,
@@ -44,6 +45,7 @@ __all__ = [
     "send_simple_message",
     "check_chat_connection",
     "list_space_members",
+    "log_vulnerability_history",
     # A2A
     "register_remote_agent",
     "call_remote_agent",
