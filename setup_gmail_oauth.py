@@ -106,7 +106,17 @@ def setup_oauth():
 ║  2) 許可後に表示されるコードをここに貼り付ける                       ║
 ╚══════════════════════════════════════════════════════════════════╝
 """)
-                creds = flow.run_console()
+                auth_url, _ = flow.authorization_url(
+                    access_type="offline",
+                    include_granted_scopes="true",
+                    prompt="consent",
+                )
+                print("以下のURLをブラウザで開いて認証してください:\n")
+                print(auth_url)
+                print("\n認証コードを入力してください:")
+                code = input("> ").strip()
+                flow.fetch_token(code=code)
+                creds = flow.credentials
             else:
                 creds = flow.run_local_server(port=8080)
 
