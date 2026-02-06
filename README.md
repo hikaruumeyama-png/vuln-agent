@@ -166,56 +166,38 @@ REMOTE_AGENT_REPORT=projects/your-project/locations/us-central1/reasoningEngines
 
 ---
 
-## RAG / ファインチューニングの追加アイデア
+## BigQuery対応履歴のデプロイガイド
 
-既存のフロー（Gmail → SBOM/担当者 → Chat通知）にプラスアルファで、RAGやファインチューニングを活用する場合の方向性です。
+対応履歴の保存は `log_vulnerability_history()` が担当し、
+Chat通知の送信成功時に自動で書き込まれます。
 
-### 1) RAG（検索拡張生成）
+### 1) BigQueryのデータセット/テーブル作成
 
-**目的**: 脆弱性通知に対して、より根拠のある説明や判断材料を添える。
+```bash
+PROJECT_ID=your-project-id
+DATASET_ID=vuln_agent
+TABLE_ID=incident_response_history
 
-- **追加するデータ源の例**
-  - 製品ごとの運用手順・SOP（Docs/Confluence）
-  - 過去インシデントの対応履歴（チケット/レポート/DB）
-  - 社内の例外ポリシー（例: 週末は対応方針が異なる など）
-- **具体的な使い方**
-  - エージェントが「対象PURL / 影響システム」を特定した後に、
-    **RAGで「対応手順」「例外ルール」「過去の類似対応」を取得**
-  - Chat通知カードに「参考リンク」や「推奨手順」を自動追記
-- **最低限の実装パターン**
-  - 既存のSheets/SBOM参照に加えて、社内ドキュメントや対応履歴を
-    **ベクタDB（Vertex AI Matching Engine など）に格納**し検索
-  - エージェントのツールとして `search_knowledge_base()` を追加し、
-    返却結果をプロンプトに差し込む
-- **対応履歴をBigQueryで蓄積する場合の考え方**
-  - **方向性は妥当**。対応履歴をデータベースに集約することで、
-    人間の検索・集計にも使え、RAGの検索元にもできる
-  - 典型的には「BigQueryに格納 →（必要に応じて）ベクトル化して検索」
-    の2段構成にするのが扱いやすい
-  - BigQuery自体は分析・集計に強いので、**人間向けのナレッジベース**
-    としても有効。RAG向けには、説明文や要約を別カラムとして持つと便利
-  - まずは **BigQueryを単一の情報源（SSOT）** にし、
-    RAG用のインデックスは必要に応じて派生させるのが運用しやすい
-- **本リポジトリでの実装内容（対応履歴の保存）**
-  - `log_vulnerability_history()` ツールで、対応履歴をBigQueryに行追加
-  - `send_vulnerability_alert()` の送信成功時に履歴保存を自動実行
-  - `BQ_HISTORY_TABLE_ID` が未設定の場合は保存をスキップ
+bq --location=asia-northeast1 mk -d "${PROJECT_ID}:${DATASET_ID}"
+bq mk --table "${PROJECT_ID}:${DATASET_ID}.${TABLE_ID}" \
+  incident_id:STRING,vulnerability_id:STRING,title:STRING,severity:STRING,affected_systems:STRING,cvss_score:FLOAT,description:STRING,remediation:STRING,owners:STRING,status:STRING,occurred_at:TIMESTAMP,source:STRING,extra:STRING
+```
 
-### 2) ファインチューニング
+> 補足: `affected_systems` と `owners` は JSON 文字列として保存します。
 
-**目的**: 文章のトーンや判断基準を社内ルールに合わせて安定化する。
+### 2) 環境変数を設定
 
-- **向いている用途**
-  - Chat通知の文面（緊急度ごとの言い回し）
-  - 期限や優先度の判定における「組織の暗黙知」の反映
-- **実施ステップの例**
-  - 過去の通知文・対応結果から
-    **「入力（脆弱性 + 影響情報）」→「出力（推奨アクション）」**の
-    形式で学習データを作成
-  - 低頻度で良いので、組織のレビュー済みデータに限定して学習
-- **運用のヒント**
-  - まずは RAG で根拠（ポリシー・手順）を参照し、
-    「表現の一貫性」はファインチューニングで補う、という併用が安定
+```bash
+BQ_HISTORY_TABLE_ID=your-project-id.vuln_agent.incident_response_history
+```
+
+### 3) 既存のデプロイ手順を実行
+
+環境変数を設定した状態でデプロイを行えば、履歴保存が有効になります。
+
+```bash
+./deploy.sh
+```
 
 ---
 
