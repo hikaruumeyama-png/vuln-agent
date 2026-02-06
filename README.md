@@ -126,6 +126,9 @@ OWNER_SHEET_NAME=担当者マッピング
 # Chat
 DEFAULT_CHAT_SPACE_ID=spaces/AAAA_BBBBB
 
+# BigQuery（対応履歴の保存）
+BQ_HISTORY_TABLE_ID=your-project.your_dataset.incident_response_history
+
 # Live API
 GEMINI_API_KEY=your-gemini-api-key
 GEMINI_LIVE_MODEL=gemini-2.0-flash-live-001
@@ -159,6 +162,41 @@ REMOTE_AGENT_REPORT=projects/your-project/locations/us-central1/reasoningEngines
 ./test_agent.sh "Gmailへの接続を確認して"
 ./test_agent.sh "Chat接続を確認して"
 ./test_agent.sh "未読メールを3件取得して"
+```
+
+---
+
+## BigQuery対応履歴のデプロイガイド
+
+対応履歴の保存は `log_vulnerability_history()` が担当し、
+Chat通知の送信成功時に自動で書き込まれます。
+
+### 1) BigQueryのデータセット/テーブル作成
+
+```bash
+PROJECT_ID=your-project-id
+DATASET_ID=vuln_agent
+TABLE_ID=incident_response_history
+
+bq --location=asia-northeast1 mk -d "${PROJECT_ID}:${DATASET_ID}"
+bq mk --table "${PROJECT_ID}:${DATASET_ID}.${TABLE_ID}" \
+  incident_id:STRING,vulnerability_id:STRING,title:STRING,severity:STRING,affected_systems:STRING,cvss_score:FLOAT,description:STRING,remediation:STRING,owners:STRING,status:STRING,occurred_at:TIMESTAMP,source:STRING,extra:STRING
+```
+
+> 補足: `affected_systems` と `owners` は JSON 文字列として保存します。
+
+### 2) 環境変数を設定
+
+```bash
+BQ_HISTORY_TABLE_ID=your-project-id.vuln_agent.incident_response_history
+```
+
+### 3) 既存のデプロイ手順を実行
+
+環境変数を設定した状態でデプロイを行えば、履歴保存が有効になります。
+
+```bash
+./deploy.sh
 ```
 
 ---
