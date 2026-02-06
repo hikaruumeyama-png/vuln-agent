@@ -93,7 +93,22 @@ def setup_oauth():
             flow = InstalledAppFlow.from_client_secrets_file(
                 str(CREDENTIALS_FILE), SCOPES
             )
-            creds = flow.run_local_server(port=8080)
+            use_console = os.environ.get("OAUTH_USE_CONSOLE", "").lower() in {
+                "1",
+                "true",
+                "yes",
+            }
+            if use_console:
+                print("""
+╔══════════════════════════════════════════════════════════════════╗
+║  コンソール認証モードで進めます                                     ║
+║  1) 表示されたURLをブラウザで開く                                   ║
+║  2) 許可後に表示されるコードをここに貼り付ける                       ║
+╚══════════════════════════════════════════════════════════════════╝
+""")
+                creds = flow.run_local_server(port=8080, open_browser=False)
+            else:
+                creds = flow.run_local_server(port=8080)
 
         # トークンを保存
         with open(TOKEN_FILE, "w") as token:
