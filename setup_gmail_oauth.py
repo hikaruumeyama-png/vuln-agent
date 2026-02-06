@@ -106,7 +106,7 @@ def setup_oauth():
 ║  2) 許可後に表示されるコードをここに貼り付ける                       ║
 ╚══════════════════════════════════════════════════════════════════╝
 """)
-                creds = flow.run_console()
+                creds = flow.run_local_server(port=8080, open_browser=False)
             else:
                 creds = flow.run_local_server(port=8080)
 
