@@ -23,11 +23,19 @@ SIDfmの脆弱性通知メールを自動で解析し、SBOMと突合して担�
 │  │   ┌───────────┐  ┌───────────┐  ┌───────────┐        │  │
 │  │   │Gmail Tools│  │Sheets Tool│  │Chat Tools │        │  │
 │  │   └─────┬─────┘  └─────┬─────┘  └─────┬─────┘        │  │
+│  │         │              │              │             │  │
+│  │         │              │        ┌─────▼─────┐       │  │
+│  │         │              │        │History   │       │  │
+│  │         │              │        │Tools     │       │  │
+│  │         │              │        └─────┬─────┘       │  │
 │  └─────────┼──────────────┼──────────────┼──────────────┘  │
 └────────────┼──────────────┼──────────────┼──────────────────┘
              ▼              ▼              ▼
         Gmail API     Google Sheets    Google Chat
         (SIDfm監視)   (SBOM/担当者)    (通知送信)
+                                   ▼
+                                BigQuery
+                              (対応履歴)
 ```
 
 ### 音声/チャットUIの追加構成
@@ -99,11 +107,29 @@ SIDfmの脆弱性通知メールを自動で解析し、SBOMと突合して担�
 - ブラウザからWebSocketで接続し、テキスト/音声対話が可能。
 - 音声のバージイン（割り込み）にも対応。
 
-## セットアップ & デプロイ前チェックリスト
+## デプロイ手順（初心者向け）
 
-以下のチェックリストを満たしていれば、Google Cloud へのデプロイ後も問題なく動作します。
+以下の順に進めれば、最小構成でデプロイできます。
 
-### 1) 必須の環境変数
+### Step 1) 必要なAPIを有効化
+
+- Gmail API
+- Google Sheets API
+- Google Chat API
+- Vertex AI / Agent Engine
+- (Live Gateway を使う場合) Gemini Live API
+
+### Step 2) 認証情報の準備
+
+- Gmailは **OAuth** または **Workspaceの委任** のどちらかを準備
+- Chat Bot とスペースを作成し、スペースIDを取得
+- Sheets に SBOM と担当者マッピングを用意
+
+### Step 3) BigQuery（対応履歴）を用意する（任意）
+
+対応履歴を保存したい場合は、下記の「BigQuery対応履歴のデプロイガイド」を実施します。
+
+### Step 4) 環境変数を設定
 
 `agent/.env` に設定します（`deploy.sh` がテンプレートを生成します）。
 
@@ -126,10 +152,10 @@ OWNER_SHEET_NAME=担当者マッピング
 # Chat
 DEFAULT_CHAT_SPACE_ID=spaces/AAAA_BBBBB
 
-# BigQuery（対応履歴の保存）
+# BigQuery（対応履歴の保存・任意）
 BQ_HISTORY_TABLE_ID=your-project.your_dataset.incident_response_history
 
-# Live API
+# Live API（任意）
 GEMINI_API_KEY=your-gemini-api-key
 GEMINI_LIVE_MODEL=gemini-2.0-flash-live-001
 
@@ -140,23 +166,13 @@ REMOTE_AGENT_PATCH=projects/your-project/locations/us-central1/reasoningEngines/
 REMOTE_AGENT_REPORT=projects/your-project/locations/us-central1/reasoningEngines/report-agent-id
 ```
 
-### 2) 必要なAPI/権限
+### Step 5) デプロイを実行
 
-最小構成で必要なAPI:
+```bash
+./deploy.sh
+```
 
-- Gmail API
-- Google Sheets API
-- Google Chat API
-- Vertex AI / Agent Engine
-- (Live Gateway を使う場合) Gemini Live API
-
-サービスアカウントに必要な権限例:
-
-- `roles/aiplatform.user`（Agent Engine 呼び出し）
-- `roles/iam.serviceAccountUser`（Cloud Functions/Runなどでの実行）
-- Gmail/Chat/Sheets APIに必要なアクセス権
-
-### 3) 疎通確認（デプロイ後）
+### Step 6) 疎通確認
 
 ```bash
 ./test_agent.sh "Gmailへの接続を確認して"
