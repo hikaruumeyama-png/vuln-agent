@@ -75,6 +75,7 @@ def check_credentials_file():
 def setup_oauth():
     """OAuth認証を実行してトークンを取得"""
     creds = None
+    use_console = True
 
     # 既存のトークンがあれば読み込み
     if TOKEN_FILE.exists():
@@ -94,11 +95,6 @@ def setup_oauth():
             flow = InstalledAppFlow.from_client_secrets_file(
                 str(CREDENTIALS_FILE), SCOPES
             )
-            use_console = os.environ.get("OAUTH_USE_CONSOLE", "").lower() in {
-                "1",
-                "true",
-                "yes",
-            }
             if use_console:
                 print("""
 ╔══════════════════════════════════════════════════════════════════╗
