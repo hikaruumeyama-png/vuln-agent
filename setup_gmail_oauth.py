@@ -18,6 +18,7 @@ import sys
 import json
 import base64
 from pathlib import Path
+from urllib.parse import urlparse, parse_qs
 
 # Google Auth ライブラリ
 try:
@@ -104,9 +105,27 @@ def setup_oauth():
 ║  コンソール認証モードで進めます                                     ║
 ║  1) 表示されたURLをブラウザで開く                                   ║
 ║  2) 許可後に表示されるコードをここに貼り付ける                       ║
+║     (localhost エラー画面でもURLをコピーしてください)             ║
 ╚══════════════════════════════════════════════════════════════════╝
 """)
-                creds = flow.run_console()
+                auth_url, _ = flow.authorization_url(
+                    access_type="offline",
+                    include_granted_scopes="true",
+                    prompt="consent",
+                )
+                print(f"\nURL: {auth_url}\n")
+                redirect_response = input("リダイレクト先のURL (またはコード) を貼り付けてください: ").strip()
+                parsed = urlparse(redirect_response)
+                code = None
+                if parsed.scheme and parsed.netloc:
+                    query = parse_qs(parsed.query)
+                    code_values = query.get("code")
+                    if code_values:
+                        code = code_values[0]
+                if not code:
+                    code = redirect_response
+                flow.fetch_token(code=code)
+                creds = flow.credentials
             else:
                 creds = flow.run_local_server(port=8080)
 
