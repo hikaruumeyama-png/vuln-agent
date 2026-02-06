@@ -142,6 +142,8 @@ AGENT_RESOURCE_NAME=projects/your-project/locations/asia-northeast1/reasoningEng
 # Gmail（OAuth or Workspace）
 GMAIL_OAUTH_TOKEN=...               # 個人Gmailのときのみ
 GMAIL_USER_EMAIL=security@domain    # Workspace委任のときのみ
+GMAIL_SERVICE_ACCOUNT_JSON=...      # Workspace委任のときのみ（JSON文字列）
+GMAIL_SERVICE_ACCOUNT_JSON_BASE64=... # Workspace委任のときのみ（Base64推奨）
 SIDFM_SENDER_EMAIL=noreply@sidfm.com
 
 # Sheets
@@ -179,6 +181,49 @@ REMOTE_AGENT_REPORT=projects/your-project/locations/us-central1/reasoningEngines
 ./test_agent.sh "Chat接続を確認して"
 ./test_agent.sh "未読メールを3件取得して"
 ```
+
+---
+
+## Google Cloud 上のみで完結させる場合（推奨構成）
+
+ローカルPCを使わずに完結させる場合は **Google Workspace のドメイン委任 + サービスアカウント** を使います。
+個人GmailのOAuthフロー（後述）はローカル認証が必要なため、クラウド完結の運用には向きません。
+
+### 1) サービスアカウントの作成（Cloud Shellで実行）
+
+```bash
+PROJECT_ID=your-project-id
+SA_NAME=vuln-agent-gmail
+
+gcloud iam service-accounts create "${SA_NAME}" \
+  --project "${PROJECT_ID}" \
+  --display-name="Vuln Agent Gmail"
+```
+
+### 2) サービスアカウントキーを発行して環境変数に設定
+
+```bash
+SA_EMAIL="${SA_NAME}@${PROJECT_ID}.iam.gserviceaccount.com"
+gcloud iam service-accounts keys create /tmp/vuln-agent-gmail.json \
+  --iam-account "${SA_EMAIL}" \
+  --project "${PROJECT_ID}"
+
+# Base64にして agent/.env に貼り付け
+SA_JSON_BASE64=$(base64 -w 0 /tmp/vuln-agent-gmail.json)
+echo "GMAIL_SERVICE_ACCOUNT_JSON_BASE64=${SA_JSON_BASE64}" >> agent/.env
+echo "GMAIL_USER_EMAIL=security@your-domain" >> agent/.env
+```
+
+### 3) ドメイン全体の委任を付与
+
+Google Workspace 管理コンソールで、サービスアカウントに **Gmail / Sheets / Chat** のスコープを付与します。
+
+### 4) 共有設定
+
+- SBOM スプレッドシートをサービスアカウントに共有
+- Chat スペースに Bot を追加
+
+以降は `./deploy.sh` のみでクラウド上にデプロイが完結します。
 
 ---
 
@@ -235,6 +280,9 @@ DEFAULT_CHAT_SPACE_ID=spaces/your-space-id
 ```
 
 ## Gmail連携（個人Gmail）セットアップ
+
+> ⚠️ 個人GmailのOAuthフローはローカルPCでのブラウザ認証が必要です。  
+> Google Cloud 上のみで完結させたい場合は、上記「Google Cloud 上のみで完結させる場合」を参照してください。
 
 ### Step 1: OAuth クライアントIDの作成
 

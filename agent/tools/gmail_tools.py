@@ -79,17 +79,30 @@ def _get_gmail_service():
             from google.oauth2 import service_account
 
             sa_path = os.environ.get("GOOGLE_APPLICATION_CREDENTIALS")
+            sa_json = os.environ.get("GMAIL_SERVICE_ACCOUNT_JSON")
+            sa_json_base64 = os.environ.get("GMAIL_SERVICE_ACCOUNT_JSON_BASE64")
 
-            if sa_path and os.path.exists(sa_path):
+            if sa_json_base64:
+                sa_json = base64.b64decode(sa_json_base64).decode("utf-8")
+
+            if sa_json:
+                credentials = service_account.Credentials.from_service_account_info(
+                    json.loads(sa_json),
+                    scopes=["https://www.googleapis.com/auth/gmail.modify"],
+                    subject=gmail_user,
+                )
+                auth_method = "domain_delegation_env"
+                logger.info(f"Using domain delegation from env for {gmail_user} (Google Workspace)")
+            elif sa_path and os.path.exists(sa_path):
                 credentials = service_account.Credentials.from_service_account_file(
                     sa_path,
                     scopes=["https://www.googleapis.com/auth/gmail.modify"],
-                    subject=gmail_user
+                    subject=gmail_user,
                 )
-                auth_method = "domain_delegation"
-                logger.info(f"Using domain delegation for {gmail_user} (Google Workspace)")
+                auth_method = "domain_delegation_file"
+                logger.info(f"Using domain delegation from file for {gmail_user} (Google Workspace)")
             else:
-                logger.warning("Service account file not found, trying default credentials")
+                logger.warning("Service account credentials not found, trying default credentials")
 
         except Exception as e:
             logger.error(f"Domain delegation error: {e}")

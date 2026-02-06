@@ -111,6 +111,7 @@ if [ ! -f "agent/.env" ]; then
     cat > agent/.env << EOF
 # Gmail設定
 GMAIL_USER_EMAIL=security-team@your-domain.com
+GMAIL_SERVICE_ACCOUNT_JSON_BASE64=your-service-account-json-base64
 SIDFM_SENDER_EMAIL=noreply@sidfm.com
 
 # SBOM設定
