@@ -131,6 +131,16 @@ cd /path/to/vuln-agent-engine
 python setup_gmail_oauth.py
 ```
 
+> 💡 **Google Cloud 内で完結させたい場合**  
+> Cloud Shell/VM/Cloud Run などローカルにブラウザがない環境では、
+> **コンソール認証モード**を使ってください。
+>
+> ```bash
+> OAUTH_USE_CONSOLE=true python setup_gmail_oauth.py
+> ```
+>
+> 表示された URL をブラウザで開き、認可コードをターミナルに貼り付けます。
+
 ### 4.2 ブラウザで認証
 
 1. ブラウザが自動で開きます
