@@ -38,12 +38,12 @@ steps:
         GCP_PROJECT_ID=${PROJECT_ID}
         GCP_LOCATION=${_REGION}
         EOF
-        sed -i 's/^        //' agent/.env
+        cat agent/.env
 
   # =========================================
   # Step 2: Agent Engine をデプロイ
   # =========================================
-  - name: "python:3.12"
+  - name: "gcr.io/google.com/cloudsdktool/cloud-sdk"
     id: deploy-agent
     entrypoint: bash
     args:
@@ -51,12 +51,11 @@ steps:
       - |
         pip install -q google-adk
         cd agent
-        adk deploy agent \
+        adk deploy agent_engine \
           --project=${PROJECT_ID} \
           --region=${_REGION} \
-          --staging_bucket=gs://${PROJECT_ID}-agent-staging \
           --display_name=${_AGENT_NAME} \
-          --env_file=.env
+          --env_file=.env .
     waitFor:
       - build-env
 

@@ -257,12 +257,11 @@ info ".env ファイルを Secret Manager の値から生成しました"
 pip install -q google-adk 2>/dev/null
 
 cd agent
-DEPLOY_OUTPUT=$(adk deploy agent \
+DEPLOY_OUTPUT=$(adk deploy agent_engine \
   --project="$PROJECT_ID" \
   --region="$REGION" \
-  --staging_bucket="$STAGING_BUCKET" \
   --display_name="$AGENT_NAME" \
-  --env_file=".env" 2>&1) || {
+  --env_file=".env" . 2>&1) || {
     err "Agent Engine のデプロイに失敗しました"
     echo "$DEPLOY_OUTPUT"
     exit 1

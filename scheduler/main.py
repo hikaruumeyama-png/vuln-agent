@@ -65,9 +65,9 @@ def run_vulnerability_scan(request):
         
         # エージェント実行
         results = []
-        
+
         import asyncio
-        
+
         async def execute_scan():
             async for event in app.async_stream_query(
                 user_id="scheduler",
@@ -77,8 +77,18 @@ def run_vulnerability_scan(request):
                     for part in event.content.get('parts', []):
                         if 'text' in part:
                             results.append(part['text'])
-        
-        asyncio.run(execute_scan())
+
+        try:
+            loop = asyncio.get_running_loop()
+        except RuntimeError:
+            loop = None
+
+        if loop and loop.is_running():
+            import concurrent.futures
+            with concurrent.futures.ThreadPoolExecutor() as pool:
+                pool.submit(asyncio.run, execute_scan()).result()
+        else:
+            asyncio.run(execute_scan())
         
         summary = "\n".join(results)
         print(f"Scan completed. Summary: {summary[:500]}")
