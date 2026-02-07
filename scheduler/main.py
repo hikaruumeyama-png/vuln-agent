@@ -11,7 +11,6 @@ import os
 import json
 import functions_framework
 import vertexai
-from vertexai.agent_engines import AdkApp
 
 
 # 環境変数から設定を取得

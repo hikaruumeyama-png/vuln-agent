@@ -301,10 +301,11 @@ def _extract_body(payload: dict) -> str:
         body = _decode_body(payload["body"]["data"])
     elif "parts" in payload:
         for part in payload["parts"]:
-            if part["mimeType"] == "text/plain" and "data" in part.get("body", {}):
+            mime = part.get("mimeType", "")
+            if mime == "text/plain" and "data" in part.get("body", {}):
                 body = _decode_body(part["body"]["data"])
                 break
-            elif part["mimeType"] == "text/html" and not body and "data" in part.get("body", {}):
+            elif mime == "text/html" and not body and "data" in part.get("body", {}):
                 body = _decode_body(part["body"]["data"])
 
     return body

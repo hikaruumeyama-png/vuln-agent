@@ -39,8 +39,8 @@ def deploy_agent(
     
     # エージェントをインポート
     print(f"\nLoading agent...")
-    sys.path.insert(0, str(Path(__file__).parent / "agent"))
-    from agent import root_agent
+    sys.path.insert(0, str(Path(__file__).parent))
+    from agent.agent import root_agent
     
     # AdkAppでラップ
     print(f"Creating AdkApp...")
