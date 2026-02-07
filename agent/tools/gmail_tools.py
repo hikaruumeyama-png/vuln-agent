@@ -294,21 +294,31 @@ def _get_email_detail(service, message_id: str) -> dict[str, Any] | None:
 
 
 def _extract_body(payload: dict) -> str:
-    """メール本文を抽出"""
-    body = ""
-
+    """メール本文を抽出（ネストされたマルチパートにも対応）"""
     if "body" in payload and payload["body"].get("data"):
-        body = _decode_body(payload["body"]["data"])
-    elif "parts" in payload:
-        for part in payload["parts"]:
-            mime = part.get("mimeType", "")
-            if mime == "text/plain" and "data" in part.get("body", {}):
-                body = _decode_body(part["body"]["data"])
-                break
-            elif mime == "text/html" and not body and "data" in part.get("body", {}):
-                body = _decode_body(part["body"]["data"])
+        return _decode_body(payload["body"]["data"])
 
-    return body
+    if "parts" not in payload:
+        return ""
+
+    text_plain = ""
+    text_html = ""
+
+    for part in payload["parts"]:
+        mime = part.get("mimeType", "")
+
+        # ネストされたマルチパートを再帰的に探索
+        if mime.startswith("multipart/") and "parts" in part:
+            nested = _extract_body(part)
+            if nested:
+                return nested
+
+        if mime == "text/plain" and "data" in part.get("body", {}):
+            text_plain = _decode_body(part["body"]["data"])
+        elif mime == "text/html" and not text_html and "data" in part.get("body", {}):
+            text_html = _decode_body(part["body"]["data"])
+
+    return text_plain or text_html
 
 
 def _decode_body(encoded: str) -> str:
