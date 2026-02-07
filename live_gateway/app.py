@@ -10,7 +10,10 @@ from fastapi.middleware.cors import CORSMiddleware
 import vertexai
 from vertexai import Client
 
-from .live_api import GeminiLiveClient
+try:
+    from .live_api import GeminiLiveClient
+except ImportError:
+    from live_api import GeminiLiveClient
 
 GCP_PROJECT_ID = os.environ.get("GCP_PROJECT_ID")
 GCP_LOCATION = os.environ.get("GCP_LOCATION", "asia-northeast1")

@@ -1,0 +1,147 @@
+# ====================================================
+# Cloud Build CI/CD パイプライン
+#
+# 初回セットアップ後のコード変更を自動デプロイします。
+#
+# 実行:
+#   gcloud builds submit --config cloudbuild.yaml
+#
+# トリガー登録 (push 時に自動実行):
+#   gcloud builds triggers create github \
+#     --repo-name=vuln-agent --repo-owner=YOUR_ORG \
+#     --branch-pattern="^main$" \
+#     --build-config=cloudbuild.yaml
+# ====================================================
+
+substitutions:
+  _REGION: asia-northeast1
+  _AGENT_NAME: vulnerability-management-agent
+
+steps:
+  # =========================================
+  # Step 1: Secret Manager から .env を生成
+  # =========================================
+  - name: "gcr.io/google.com/cloudsdktool/cloud-sdk"
+    id: build-env
+    entrypoint: bash
+    args:
+      - "-c"
+      - |
+        cat > agent/.env <<EOF
+        GMAIL_USER_EMAIL=$(gcloud secrets versions access latest --secret=vuln-agent-gmail-user 2>/dev/null || echo '')
+        SIDFM_SENDER_EMAIL=$(gcloud secrets versions access latest --secret=vuln-agent-sidfm-sender 2>/dev/null || echo 'noreply@sidfm.com')
+        SBOM_SPREADSHEET_ID=$(gcloud secrets versions access latest --secret=vuln-agent-sbom-spreadsheet-id 2>/dev/null || echo '')
+        SBOM_SHEET_NAME=$(gcloud secrets versions access latest --secret=vuln-agent-sbom-sheet-name 2>/dev/null || echo 'SBOM')
+        OWNER_SHEET_NAME=$(gcloud secrets versions access latest --secret=vuln-agent-owner-sheet-name 2>/dev/null || echo '担当者マッピング')
+        DEFAULT_CHAT_SPACE_ID=$(gcloud secrets versions access latest --secret=vuln-agent-chat-space-id 2>/dev/null || echo '')
+        BQ_HISTORY_TABLE_ID=$(gcloud secrets versions access latest --secret=vuln-agent-bq-table-id 2>/dev/null || echo '')
+        GCP_PROJECT_ID=${PROJECT_ID}
+        GCP_LOCATION=${_REGION}
+        EOF
+        sed -i 's/^        //' agent/.env
+
+  # =========================================
+  # Step 2: Agent Engine をデプロイ
+  # =========================================
+  - name: "python:3.12"
+    id: deploy-agent
+    entrypoint: bash
+    args:
+      - "-c"
+      - |
+        pip install -q google-adk
+        cd agent
+        adk deploy agent \
+          --project=${PROJECT_ID} \
+          --region=${_REGION} \
+          --staging_bucket=gs://${PROJECT_ID}-agent-staging \
+          --display_name=${_AGENT_NAME} \
+          --env_file=.env
+    waitFor:
+      - build-env
+
+  # =========================================
+  # Step 3: Live Gateway を Cloud Run にデプロイ
+  # =========================================
+  - name: "gcr.io/google.com/cloudsdktool/cloud-sdk"
+    id: deploy-live-gateway
+    entrypoint: bash
+    args:
+      - "-c"
+      - |
+        AGENT_RESOURCE_NAME=$(gcloud secrets versions access latest \
+          --secret=vuln-agent-resource-name 2>/dev/null || echo '')
+        if [ -z "$AGENT_RESOURCE_NAME" ]; then
+          echo "vuln-agent-resource-name が未登録です。Live Gateway のデプロイをスキップします。"
+          exit 0
+        fi
+        GEMINI_KEY=$(gcloud secrets versions access latest \
+          --secret=vuln-agent-gemini-api-key 2>/dev/null || echo '')
+        if [ -z "$GEMINI_KEY" ]; then
+          echo "vuln-agent-gemini-api-key が未登録です。Live Gateway のデプロイをスキップします。"
+          exit 0
+        fi
+        gcloud run deploy vuln-agent-live-gateway \
+          --source=live_gateway \
+          --region=${_REGION} \
+          --set-env-vars="GCP_PROJECT_ID=${PROJECT_ID},GCP_LOCATION=${_REGION},AGENT_RESOURCE_NAME=$AGENT_RESOURCE_NAME" \
+          --set-secrets="GEMINI_API_KEY=vuln-agent-gemini-api-key:latest" \
+          --service-account=vuln-agent-sa@${PROJECT_ID}.iam.gserviceaccount.com \
+          --allow-unauthenticated \
+          --memory=512Mi \
+          --timeout=3600 \
+          --quiet
+    waitFor:
+      - deploy-agent
+
+  # =========================================
+  # Step 4: Scheduler を Cloud Functions にデプロイ
+  # =========================================
+  - name: "gcr.io/google.com/cloudsdktool/cloud-sdk"
+    id: deploy-scheduler
+    entrypoint: bash
+    args:
+      - "-c"
+      - |
+        AGENT_RESOURCE_NAME=$(gcloud secrets versions access latest \
+          --secret=vuln-agent-resource-name 2>/dev/null || echo '')
+        if [ -z "$AGENT_RESOURCE_NAME" ]; then
+          echo "vuln-agent-resource-name が未登録です。Scheduler のデプロイをスキップします。"
+          exit 0
+        fi
+        gcloud functions deploy vuln-agent-scheduler \
+          --gen2 \
+          --runtime=python312 \
+          --region=${_REGION} \
+          --source=scheduler \
+          --entry-point=run_vulnerability_scan \
+          --trigger-http \
+          --no-allow-unauthenticated \
+          --service-account=vuln-agent-sa@${PROJECT_ID}.iam.gserviceaccount.com \
+          --set-env-vars="GCP_PROJECT_ID=${PROJECT_ID},GCP_LOCATION=${_REGION},AGENT_RESOURCE_NAME=$AGENT_RESOURCE_NAME" \
+          --memory=512MB \
+          --timeout=540s \
+          --quiet
+    waitFor:
+      - deploy-agent
+
+  # =========================================
+  # Step 5: Web UI を Cloud Storage にデプロイ
+  # =========================================
+  - name: "gcr.io/cloud-builders/gsutil"
+    id: deploy-web-ui
+    entrypoint: bash
+    args:
+      - "-c"
+      - |
+        BUCKET=gs://${PROJECT_ID}-vuln-agent-ui
+        gsutil mb -p ${PROJECT_ID} -l ${_REGION} $BUCKET 2>/dev/null || true
+        gsutil web set -m index.html -e index.html $BUCKET
+        gsutil -m rsync -r -d web $BUCKET
+        gsutil iam ch allUsers:objectViewer $BUCKET
+    waitFor:
+      - "-"
+
+options:
+  logging: CLOUD_LOGGING_ONLY
+timeout: 2400s
