@@ -10,7 +10,10 @@ from fastapi.middleware.cors import CORSMiddleware
 import vertexai
 from vertexai import Client
 
-from .live_api import GeminiLiveClient
+try:
+    from .live_api import GeminiLiveClient
+except ImportError:
+    from live_api import GeminiLiveClient
 
 GCP_PROJECT_ID = os.environ.get("GCP_PROJECT_ID")
 GCP_LOCATION = os.environ.get("GCP_LOCATION", "asia-northeast1")
@@ -76,6 +79,7 @@ async def websocket_endpoint(websocket: WebSocket):
         live_client = GeminiLiveClient()
         last_response_at = 0.0
         last_response_index = 0
+        transcript_parts.clear()
 
         async def _stream():
             nonlocal response_task
@@ -241,8 +245,13 @@ async def websocket_endpoint(websocket: WebSocket):
             )
 
     except WebSocketDisconnect:
+        await _stop_live_session()
         return
     except Exception as exc:
-        await websocket.send_text(
-            json.dumps({"type": "error", "message": str(exc)}, ensure_ascii=False)
-        )
+        try:
+            await websocket.send_text(
+                json.dumps({"type": "error", "message": str(exc)}, ensure_ascii=False)
+            )
+        except Exception:
+            pass
+        await _stop_live_session()

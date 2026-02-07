@@ -101,7 +101,7 @@ def call_remote_agent(
 
         # Vertex AI 初期化
         project_id = os.environ.get("GCP_PROJECT_ID")
-        location = os.environ.get("GCP_LOCATION", "us-central1")
+        location = os.environ.get("GCP_LOCATION", "asia-northeast1")
 
         if project_id:
             vertexai.init(project=project_id, location=location)

@@ -39,8 +39,8 @@ def deploy_agent(
     
     # エージェントをインポート
     print(f"\nLoading agent...")
-    sys.path.insert(0, str(Path(__file__).parent / "agent"))
-    from agent import root_agent
+    sys.path.insert(0, str(Path(__file__).parent))
+    from agent.agent import root_agent
     
     # AdkAppでラップ
     print(f"Creating AdkApp...")
@@ -56,8 +56,13 @@ def deploy_agent(
     
     # requirements
     requirements = [
+        "google-adk>=1.0.0",
         "google-cloud-aiplatform[agent_engines,adk]>=1.112.0",
         "google-api-python-client>=2.100.0",
+        "google-auth>=2.25.0",
+        "google-auth-oauthlib>=1.2.0",
+        "google-auth-httplib2>=0.2.0",
+        "google-cloud-bigquery>=3.25.0",
         "packaging>=23.0",
     ]
     

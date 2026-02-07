@@ -273,8 +273,9 @@ def _get_email_detail(service, message_id: str) -> dict[str, Any] | None:
             format="full"
         ).execute()
 
-        headers = {h["name"]: h["value"] for h in message["payload"]["headers"]}
-        body = _extract_body(message["payload"])
+        payload = message.get("payload", {})
+        headers = {h["name"]: h["value"] for h in payload.get("headers", [])}
+        body = _extract_body(payload)
         vulnerabilities = _parse_sidfm_content(body)
 
         return {
@@ -293,20 +294,31 @@ def _get_email_detail(service, message_id: str) -> dict[str, Any] | None:
 
 
 def _extract_body(payload: dict) -> str:
-    """メール本文を抽出"""
-    body = ""
-
+    """メール本文を抽出（ネストされたマルチパートにも対応）"""
     if "body" in payload and payload["body"].get("data"):
-        body = _decode_body(payload["body"]["data"])
-    elif "parts" in payload:
-        for part in payload["parts"]:
-            if part["mimeType"] == "text/plain" and "data" in part.get("body", {}):
-                body = _decode_body(part["body"]["data"])
-                break
-            elif part["mimeType"] == "text/html" and not body and "data" in part.get("body", {}):
-                body = _decode_body(part["body"]["data"])
+        return _decode_body(payload["body"]["data"])
 
-    return body
+    if "parts" not in payload:
+        return ""
+
+    text_plain = ""
+    text_html = ""
+
+    for part in payload["parts"]:
+        mime = part.get("mimeType", "")
+
+        # ネストされたマルチパートを再帰的に探索
+        if mime.startswith("multipart/") and "parts" in part:
+            nested = _extract_body(part)
+            if nested:
+                return nested
+
+        if mime == "text/plain" and "data" in part.get("body", {}):
+            text_plain = _decode_body(part["body"]["data"])
+        elif mime == "text/html" and not text_html and "data" in part.get("body", {}):
+            text_html = _decode_body(part["body"]["data"])
+
+    return text_plain or text_html
 
 
 def _decode_body(encoded: str) -> str:
@@ -320,7 +332,7 @@ def _parse_sidfm_content(body: str) -> list[dict[str, Any]]:
     vulnerabilities = []
 
     # CVE番号を抽出
-    cve_ids = list(dict.fromkeys(re.findall(r"CVE-\d{4}-\d{4,7}", body)))
+    cve_ids = list(dict.fromkeys(re.findall(r"CVE-\d{4}-\d{4,}", body)))
 
     # CVSSスコアを抽出
     cvss_matches = re.findall(r"CVSS[:\s]*v?\d*\.?\d*[:\s]*(\d+\.?\d*)", body, re.IGNORECASE)

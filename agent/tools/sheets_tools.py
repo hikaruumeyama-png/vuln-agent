@@ -430,7 +430,9 @@ def _version_matches_range(version_str: str, range_spec: str) -> bool:
             condition = condition.strip()
 
             if condition.endswith((".x", ".*")):
-                if not str(v).startswith(condition[:-2]):
+                prefix = condition[:-2]
+                ver_str = str(v)
+                if ver_str != prefix and not ver_str.startswith(prefix + "."):
                     return False
                 continue
             matched = False
