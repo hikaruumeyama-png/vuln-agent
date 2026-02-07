@@ -76,6 +76,7 @@ async def websocket_endpoint(websocket: WebSocket):
         live_client = GeminiLiveClient()
         last_response_at = 0.0
         last_response_index = 0
+        transcript_parts.clear()
 
         async def _stream():
             nonlocal response_task
