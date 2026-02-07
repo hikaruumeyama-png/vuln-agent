@@ -3,6 +3,7 @@
 SIDfmの脆弱性通知メールを自動で解析し、SBOMと突合して担当者へ通知する **Vertex AI Agent Engine** 向けのAIエージェントです。Gmail / Google Sheets / Google Chat を使った運用を前提に、定期実行のスキャンや音声/チャットUI連携にも対応しています。
 
 **ローカル環境は不要**です。以下の手順はすべて Google Cloud Shell 上でコマンドを入力するだけで完了します。
+Google Workspace の管理者権限も不要で、個人アカウントまたは GCP プロジェクトの管理者権限があれば構築できます。
 
 ## 主な機能
 
@@ -76,7 +77,7 @@ SIDfmの脆弱性通知メールを自動で解析し、SBOMと突合して担�
 ├── setup_cloud.sh           # Cloud Shell 用 初回セットアップスクリプト (自動化)
 ├── cloudbuild.yaml          # Cloud Build CI/CD パイプライン定義
 ├── deploy_python.py         # (レガシー) Python SDK デプロイ
-└── setup_gmail_oauth.py     # Gmail OAuth トークン生成 (個人Gmail用)
+└── setup_gmail_oauth.py     # Gmail OAuth トークン生成
 ```
 
 ---
@@ -93,7 +94,7 @@ SIDfmの脆弱性通知メールを自動で解析し、SBOMと突合して担�
 | 項目 | 説明 | 例 |
 |------|------|----|
 | Google Cloud プロジェクト ID | 課金が有効なプロジェクト | `my-project-123` |
-| Gmail ユーザーメール | SIDfm メールを受信する Workspace メール | `security@example.com` |
+| Gmail アカウント | SIDfm メールを受信するアカウント | `user@gmail.com` |
 | SIDfm 送信元メール | SIDfm の From アドレス | `noreply@sidfm.com` |
 | SBOM スプレッドシート ID | Google Sheets の URL 中の ID 部分 | `1BxiMVs0XRA5nFMdK...` |
 | Google Chat スペース ID | 通知を送信するスペース | `spaces/AAAA_BBBBB` |
@@ -114,9 +115,83 @@ cd vuln-agent
 
 ---
 
-### Step 2: セットアップスクリプトを実行する
+### Step 2: OAuth 同意画面とクライアント ID を作成する
 
-以下の 1 コマンドで、Google Cloud 上の全コンポーネントをまとめてセットアップします。
+エージェントが Gmail にアクセスするために、OAuth 2.0 の認証情報を作成します。
+この手順は GCP プロジェクトの管理者権限で完了でき、Google Workspace 管理者は不要です。
+
+**まず OAuth 同意画面を設定します。** 初めてのプロジェクトでは同意画面の構成が必要です。
+
+```bash
+# OAuth 同意画面の設定ページを開く
+echo "https://console.cloud.google.com/apis/credentials/consent?project=$(gcloud config get-value project)"
+```
+
+表示された URL をブラウザで開き、以下を設定します:
+
+1. User Type: **「外部」** を選択 (テスト用途であれば外部で OK)
+2. アプリ名: `vuln-agent` (任意)
+3. ユーザーサポートメール: 自分のメールアドレス
+4. デベロッパーの連絡先: 自分のメールアドレス
+5. スコープは追加不要 (後で自動設定されます)
+6. テストユーザーに **Gmail で使用するメールアドレスを追加**
+7. **「保存」** をクリック
+
+**次に OAuth クライアント ID を作成します。**
+
+```bash
+# 認証情報ページを開く
+echo "https://console.cloud.google.com/apis/credentials?project=$(gcloud config get-value project)"
+```
+
+1. **「+ 認証情報を作成」** → **「OAuth クライアント ID」**
+2. アプリケーションの種類: **「デスクトップ アプリ」**
+3. 名前: `vuln-agent` (任意)
+4. **「作成」** をクリック
+5. 表示されたダイアログで **「JSON をダウンロード」** をクリック
+
+ダウンロードした JSON ファイルを Cloud Shell にアップロードし、`credentials.json` にリネームします。
+
+```bash
+# Cloud Shell のアップロード機能 (右上の「︙」→「アップロード」) で JSON をアップロードした後:
+mv ~/client_secret_*.json credentials.json
+```
+
+---
+
+### Step 3: Gmail OAuth トークンを取得する
+
+作成したクライアント ID を使って Gmail アクセス用の OAuth トークンを取得します。
+対話形式で認証 URL が表示されるので、ブラウザでログインして認証コードを貼り付けてください。
+
+```bash
+pip install -q google-auth-oauthlib google-api-python-client
+python setup_gmail_oauth.py
+```
+
+スクリプトの実行手順:
+
+1. 認証用 URL が表示される → ブラウザの新しいタブで開く
+2. Google アカウントでログインし、アクセスを許可
+3. リダイレクト先の URL (または認証コード) をコピーして Cloud Shell に貼り付け
+4. `認証成功: user@gmail.com` と表示されれば OK
+
+トークンを Secret Manager に保存します。
+
+```bash
+# setup_gmail_oauth.py が agent/.env に書き込んだトークンを取得して Secret Manager に登録
+OAUTH_TOKEN=$(grep '^GMAIL_OAUTH_TOKEN=' agent/.env | cut -d'=' -f2-)
+echo -n "$OAUTH_TOKEN" | gcloud secrets create vuln-agent-gmail-oauth-token \
+  --data-file=- --replication-policy=automatic 2>/dev/null \
+  || echo -n "$OAUTH_TOKEN" | gcloud secrets versions add vuln-agent-gmail-oauth-token --data-file=-
+echo "Gmail OAuth トークンを Secret Manager に保存しました"
+```
+
+---
+
+### Step 4: セットアップスクリプトを実行する
+
+以下の 1 コマンドで、残りの Google Cloud コンポーネントをまとめてセットアップします。
 途中で設定値の入力を求められるので、事前に用意した値を入力してください (デフォルト値がある項目はそのまま Enter で OK)。
 
 ```bash
@@ -127,7 +202,7 @@ bash setup_cloud.sh
 >
 > 1. **API の有効化** --- Vertex AI, Gmail, Sheets, Chat, BigQuery, Cloud Build, Cloud Functions, Cloud Scheduler, Cloud Run, Secret Manager, Artifact Registry の計 11 API を有効にします
 > 2. **サービスアカウントの作成** --- `vuln-agent-sa` を作成し、Vertex AI / BigQuery / Secret Manager / Cloud Storage のロールを付与します。Cloud Build 用サービスアカウントにも必要な権限を追加します
-> 3. **Secret Manager への設定値登録** --- 対話形式で入力した Gmail メール・スプレッドシート ID・Chat スペース ID などを Secret Manager に安全に保存します
+> 3. **Secret Manager への設定値登録** --- 対話形式で入力した SIDfm 送信元・スプレッドシート ID・Chat スペース ID などを Secret Manager に保存します (Gmail OAuth トークンは Step 3 で登録済み)
 > 4. **Cloud Storage バケットの作成** --- Web UI 配信用とステージング用の 2 つのバケットを作成します
 > 5. **BigQuery テーブルの作成** --- 脆弱性対応履歴を記録する `vuln_agent.incident_response_history` テーブルを作成します
 > 6. **Agent Engine のデプロイ** --- Secret Manager の値から `.env` を生成し、ADK CLI でエージェントを Vertex AI Agent Engine にデプロイします。デプロイ後のリソース名は自動的に Secret Manager に保存されます
@@ -139,33 +214,7 @@ bash setup_cloud.sh
 
 ---
 
-### Step 3: Google Workspace のドメイン委任を設定する
-
-エージェントがサービスアカウント経由で Gmail / Sheets / Chat にアクセスするため、Google Workspace 管理者がドメイン全体の委任を設定します。
-
-まず、Vertex AI サービスエージェントのクライアント ID を確認します。
-
-```bash
-gcloud iam service-accounts describe \
-  service-$(gcloud projects describe $(gcloud config get-value project) --format='value(projectNumber)')@gcp-sa-aiplatform-re.iam.gserviceaccount.com \
-  --format='value(uniqueId)'
-```
-
-表示された数値 ID を控えたら、以下の手順でドメイン委任を追加します。
-
-1. ブラウザで [Google Workspace 管理コンソール](https://admin.google.com) を開く
-2. **セキュリティ** → **アクセスとデータ管理** → **API の制御** → **ドメイン全体の委任** に移動
-3. **「新しく追加」** をクリックし、上で控えたクライアント ID と以下のスコープを入力:
-
-```
-https://www.googleapis.com/auth/gmail.modify,https://www.googleapis.com/auth/spreadsheets.readonly,https://www.googleapis.com/auth/chat.bot
-```
-
-4. **「承認」** をクリック
-
----
-
-### Step 4: SBOM スプレッドシートをサービスアカウントに共有する
+### Step 5: SBOM スプレッドシートをサービスアカウントに共有する
 
 エージェントが SBOM と担当者マッピングを読み取れるよう、スプレッドシートの共有設定を変更します。
 
@@ -187,7 +236,30 @@ echo "vuln-agent-sa@$(gcloud config get-value project).iam.gserviceaccount.com"
 
 ---
 
-### Step 5: デプロイ結果を確認する
+### Step 6: Google Chat アプリを設定する
+
+エージェントが Google Chat スペースにメッセージを送信できるよう、GCP Console で Chat アプリ (Bot) を設定します。
+
+```bash
+# Chat API の設定ページを開く
+echo "https://console.cloud.google.com/apis/api/chat.googleapis.com/hangouts-chat?project=$(gcloud config get-value project)"
+```
+
+表示された URL をブラウザで開き、以下を設定します:
+
+1. **アプリ名**: `脆弱性管理エージェント` (任意)
+2. **アバター URL**: 空欄で OK
+3. **説明**: `脆弱性アラートを通知するBot` (任意)
+4. **機能**: 「1:1 のメッセージを受信する」にチェック
+5. **接続設定**: **「Apps Script」** を選択し、適当なスクリプト ID を入力 (実際には REST API で送信するため、この設定は形式上必要なだけです)
+6. **公開設定**: **「このアプリをドメイン内の特定のユーザーとグループが利用できるようにする」** を選択
+7. **「保存」** をクリック
+
+保存後、対象の Google Chat スペースで **「+ アプリと統合機能を追加」** から作成したアプリを追加してください。
+
+---
+
+### Step 7: デプロイ結果を確認する
 
 各コンポーネントが正常にデプロイされたことを確認します。
 
@@ -227,7 +299,7 @@ echo "https://console.cloud.google.com/vertex-ai/agents?project=$(gcloud config 
 
 ---
 
-### Step 6 (任意): Cloud Build で CI/CD を設定する
+### Step 8 (任意): Cloud Build で CI/CD を設定する
 
 コードを変更した際に自動で全コンポーネントを再デプロイする CI/CD パイプラインを設定します。
 
@@ -259,25 +331,6 @@ gcloud builds triggers create github \
 
 ---
 
-### Step 7 (任意): 個人 Gmail で使う場合 (OAuth 認証)
-
-Google Workspace ではなく個人 Gmail を使う場合は、ドメイン委任の代わりに OAuth トークンで認証します。
-
-```bash
-pip install google-auth-oauthlib
-python setup_gmail_oauth.py
-```
-
-画面の指示に従って認証を完了すると、Base64 エンコードされたトークンが出力されます。
-それを Secret Manager に登録してください。
-
-```bash
-echo -n "BASE64_ENCODED_TOKEN" | \
-  gcloud secrets create vuln-agent-gmail-oauth-token --data-file=-
-```
-
----
-
 ## 運用コマンド集
 
 デプロイ後の日常運用で使うコマンドです。すべて Cloud Shell で実行できます。
@@ -290,6 +343,21 @@ echo -n "spaces/NEW_SPACE_ID" | \
   gcloud secrets versions add vuln-agent-chat-space-id --data-file=-
 
 # Agent Engine に反映するには再デプロイ
+gcloud builds submit --config cloudbuild.yaml
+```
+
+### Gmail OAuth トークンを更新する
+
+OAuth トークンは自動更新されますが、refresh_token が無効になった場合は再取得してください。
+
+```bash
+python setup_gmail_oauth.py
+
+# 新しいトークンを Secret Manager に保存
+OAUTH_TOKEN=$(grep '^GMAIL_OAUTH_TOKEN=' agent/.env | cut -d'=' -f2-)
+echo -n "$OAUTH_TOKEN" | gcloud secrets versions add vuln-agent-gmail-oauth-token --data-file=-
+
+# Agent Engine に反映
 gcloud builds submit --config cloudbuild.yaml
 ```
 
@@ -333,7 +401,7 @@ echo -n "projects/xxx/locations/xxx/reasoningEngines/xxx" | \
 
 | シークレット名 | 用途 | 必須 |
 |---------------|------|------|
-| `vuln-agent-gmail-user` | Gmail ドメイン委任ユーザー | はい |
+| `vuln-agent-gmail-oauth-token` | Gmail OAuth トークン (Base64) | はい |
 | `vuln-agent-sidfm-sender` | SIDfm 送信元メール | はい |
 | `vuln-agent-sbom-spreadsheet-id` | SBOM スプレッドシート ID | はい |
 | `vuln-agent-sbom-sheet-name` | SBOM シート名 | いいえ (デフォルト: SBOM) |
@@ -443,12 +511,14 @@ gcloud projects get-iam-policy $(gcloud config get-value project) \
 ### Gmail 接続エラー
 
 ```bash
-# ドメイン委任が正しく設定されているか確認
-# → Google Workspace 管理コンソール → セキュリティ → API Controls → ドメイン全体の委任
-# Vertex AI サービスエージェントのクライアント ID が登録されているか確認:
-gcloud iam service-accounts describe \
-  service-$(gcloud projects describe $(gcloud config get-value project) --format='value(projectNumber)')@gcp-sa-aiplatform-re.iam.gserviceaccount.com \
-  --format='value(uniqueId)'
+# OAuth トークンが Secret Manager に登録されているか確認
+gcloud secrets versions access latest --secret=vuln-agent-gmail-oauth-token 2>/dev/null | head -c 20
+echo "..."
+
+# トークンを再取得する場合
+python setup_gmail_oauth.py
+OAUTH_TOKEN=$(grep '^GMAIL_OAUTH_TOKEN=' agent/.env | cut -d'=' -f2-)
+echo -n "$OAUTH_TOKEN" | gcloud secrets versions add vuln-agent-gmail-oauth-token --data-file=-
 ```
 
 ### Live Gateway が起動しない
@@ -473,6 +543,18 @@ gcloud scheduler jobs describe vuln-agent-scan \
 # Cloud Functions のログを確認
 gcloud functions logs read vuln-agent-scheduler --region=asia-northeast1 --limit=30
 ```
+
+### Google Chat にメッセージが送信されない
+
+```bash
+# Chat API が有効か確認
+gcloud services list --enabled --filter="chat"
+
+# Chat アプリの設定ページを開く
+echo "https://console.cloud.google.com/apis/api/chat.googleapis.com/hangouts-chat?project=$(gcloud config get-value project)"
+```
+
+Chat アプリが設定済みで、対象スペースにアプリが追加されていることを確認してください。
 
 ### シークレットの値を変更したい
 
