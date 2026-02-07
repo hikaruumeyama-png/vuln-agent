@@ -28,7 +28,7 @@ steps:
       - "-c"
       - |
         cat > agent/.env <<EOF
-        GMAIL_USER_EMAIL=$(gcloud secrets versions access latest --secret=vuln-agent-gmail-user 2>/dev/null || echo '')
+        GMAIL_OAUTH_TOKEN=$(gcloud secrets versions access latest --secret=vuln-agent-gmail-oauth-token 2>/dev/null || echo '')
         SIDFM_SENDER_EMAIL=$(gcloud secrets versions access latest --secret=vuln-agent-sidfm-sender 2>/dev/null || echo 'noreply@sidfm.com')
         SBOM_SPREADSHEET_ID=$(gcloud secrets versions access latest --secret=vuln-agent-sbom-spreadsheet-id 2>/dev/null || echo '')
         SBOM_SHEET_NAME=$(gcloud secrets versions access latest --secret=vuln-agent-sbom-sheet-name 2>/dev/null || echo 'SBOM')

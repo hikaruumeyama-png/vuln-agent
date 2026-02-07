@@ -174,7 +174,6 @@ echo "  エージェントの動作に必要な設定値を入力してくださ
 echo "  空欄で Enter を押すとその項目はスキップされます。"
 echo ""
 
-create_secret "vuln-agent-gmail-user"          "Gmail ユーザーメール (Workspace 委任用)"
 create_secret "vuln-agent-sidfm-sender"        "SIDfm 送信元メール"                       "noreply@sidfm.com"
 create_secret "vuln-agent-sbom-spreadsheet-id" "SBOM スプレッドシート ID"
 create_secret "vuln-agent-sbom-sheet-name"     "SBOM シート名"                             "SBOM"
@@ -241,7 +240,7 @@ _sm_get() {
 }
 
 cat > agent/.env <<ENVEOF
-GMAIL_USER_EMAIL=$(_sm_get vuln-agent-gmail-user)
+GMAIL_OAUTH_TOKEN=$(_sm_get vuln-agent-gmail-oauth-token)
 SIDFM_SENDER_EMAIL=$(_sm_get vuln-agent-sidfm-sender)
 SBOM_SPREADSHEET_ID=$(_sm_get vuln-agent-sbom-spreadsheet-id)
 SBOM_SHEET_NAME=$(_sm_get vuln-agent-sbom-sheet-name)
@@ -390,11 +389,10 @@ echo "  Web UI         : ${WEB_URL}"
 echo ""
 echo "  次のステップ:"
 echo "  ─────────────────────────────"
-echo "  1. Google Workspace で Gmail ドメイン委任を設定"
-echo "  2. SBOM スプレッドシートをサービスアカウントに共有:"
+echo "  1. SBOM スプレッドシートをサービスアカウントに共有:"
 echo "     ${SA_EMAIL}"
-echo "  3. Google Chat スペースに Bot を追加"
-echo "  4. Web UI を開いて Live Gateway に接続:"
+echo "  2. Google Chat アプリを GCP Console で設定 (Chat API > 構成)"
+echo "  3. Web UI を開いて Live Gateway に接続:"
 echo "     ${WEB_URL}"
 if [[ -n "${GATEWAY_URL:-}" ]]; then
   echo "     Gateway URL: wss://$(echo "$GATEWAY_URL" | sed 's|https://||')/ws"
