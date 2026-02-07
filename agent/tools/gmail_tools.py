@@ -273,8 +273,9 @@ def _get_email_detail(service, message_id: str) -> dict[str, Any] | None:
             format="full"
         ).execute()
 
-        headers = {h["name"]: h["value"] for h in message["payload"]["headers"]}
-        body = _extract_body(message["payload"])
+        payload = message.get("payload", {})
+        headers = {h["name"]: h["value"] for h in payload.get("headers", [])}
+        body = _extract_body(payload)
         vulnerabilities = _parse_sidfm_content(body)
 
         return {
@@ -320,7 +321,7 @@ def _parse_sidfm_content(body: str) -> list[dict[str, Any]]:
     vulnerabilities = []
 
     # CVE番号を抽出
-    cve_ids = list(dict.fromkeys(re.findall(r"CVE-\d{4}-\d{4,7}", body)))
+    cve_ids = list(dict.fromkeys(re.findall(r"CVE-\d{4}-\d{4,}", body)))
 
     # CVSSスコアを抽出
     cvss_matches = re.findall(r"CVSS[:\s]*v?\d*\.?\d*[:\s]*(\d+\.?\d*)", body, re.IGNORECASE)

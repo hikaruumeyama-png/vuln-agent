@@ -241,8 +241,13 @@ async def websocket_endpoint(websocket: WebSocket):
             )
 
     except WebSocketDisconnect:
+        await _stop_live_session()
         return
     except Exception as exc:
-        await websocket.send_text(
-            json.dumps({"type": "error", "message": str(exc)}, ensure_ascii=False)
-        )
+        try:
+            await websocket.send_text(
+                json.dumps({"type": "error", "message": str(exc)}, ensure_ascii=False)
+            )
+        except Exception:
+            pass
+        await _stop_live_session()
