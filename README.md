@@ -75,6 +75,7 @@ Google Workspace の管理者権限も不要で、個人アカウントまたは
 ├── web/                     # ブラウザ用チャット / 音声UI
 ├── docs/                    # 個別セットアップガイド
 ├── setup_cloud.sh           # Cloud Shell 用 初回セットアップスクリプト (自動化)
+├── deploy_update.sh         # コード変更後の差分デプロイスクリプト
 ├── cloudbuild.yaml          # Cloud Build CI/CD パイプライン定義
 ├── deploy_python.py         # (レガシー) Python SDK デプロイ
 └── setup_gmail_oauth.py     # Gmail OAuth トークン生成
@@ -331,6 +332,50 @@ gcloud builds triggers create github \
 
 ---
 
+## コード変更後の再デプロイ
+
+初回セットアップ (`setup_cloud.sh`) 完了後にコードを変更した場合は、`deploy_update.sh` を使って**変更があったコンポーネントだけ**を再デプロイできます。
+
+### 基本的な使い方
+
+```bash
+# 変更があったコンポーネントのみデプロイ
+bash deploy_update.sh
+```
+
+スクリプトは git タグ `last-deploy` と現在の HEAD を比較し、変更されたディレクトリに対応するコンポーネントだけを再デプロイします。デプロイ成功後、`last-deploy` タグが自動更新されます。
+
+初回実行時は `last-deploy` タグが存在しないため、全コンポーネントがデプロイされます。
+
+### オプション
+
+```bash
+# 何がデプロイされるか確認だけ (実行しない)
+bash deploy_update.sh --dry-run
+
+# 全コンポーネントを強制デプロイ
+bash deploy_update.sh --force
+
+# 特定のコンポーネントだけデプロイ (agent / gateway / scheduler / web)
+bash deploy_update.sh --component agent
+
+# プロジェクト / リージョンを指定
+bash deploy_update.sh --project my-project-id --region us-central1
+```
+
+### コンポーネントと対応ディレクトリ
+
+| 変更ディレクトリ | デプロイ先 | サービス |
+|---|---|---|
+| `agent/` | Vertex AI Agent Engine | エージェントロジック・ツール |
+| `live_gateway/` | Cloud Run | WebSocket / 音声 UI ゲートウェイ |
+| `scheduler/` | Cloud Functions | 定期スキャン |
+| `web/` | Cloud Storage | ブラウザ UI |
+
+> **`setup_cloud.sh` との違い:** `setup_cloud.sh` は API 有効化・サービスアカウント作成・Secret Manager 登録などの初期セットアップを含みます。コード変更だけの場合は `deploy_update.sh` で十分です。シークレットの追加・変更が必要な場合は別途 Secret Manager を更新してください。
+
+---
+
 ## 運用コマンド集
 
 デプロイ後の日常運用で使うコマンドです。すべて Cloud Shell で実行できます。
@@ -343,7 +388,7 @@ echo -n "spaces/NEW_SPACE_ID" | \
   gcloud secrets versions add vuln-agent-chat-space-id --data-file=-
 
 # Agent Engine に反映するには再デプロイ
-gcloud builds submit --config cloudbuild.yaml
+bash deploy_update.sh --component agent
 ```
 
 ### Gmail OAuth トークンを更新する
@@ -358,7 +403,7 @@ OAUTH_TOKEN=$(grep '^GMAIL_OAUTH_TOKEN=' agent/.env | cut -d'=' -f2-)
 echo -n "$OAUTH_TOKEN" | gcloud secrets versions add vuln-agent-gmail-oauth-token --data-file=-
 
 # Agent Engine に反映
-gcloud builds submit --config cloudbuild.yaml
+bash deploy_update.sh --component agent
 ```
 
 ### 脆弱性スキャンを手動で実行する
@@ -563,7 +608,7 @@ Chat アプリが設定済みで、対象スペースにアプリが追加され
 echo -n "NEW_VALUE" | gcloud secrets versions add vuln-agent-chat-space-id --data-file=-
 
 # Agent Engine に反映するには再デプロイが必要
-gcloud builds submit --config cloudbuild.yaml
+bash deploy_update.sh --component agent
 ```
 
 ---
