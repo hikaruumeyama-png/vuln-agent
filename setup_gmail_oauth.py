@@ -95,6 +95,7 @@ def setup_oauth():
             flow = InstalledAppFlow.from_client_secrets_file(
                 str(CREDENTIALS_FILE), SCOPES
             )
+            flow.redirect_uri = "http://localhost"
             if use_console:
                 print("""
 ╔══════════════════════════════════════════════════════════════════╗
