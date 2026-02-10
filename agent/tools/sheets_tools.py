@@ -60,36 +60,6 @@ def _get_bigquery_client() -> bigquery.Client:
     return bigquery.Client(project=project)
 
 
-def _get_sbom_data_backend() -> str:
-    """
-    SBOMデータ取得バックエンドを返す。
-
-    環境変数:
-      - SBOM_DATA_BACKEND: sheets | bigquery | auto (default: sheets)
-
-    auto の場合は BigQuery テーブル設定があれば bigquery、なければ sheets を利用。
-    """
-    configured = os.environ.get("SBOM_DATA_BACKEND", "sheets").strip().lower()
-    if configured not in {"sheets", "bigquery", "auto"}:
-        logger.warning("Invalid SBOM_DATA_BACKEND=%s, fallback to sheets", configured)
-        return "sheets"
-
-    if configured == "auto":
-        sbom_table_id = os.environ.get("BQ_SBOM_TABLE_ID", "").strip()
-        owner_table_id = os.environ.get("BQ_OWNER_MAPPING_TABLE_ID", "").strip()
-        if sbom_table_id and owner_table_id:
-            return "bigquery"
-        return "sheets"
-
-    return configured
-
-
-def _get_bigquery_client() -> bigquery.Client:
-    """BigQueryクライアントを構築"""
-    project = os.environ.get("GCP_PROJECT_ID") or None
-    return bigquery.Client(project=project)
-
-
 def _get_sheets_service():
     """Sheets APIサービスを構築"""
     sa_path = os.environ.get("GOOGLE_APPLICATION_CREDENTIALS")
@@ -277,8 +247,9 @@ def _load_owner_mapping_from_sheets() -> list[dict]:
             while len(row) < 5:
                 row.append("")
 
+            normalized_pattern = row[0].strip() or "*"
             mappings.append({
-                "pattern": row[0],
+                "pattern": normalized_pattern,
                 "system_name": row[1],
                 "owner_email": row[2],
                 "owner_name": row[3],
@@ -505,8 +476,13 @@ def get_affected_systems(
             result = search_sbom_by_product(product_name=product)
             all_matched.extend(result.get("matched_entries", []))
     
-    # 重複除去（purl + versionで一意）
-    unique = {f"{e.get('purl', '')}:{e.get('version', '')}": e for e in all_matched}
+    # 重複除去
+    # purl/version だけだと purl 未設定エントリが衝突しやすいため、
+    # type/name/release もキーに含めて誤って統合されるのを防ぐ
+    unique = {
+        f"{e.get('purl', '')}:{e.get('version', '')}:{e.get('type', '')}:{e.get('name', '')}:{e.get('release', '')}": e
+        for e in all_matched
+    }
     matched = list(unique.values())
     
     # 結果を集計
@@ -556,7 +532,8 @@ def get_owner_mapping() -> dict[str, Any]:
 
 def _matches_criteria(entry: dict, product_type: str, product_name: str, version_range: str) -> bool:
     """エントリが検索条件にマッチするかチェック"""
-    if product_type and entry["type"].lower() != product_type.lower():
+    entry_type = (entry.get("type") or "").strip()
+    if product_type and entry_type.lower() != product_type.lower():
         return False
     
     if product_name:
@@ -568,8 +545,12 @@ def _matches_criteria(entry: dict, product_type: str, product_name: str, version
         if product_lower not in name and product_lower not in purl:
             return False
     
-    if version_range and entry["version"]:
-        if not _version_matches_range(entry["version"], version_range):
+    if version_range:
+        entry_version = (entry.get("version") or "").strip()
+        # バージョン条件がある場合、バージョン不明のエントリは一致させない
+        if not entry_version:
+            return False
+        if not _version_matches_range(entry_version, version_range):
             return False
     
     return True
@@ -578,6 +559,10 @@ def _matches_criteria(entry: dict, product_type: str, product_name: str, version
 def _version_matches_range(version_str: str, range_spec: str) -> bool:
     """バージョンが指定範囲に含まれるかチェック"""
     try:
+        # 数値を含まないバージョン文字列は比較不能として非一致
+        if not re.search(r"\d", version_str or ""):
+            return False
+
         # 正規化
         ver = re.sub(r"^v", "", version_str)
         ver = re.sub(r"[-_](alpha|beta|rc|snapshot).*$", "", ver, flags=re.IGNORECASE)
@@ -587,6 +572,8 @@ def _version_matches_range(version_str: str, range_spec: str) -> bool:
         # 条件チェック
         for condition in range_spec.split(","):
             condition = condition.strip()
+            if not condition:
+                continue
 
             if condition.endswith((".x", ".*")):
                 prefix = condition[:-2]
@@ -611,4 +598,5 @@ def _version_matches_range(version_str: str, range_spec: str) -> bool:
         
         return True
     except Exception:
-        return True  # パース失敗時は安全側
+        # パース失敗時は誤検知を避けるため非一致として扱う
+        return False

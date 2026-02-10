@@ -1,5 +1,6 @@
 import asyncio
 import base64
+import binascii
 import json
 import os
 import time
@@ -65,7 +66,7 @@ def healthz():
 async def websocket_endpoint(websocket: WebSocket):
     await websocket.accept()
     client = _init_vertex()
-    audio_queue: asyncio.Queue[tuple[bytes, int] | tuple[None, int]] = asyncio.Queue()
+    audio_queue: asyncio.Queue[tuple[bytes | None, int]] = asyncio.Queue()
     live_client: GeminiLiveClient | None = None
     live_task: asyncio.Task | None = None
     greeting_task: asyncio.Task | None = None
@@ -75,7 +76,14 @@ async def websocket_endpoint(websocket: WebSocket):
     last_response_at = 0.0
 
     async def _start_live_session():
-        nonlocal live_client, live_task, greeting_task, response_task, last_response_at, last_response_index
+        nonlocal audio_queue, live_client, live_task, greeting_task, response_task, last_response_at, last_response_index
+        if live_task is not None and not live_task.done():
+            return
+
+        if live_task is not None and live_task.done():
+            live_task = None
+
+        audio_queue = asyncio.Queue()
         live_client = GeminiLiveClient()
         last_response_at = 0.0
         last_response_index = 0
@@ -118,13 +126,15 @@ async def websocket_endpoint(websocket: WebSocket):
 
     async def _stop_live_session():
         nonlocal live_task, live_client, greeting_task, response_task
-        await audio_queue.put((None, 0))
-        if live_task:
-            live_task.cancel()
-        if greeting_task:
-            greeting_task.cancel()
-        if response_task:
-            response_task.cancel()
+        if live_task is not None:
+            await audio_queue.put((None, 0))
+
+        tasks_to_cancel = [t for t in (live_task, greeting_task, response_task) if t is not None]
+        for task in tasks_to_cancel:
+            task.cancel()
+        if tasks_to_cancel:
+            await asyncio.gather(*tasks_to_cancel, return_exceptions=True)
+
         live_task = None
         greeting_task = None
         response_task = None
@@ -166,14 +176,33 @@ async def websocket_endpoint(websocket: WebSocket):
     try:
         while True:
             data = await websocket.receive_text()
-            payload = json.loads(data)
+            try:
+                payload = json.loads(data)
+            except json.JSONDecodeError:
+                await websocket.send_text(
+                    json.dumps({"type": "error", "message": "Invalid JSON payload"})
+                )
+                continue
+
+            if not isinstance(payload, dict):
+                await websocket.send_text(
+                    json.dumps({"type": "error", "message": "Payload must be a JSON object"})
+                )
+                continue
 
             if payload.get("type") == "ping":
                 await websocket.send_text(json.dumps({"type": "pong"}))
                 continue
 
             if payload.get("type") == "user_text":
-                message = payload.get("text", "").strip()
+                raw_message = payload.get("text", "")
+                if not isinstance(raw_message, str):
+                    await websocket.send_text(
+                        json.dumps({"type": "error", "message": "Invalid text payload"})
+                    )
+                    continue
+
+                message = raw_message.strip()
                 if not message:
                     await websocket.send_text(
                         json.dumps({"type": "error", "message": "Empty message"})
@@ -215,13 +244,36 @@ async def websocket_endpoint(websocket: WebSocket):
                     )
                     continue
                 audio_b64 = payload.get("audio")
-                sample_rate = int(payload.get("sample_rate", 16000))
+                if not isinstance(audio_b64, str):
+                    await websocket.send_text(
+                        json.dumps({"type": "error", "message": "Invalid audio payload"})
+                    )
+                    continue
+
+                try:
+                    sample_rate = int(payload.get("sample_rate", 16000))
+                    if sample_rate <= 0:
+                        raise ValueError("sample_rate must be positive")
+                except (TypeError, ValueError):
+                    await websocket.send_text(
+                        json.dumps({"type": "error", "message": "Invalid sample_rate"})
+                    )
+                    continue
+
                 if not audio_b64:
                     await websocket.send_text(
                         json.dumps({"type": "error", "message": "Missing audio payload"})
                     )
                     continue
-                await audio_queue.put((GeminiLiveClient.decode_audio_base64(audio_b64), sample_rate))
+                try:
+                    audio_bytes = GeminiLiveClient.decode_audio_base64(audio_b64)
+                except (binascii.Error, ValueError, TypeError):
+                    await websocket.send_text(
+                        json.dumps({"type": "error", "message": "Invalid audio payload"})
+                    )
+                    continue
+
+                await audio_queue.put((audio_bytes, sample_rate))
                 continue
 
             if payload.get("type") == "speech_pause":

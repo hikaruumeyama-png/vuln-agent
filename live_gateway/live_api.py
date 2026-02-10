@@ -86,4 +86,4 @@ class GeminiLiveClient:
 
     @staticmethod
     def decode_audio_base64(payload: str) -> bytes:
-        return base64.b64decode(payload)
+        return base64.b64decode(payload, validate=True)
