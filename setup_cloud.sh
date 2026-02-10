@@ -384,7 +384,7 @@ if [[ -n "$AGENT_RESOURCE_NAME" ]]; then
     --trigger-http \
     --no-allow-unauthenticated \
     --service-account="$SA_EMAIL" \
-    --set-env-vars="GCP_PROJECT_ID=${PROJECT_ID},GCP_LOCATION=${REGION}" \
+    --update-env-vars="GCP_PROJECT_ID=${PROJECT_ID},GCP_LOCATION=${REGION}" \
     --remove-env-vars="AGENT_RESOURCE_NAME" \
     --set-secrets="AGENT_RESOURCE_NAME=vuln-agent-resource-name:latest" \
     --memory=512MB \
