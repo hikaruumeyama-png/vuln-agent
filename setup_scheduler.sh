@@ -194,6 +194,7 @@ gcloud functions deploy "$FUNCTION_NAME" \
     # AGENT_RESOURCE_NAME は Secret Manager から注入する
     --set-env-vars="GCP_PROJECT_ID=$PROJECT_ID,GCP_LOCATION=$REGION" \
     --remove-env-vars="AGENT_RESOURCE_NAME" \
+    --set-env-vars="GCP_PROJECT_ID=$PROJECT_ID,GCP_LOCATION=$REGION" \
     --set-secrets="AGENT_RESOURCE_NAME=vuln-agent-resource-name:latest" \
     --memory=512MB \
     --timeout=540s \
