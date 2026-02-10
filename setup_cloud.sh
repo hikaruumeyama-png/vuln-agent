@@ -266,6 +266,17 @@ _sm_get() {
   gcloud secrets versions access latest --secret="$1" --project="$PROJECT_ID" 2>/dev/null || echo ""
 }
 
+_engine_exists() {
+  local engine_name="$1"
+  [[ -z "$engine_name" ]] && return 1
+  local token
+  token="$(gcloud auth print-access-token)"
+  local endpoint="https://${REGION}-aiplatform.googleapis.com/v1/${engine_name}"
+  local status
+  status="$(curl -s -o /dev/null -w "%{http_code}" -H "Authorization: Bearer ${token}" "${endpoint}")"
+  [[ "$status" == "200" ]]
+}
+
 cat > agent/.env <<ENVEOF
 GMAIL_OAUTH_TOKEN=$(_sm_get vuln-agent-gmail-oauth-token)
 SIDFM_SENDER_EMAIL=$(_sm_get vuln-agent-sidfm-sender)
@@ -309,6 +320,12 @@ if [[ -z "$AGENT_RESOURCE_NAME" ]]; then
 fi
 
 if [[ -n "$AGENT_RESOURCE_NAME" ]]; then
+  if ! _engine_exists "$AGENT_RESOURCE_NAME"; then
+    err "デプロイ直後の Agent Resource Name が存在しません: ${AGENT_RESOURCE_NAME}"
+    err "Secret の更新を中止します。デプロイ出力を確認してください。"
+    exit 1
+  fi
+
   if gcloud secrets describe "vuln-agent-resource-name" --project="$PROJECT_ID" &>/dev/null; then
     echo -n "$AGENT_RESOURCE_NAME" | gcloud secrets versions add "vuln-agent-resource-name" --data-file=- --project="$PROJECT_ID"
   else
@@ -327,6 +344,12 @@ rm -f agent/.env
 step "7/8: Live Gateway と Scheduler をデプロイしています..."
 
 if [[ -n "$AGENT_RESOURCE_NAME" ]]; then
+  if ! _engine_exists "$AGENT_RESOURCE_NAME"; then
+    err "Agent Resource Name が無効です（ReasoningEngine が存在しません）: ${AGENT_RESOURCE_NAME}"
+    err "Live Gateway / Scheduler のデプロイを中止します。"
+    exit 1
+  fi
+
   # --- Live Gateway (Cloud Run) ---
   GEMINI_KEY=$(_sm_get vuln-agent-gemini-api-key)
   if [[ -n "$GEMINI_KEY" ]]; then

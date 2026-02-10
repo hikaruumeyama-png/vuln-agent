@@ -85,12 +85,22 @@ steps:
 
         token="$(gcloud auth print-access-token)"
         api_base="https://${_REGION}-aiplatform.googleapis.com/v1"
+        verify_engine_exists() {
+          local engine_name="$1"
+          [ -z "$engine_name" ] && return 1
+          local status
+          status="$(curl -s -o /dev/null -w "%{http_code}" -H "Authorization: Bearer $$token" \
+            "$$api_base/$$engine_name")"
+          [ "$$status" = "200" ]
+        }
         engines_json="$(curl -sSf -H "Authorization: Bearer $$token" \
           "$$api_base/projects/${PROJECT_ID}/locations/${_REGION}/reasoningEngines")"
 
         latest_engine="$(printf '%s' "$$engines_json" | python3 -c 'import json,sys; display_name=sys.argv[1]; engines=json.load(sys.stdin).get("reasoningEngines", []); filtered=[e for e in engines if e.get("displayName")==display_name and e.get("name")]; filtered.sort(key=lambda e: e.get("createTime", ""), reverse=True); print(filtered[0]["name"] if filtered else "")' "${_AGENT_NAME}")"
         if [ -z "$$latest_engine" ]; then
           echo "警告: 最新の Agent Engine を特定できませんでした。"
+        elif ! verify_engine_exists "$$latest_engine"; then
+          echo "警告: 最新候補の Agent Engine が見つからないため Secret 更新をスキップします: $$latest_engine"
         else
           if ! gcloud secrets describe vuln-agent-resource-name >/dev/null 2>&1; then
             echo "vuln-agent-resource-name が存在しないため作成します。"
@@ -140,11 +150,26 @@ steps:
       - "-c"
       - |
         echo "[Step 3/5] Live Gateway デプロイ条件を確認します"
+        token="$(gcloud auth print-access-token)"
+        api_base="https://${_REGION}-aiplatform.googleapis.com/v1"
+        verify_engine_exists() {
+          local engine_name="$1"
+          [ -z "$engine_name" ] && return 1
+          local status
+          status="$(curl -s -o /dev/null -w "%{http_code}" -H "Authorization: Bearer $$token" \
+            "$$api_base/$$engine_name")"
+          [ "$$status" = "200" ]
+        }
         AGENT_RESOURCE_NAME=$(gcloud secrets versions access latest \
           --secret=vuln-agent-resource-name 2>/dev/null || echo '')
         if [ -z "$$AGENT_RESOURCE_NAME" ]; then
           echo "vuln-agent-resource-name が未登録です。Live Gateway のデプロイをスキップします。"
           exit 0
+        fi
+        if ! verify_engine_exists "$$AGENT_RESOURCE_NAME"; then
+          echo "vuln-agent-resource-name が不正です（ReasoningEngine が存在しません）: $$AGENT_RESOURCE_NAME"
+          echo "Live Gateway のデプロイを中止します。"
+          exit 1
         fi
         GEMINI_KEY=$(gcloud secrets versions access latest \
           --secret=vuln-agent-gemini-api-key 2>/dev/null || echo '')
@@ -176,11 +201,26 @@ steps:
       - "-c"
       - |
         echo "[Step 4/5] Scheduler デプロイ条件を確認します"
+        token="$(gcloud auth print-access-token)"
+        api_base="https://${_REGION}-aiplatform.googleapis.com/v1"
+        verify_engine_exists() {
+          local engine_name="$1"
+          [ -z "$engine_name" ] && return 1
+          local status
+          status="$(curl -s -o /dev/null -w "%{http_code}" -H "Authorization: Bearer $$token" \
+            "$$api_base/$$engine_name")"
+          [ "$$status" = "200" ]
+        }
         AGENT_RESOURCE_NAME=$(gcloud secrets versions access latest \
           --secret=vuln-agent-resource-name 2>/dev/null || echo '')
         if [ -z "$$AGENT_RESOURCE_NAME" ]; then
           echo "vuln-agent-resource-name が未登録です。Scheduler のデプロイをスキップします。"
           exit 0
+        fi
+        if ! verify_engine_exists "$$AGENT_RESOURCE_NAME"; then
+          echo "vuln-agent-resource-name が不正です（ReasoningEngine が存在しません）: $$AGENT_RESOURCE_NAME"
+          echo "Scheduler のデプロイを中止します。"
+          exit 1
         fi
         echo "[Step 4/5] Scheduler を Cloud Functions にデプロイします"
         gcloud functions deploy vuln-agent-scheduler \
