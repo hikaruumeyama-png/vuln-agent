@@ -151,11 +151,22 @@ steps:
     args:
       - "-c"
       - |
+        set -euo pipefail
         echo "[Step 3/5] Live Gateway デプロイ条件を確認します"
         # AGENT_RESOURCE_NAME は --set-env-vars で埋め込むため値の取得が必要。
         # ただし Agent Engine の疎通確認はデプロイ時には行わない。
-        AGENT_RESOURCE_NAME=$(gcloud secrets versions access latest \
-          --secret=vuln-agent-resource-name 2>/dev/null || echo '')
+        # Secret Manager への書き込み直後はレプリケーション遅延が発生する
+        # 場合があるため、リトライ付きで取得する。
+        AGENT_RESOURCE_NAME=""
+        for i in 1 2 3 4 5; do
+          AGENT_RESOURCE_NAME=$(gcloud secrets versions access latest \
+            --secret=vuln-agent-resource-name 2>/dev/null || echo '')
+          if [ -n "$$AGENT_RESOURCE_NAME" ]; then
+            break
+          fi
+          echo "vuln-agent-resource-name の取得を待機中... ($$i/5)"
+          sleep $$i
+        done
         if [ -z "$$AGENT_RESOURCE_NAME" ]; then
           echo "エラー: vuln-agent-resource-name が未登録です。Live Gateway のデプロイに失敗しました。"
           echo "初回セットアップ (setup_cloud.sh) を先に実行してください。"
