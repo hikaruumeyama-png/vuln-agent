@@ -75,7 +75,8 @@ def log_vulnerability_history(
         "extra": json.dumps(extra, ensure_ascii=False) if extra else None,
     }
 
-    client = bigquery.Client()
+    project = os.environ.get("GCP_PROJECT_ID") or None
+    client = bigquery.Client(project=project)
     errors = client.insert_rows_json(table_id, [row])
     if errors:
         return {
