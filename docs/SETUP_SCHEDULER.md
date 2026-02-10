@@ -87,7 +87,8 @@ gcloud functions deploy vuln-agent-scheduler \
     --trigger-http \
     --allow-unauthenticated=false \
     --service-account="vuln-agent-scheduler-sa@${PROJECT_ID}.iam.gserviceaccount.com" \
-    --set-env-vars="GCP_PROJECT_ID=${PROJECT_ID},GCP_LOCATION=asia-northeast1,AGENT_RESOURCE_NAME=projects/${PROJECT_ID}/locations/asia-northeast1/reasoningEngines/YOUR_AGENT_ID" \
+    --set-env-vars="GCP_PROJECT_ID=${PROJECT_ID},GCP_LOCATION=asia-northeast1" \
+    --set-secrets="AGENT_RESOURCE_NAME=vuln-agent-resource-name:latest" \
     --memory=512MB \
     --timeout=540s
 
@@ -268,8 +269,12 @@ gcloud projects add-iam-policy-binding $PROJECT_ID \
 gcloud ai reasoning-engines list --location=asia-northeast1
 
 # 環境変数を更新して再デプロイ
+printf %s "projects/${PROJECT_ID}/locations/asia-northeast1/reasoningEngines/正しいID" | \
+  gcloud secrets versions add vuln-agent-resource-name --data-file=-
+
+# Secret 参照で再デプロイ
 gcloud functions deploy vuln-agent-scheduler \
-    --set-env-vars="AGENT_RESOURCE_NAME=正しいリソース名"
+    --set-secrets="AGENT_RESOURCE_NAME=vuln-agent-resource-name:latest"
 ```
 
 ---
