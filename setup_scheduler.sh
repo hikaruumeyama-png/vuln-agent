@@ -155,13 +155,13 @@ if gcloud secrets describe "vuln-agent-resource-name" --project="$PROJECT_ID" &>
     echo -n "$AGENT_RESOURCE_NAME" | gcloud secrets versions add "vuln-agent-resource-name" \
         --data-file=- \
         --project="$PROJECT_ID" >/dev/null
-    print_success "vuln-agent-resource-name の新しいバージョンを追加しました"
+    print_success "既存シークレットに新しいバージョン追加: vuln-agent-resource-name"
 else
     echo -n "$AGENT_RESOURCE_NAME" | gcloud secrets create "vuln-agent-resource-name" \
         --data-file=- \
         --replication-policy="automatic" \
         --project="$PROJECT_ID" >/dev/null
-    print_success "vuln-agent-resource-name を作成しました"
+    print_success "シークレット作成: vuln-agent-resource-name"
 fi
 
 # ====================================
