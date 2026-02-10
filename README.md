@@ -214,7 +214,61 @@ bash setup_cloud.sh
 
 ---
 
-### Step 5: SBOM スプレッドシートをサービスアカウントに共有する
+### Step 5: SBOM データソースを設定する（推奨: BigQuery）
+
+SBOM と担当者マッピングの参照先は `Sheets` / `BigQuery` を選べます。  
+組織ポリシーでサービスアカウントに Sheets 共有できない場合は、BigQuery を使用してください。
+
+- `SBOM_DATA_BACKEND=sheets`: 従来どおり Google Sheets を参照
+- `SBOM_DATA_BACKEND=bigquery`: BigQuery テーブルを参照
+- `SBOM_DATA_BACKEND=auto`: `BQ_SBOM_TABLE_ID` と `BQ_OWNER_MAPPING_TABLE_ID` があれば BigQuery、なければ Sheets
+
+#### 5-A. BigQuery を使う場合（推奨）
+
+`setup_cloud.sh` を使う場合は以下テーブルが自動作成されます。
+
+- `${PROJECT_ID}.vuln_agent.sbom_packages`
+- `${PROJECT_ID}.vuln_agent.owner_mapping`
+
+手動で作る場合の例:
+
+```bash
+bq mk --table ${PROJECT_ID}:vuln_agent.sbom_packages   type:STRING,name:STRING,version:STRING,release:STRING,purl:STRING
+
+bq mk --table ${PROJECT_ID}:vuln_agent.owner_mapping   pattern:STRING,system_name:STRING,owner_email:STRING,owner_name:STRING,notes:STRING
+```
+
+サンプル投入（質問で共有いただいたテストシート相当）:
+
+```bash
+bq query --use_legacy_sql=false "
+INSERT INTO `${PROJECT_ID}.vuln_agent.sbom_packages` (type,name,version,release,purl) VALUES
+('maven','log4j-core','2.14.1','','pkg:maven/org.apache.logging.log4j/log4j-core@2.14.1'),
+('maven','spring-web','5.3.13','','pkg:maven/org.springframework/spring-web@5.3.13'),
+('npm','express','4.17.1','','pkg:npm/express@4.17.1'),
+('pypi','requests','2.26.0','','pkg:pypi/requests@2.26.0'),
+('maven','commons-text','1.9','','pkg:maven/org.apache.commons/commons-text@1.9')
+"
+
+bq query --use_legacy_sql=false "
+INSERT INTO `${PROJECT_ID}.vuln_agent.owner_mapping` (pattern,system_name,owner_email,owner_name,notes) VALUES
+('*','共通基盤','your-email@gmail.com','管理者','デフォルトの担当者（ワイルドカード）'),
+('pkg:maven/org.springframework/*','決済システム','your-email@gmail.com','田中 太郎','Spring Framework関連'),
+('pkg:npm/*','フロントエンド','your-email@gmail.com','佐藤 花子','フロントエンド全般'),
+('pkg:maven/org.apache.logging.log4j/*','基幹システム','your-email@gmail.com','鈴木 一郎','ログ基盤担当'),
+('pkg:maven/org.apache.commons/*','共通ライブラリ','your-email@gmail.com','高橋 次郎','commons系ライブラリ担当')
+"
+```
+
+シークレット更新:
+
+```bash
+echo -n "bigquery" | gcloud secrets versions add vuln-agent-sbom-data-backend --data-file=-
+echo -n "${PROJECT_ID}.vuln_agent.sbom_packages" | gcloud secrets versions add vuln-agent-bq-sbom-table-id --data-file=-
+echo -n "${PROJECT_ID}.vuln_agent.owner_mapping" | gcloud secrets versions add vuln-agent-bq-owner-table-id --data-file=-
+```
+
+#### 5-B. Sheets を使う場合（従来運用）
 
 エージェントが SBOM と担当者マッピングを読み取れるよう、スプレッドシートの共有設定を変更します。
 
@@ -403,9 +457,12 @@ echo -n "projects/xxx/locations/xxx/reasoningEngines/xxx" | \
 |---------------|------|------|
 | `vuln-agent-gmail-oauth-token` | Gmail OAuth トークン (Base64) | はい |
 | `vuln-agent-sidfm-sender` | SIDfm 送信元メール | はい |
-| `vuln-agent-sbom-spreadsheet-id` | SBOM スプレッドシート ID | はい |
+| `vuln-agent-sbom-data-backend` | SBOM データソース (`sheets` / `bigquery` / `auto`) | いいえ (デフォルト: sheets) |
+| `vuln-agent-sbom-spreadsheet-id` | SBOM スプレッドシート ID | Sheets 利用時は必須 |
 | `vuln-agent-sbom-sheet-name` | SBOM シート名 | いいえ (デフォルト: SBOM) |
 | `vuln-agent-owner-sheet-name` | 担当者マッピングシート名 | いいえ (デフォルト: 担当者マッピング) |
+| `vuln-agent-bq-sbom-table-id` | BigQuery SBOM テーブル ID | BigQuery 利用時は必須 |
+| `vuln-agent-bq-owner-table-id` | BigQuery 担当者マッピングテーブル ID | BigQuery 利用時は必須 |
 | `vuln-agent-chat-space-id` | Google Chat スペース ID | はい |
 | `vuln-agent-gemini-api-key` | Gemini API Key (Live Gateway 用) | Live Gateway を使う場合 |
 | `vuln-agent-bq-table-id` | BigQuery テーブル ID | いいえ (自動生成) |

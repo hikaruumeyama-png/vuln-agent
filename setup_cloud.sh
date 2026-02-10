@@ -175,6 +175,7 @@ echo "  空欄で Enter を押すとその項目はスキップされます。"
 echo ""
 
 create_secret "vuln-agent-sidfm-sender"        "SIDfm 送信元メール"                       "noreply@sidfm.com"
+create_secret "vuln-agent-sbom-data-backend"   "SBOM データソース (sheets/bigquery/auto)"     "sheets"
 create_secret "vuln-agent-sbom-spreadsheet-id" "SBOM スプレッドシート ID"
 create_secret "vuln-agent-sbom-sheet-name"     "SBOM シート名"                             "SBOM"
 create_secret "vuln-agent-owner-sheet-name"    "担当者マッピング シート名"                  "担当者マッピング"
@@ -204,8 +205,12 @@ done
 step "5/8: BigQuery テーブルを作成しています..."
 
 DATASET_ID="vuln_agent"
-TABLE_ID="incident_response_history"
-FULL_TABLE_ID="${PROJECT_ID}.${DATASET_ID}.${TABLE_ID}"
+HISTORY_TABLE_ID="incident_response_history"
+SBOM_TABLE_ID="sbom_packages"
+OWNER_TABLE_ID="owner_mapping"
+FULL_HISTORY_TABLE_ID="${PROJECT_ID}.${DATASET_ID}.${HISTORY_TABLE_ID}"
+FULL_SBOM_TABLE_ID="${PROJECT_ID}.${DATASET_ID}.${SBOM_TABLE_ID}"
+FULL_OWNER_TABLE_ID="${PROJECT_ID}.${DATASET_ID}.${OWNER_TABLE_ID}"
 
 if ! bq show --project_id="$PROJECT_ID" "${DATASET_ID}" &>/dev/null; then
   bq --location="$REGION" mk -d "${PROJECT_ID}:${DATASET_ID}"
@@ -214,19 +219,41 @@ else
   info "データセット既存: ${DATASET_ID}"
 fi
 
-if ! bq show --project_id="$PROJECT_ID" "${DATASET_ID}.${TABLE_ID}" &>/dev/null; then
-  bq mk --table "${PROJECT_ID}:${DATASET_ID}.${TABLE_ID}" \
-    incident_id:STRING,vulnerability_id:STRING,title:STRING,severity:STRING,affected_systems:STRING,cvss_score:FLOAT,description:STRING,remediation:STRING,owners:STRING,status:STRING,occurred_at:TIMESTAMP,source:STRING,extra:STRING
-  info "テーブル作成: ${TABLE_ID}"
+if ! bq show --project_id="$PROJECT_ID" "${DATASET_ID}.${HISTORY_TABLE_ID}" &>/dev/null; then
+  bq mk --table "${PROJECT_ID}:${DATASET_ID}.${HISTORY_TABLE_ID}"     incident_id:STRING,vulnerability_id:STRING,title:STRING,severity:STRING,affected_systems:STRING,cvss_score:FLOAT,description:STRING,remediation:STRING,owners:STRING,status:STRING,occurred_at:TIMESTAMP,source:STRING,extra:STRING
+  info "テーブル作成: ${HISTORY_TABLE_ID}"
 else
-  info "テーブル既存: ${TABLE_ID}"
+  info "テーブル既存: ${HISTORY_TABLE_ID}"
+fi
+
+if ! bq show --project_id="$PROJECT_ID" "${DATASET_ID}.${SBOM_TABLE_ID}" &>/dev/null; then
+  bq mk --table "${PROJECT_ID}:${DATASET_ID}.${SBOM_TABLE_ID}"     type:STRING,name:STRING,version:STRING,release:STRING,purl:STRING
+  info "テーブル作成: ${SBOM_TABLE_ID}"
+else
+  info "テーブル既存: ${SBOM_TABLE_ID}"
+fi
+
+if ! bq show --project_id="$PROJECT_ID" "${DATASET_ID}.${OWNER_TABLE_ID}" &>/dev/null; then
+  bq mk --table "${PROJECT_ID}:${DATASET_ID}.${OWNER_TABLE_ID}"     pattern:STRING,system_name:STRING,owner_email:STRING,owner_name:STRING,notes:STRING
+  info "テーブル作成: ${OWNER_TABLE_ID}"
+else
+  info "テーブル既存: ${OWNER_TABLE_ID}"
 fi
 
 # BQ テーブル ID をシークレットに保存 (未登録なら)
 if ! gcloud secrets describe "vuln-agent-bq-table-id" --project="$PROJECT_ID" &>/dev/null; then
-  echo -n "$FULL_TABLE_ID" | gcloud secrets create "vuln-agent-bq-table-id" \
-    --data-file=- --replication-policy="automatic" --project="$PROJECT_ID" 2>/dev/null
-  info "BigQuery テーブル ID を Secret Manager に登録"
+  echo -n "$FULL_HISTORY_TABLE_ID" | gcloud secrets create "vuln-agent-bq-table-id"     --data-file=- --replication-policy="automatic" --project="$PROJECT_ID" 2>/dev/null
+  info "BigQuery 履歴テーブル ID を Secret Manager に登録"
+fi
+
+if ! gcloud secrets describe "vuln-agent-bq-sbom-table-id" --project="$PROJECT_ID" &>/dev/null; then
+  echo -n "$FULL_SBOM_TABLE_ID" | gcloud secrets create "vuln-agent-bq-sbom-table-id"     --data-file=- --replication-policy="automatic" --project="$PROJECT_ID" 2>/dev/null
+  info "BigQuery SBOM テーブル ID を Secret Manager に登録"
+fi
+
+if ! gcloud secrets describe "vuln-agent-bq-owner-table-id" --project="$PROJECT_ID" &>/dev/null; then
+  echo -n "$FULL_OWNER_TABLE_ID" | gcloud secrets create "vuln-agent-bq-owner-table-id"     --data-file=- --replication-policy="automatic" --project="$PROJECT_ID" 2>/dev/null
+  info "BigQuery 担当者マッピングテーブル ID を Secret Manager に登録"
 fi
 
 # ====================================================
@@ -242,9 +269,12 @@ _sm_get() {
 cat > agent/.env <<ENVEOF
 GMAIL_OAUTH_TOKEN=$(_sm_get vuln-agent-gmail-oauth-token)
 SIDFM_SENDER_EMAIL=$(_sm_get vuln-agent-sidfm-sender)
+SBOM_DATA_BACKEND=$(_sm_get vuln-agent-sbom-data-backend)
 SBOM_SPREADSHEET_ID=$(_sm_get vuln-agent-sbom-spreadsheet-id)
 SBOM_SHEET_NAME=$(_sm_get vuln-agent-sbom-sheet-name)
 OWNER_SHEET_NAME=$(_sm_get vuln-agent-owner-sheet-name)
+BQ_SBOM_TABLE_ID=$(_sm_get vuln-agent-bq-sbom-table-id)
+BQ_OWNER_MAPPING_TABLE_ID=$(_sm_get vuln-agent-bq-owner-table-id)
 DEFAULT_CHAT_SPACE_ID=$(_sm_get vuln-agent-chat-space-id)
 BQ_HISTORY_TABLE_ID=$(_sm_get vuln-agent-bq-table-id)
 GCP_PROJECT_ID=${PROJECT_ID}
