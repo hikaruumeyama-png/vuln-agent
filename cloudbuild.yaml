@@ -52,9 +52,15 @@ steps:
     args:
       - "-c"
       - |
-        pip install -q google-adk
+        python3 -m pip install -q --user google-adk
+        adk_bin="$(python3 -m site --user-base)/bin/adk"
+        if [ ! -x "$$adk_bin" ]; then
+          echo "adk CLI が見つかりません: $$adk_bin"
+          python3 -m pip show google-adk || true
+          exit 127
+        fi
         cd agent
-        adk deploy agent_engine \
+        "$$adk_bin" deploy agent_engine \
           --project=${PROJECT_ID} \
           --region=${_REGION} \
           --display_name=${_AGENT_NAME} \
