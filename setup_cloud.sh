@@ -22,6 +22,12 @@ step()    { echo -e "\n${GREEN}==> $1${NC}"; }
 info()    { echo -e "${BLUE}    $1${NC}"; }
 warn()    { echo -e "${YELLOW}[WARN] $1${NC}"; }
 err()     { echo -e "${RED}[ERROR] $1${NC}"; }
+_engine_exists() {
+  local resource_name="$1"
+  gcloud ai reasoning-engines describe "$resource_name" \
+    --project="$PROJECT_ID" \
+    --region="$REGION" >/dev/null 2>&1
+}
 
 REGION="asia-northeast1"
 AGENT_NAME="vulnerability-management-agent"
@@ -309,6 +315,12 @@ if [[ -z "$AGENT_RESOURCE_NAME" ]]; then
 fi
 
 if [[ -n "$AGENT_RESOURCE_NAME" ]]; then
+  if ! _engine_exists "$AGENT_RESOURCE_NAME"; then
+    err "デプロイ直後の Agent Resource Name が存在しません: ${AGENT_RESOURCE_NAME}"
+    err "Secret の更新を中止します。デプロイ出力を確認してください。"
+    exit 1
+  fi
+
   if gcloud secrets describe "vuln-agent-resource-name" --project="$PROJECT_ID" &>/dev/null; then
     echo -n "$AGENT_RESOURCE_NAME" | gcloud secrets versions add "vuln-agent-resource-name" --data-file=- --project="$PROJECT_ID"
   else
