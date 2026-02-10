@@ -63,6 +63,10 @@ fi
 
 BASE_REF="${ORIG_HEAD:-}"
 if [[ -z "$BASE_REF" ]] || ! git rev-parse --verify "$BASE_REF" >/dev/null 2>&1; then
+  BASE_REF="$(git rev-parse -q --verify 'HEAD@{1}' 2>/dev/null || true)"
+fi
+
+if [[ -z "$BASE_REF" ]] || ! git rev-parse --verify "$BASE_REF" >/dev/null 2>&1; then
   BASE_REF="HEAD~1"
 fi
 
