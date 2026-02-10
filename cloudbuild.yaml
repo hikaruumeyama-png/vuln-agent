@@ -83,6 +83,23 @@ steps:
           --display_name=${_AGENT_NAME} \
           --env_file=.env .
 
+        token="$(gcloud auth print-access-token)"
+        api_base="https://${_REGION}-aiplatform.googleapis.com/v1"
+        engines_json="$(curl -sSf -H "Authorization: Bearer $$token" \
+          "$$api_base/projects/${PROJECT_ID}/locations/${_REGION}/reasoningEngines")"
+
+        latest_engine="$(printf '%s' "$$engines_json" | python3 -c 'import json,sys; display_name=sys.argv[1]; engines=json.load(sys.stdin).get("reasoningEngines", []); filtered=[e for e in engines if e.get("displayName")==display_name and e.get("name")]; filtered.sort(key=lambda e: e.get("createTime", ""), reverse=True); print(filtered[0]["name"] if filtered else "")' "${_AGENT_NAME}")"
+        if [ -z "$$latest_engine" ]; then
+          echo "警告: 最新の Agent Engine を特定できませんでした。"
+        else
+          if ! gcloud secrets describe vuln-agent-resource-name >/dev/null 2>&1; then
+            echo "vuln-agent-resource-name が存在しないため作成します。"
+            printf 'bootstrap' | gcloud secrets create vuln-agent-resource-name --data-file=- >/dev/null
+          fi
+          printf '%s' "$$latest_engine" | gcloud secrets versions add vuln-agent-resource-name --data-file=- >/dev/null
+          echo "vuln-agent-resource-name を更新しました: $$latest_engine"
+        fi
+
         echo "[Step 2/5] 古い Agent Engine リソースを整理します"
         retention_count="${_AGENT_ENGINE_RETENTION}"
         if ! [[ "$$retention_count" =~ ^[0-9]+$$ ]] || [ "$$retention_count" -lt 1 ]; then
@@ -90,12 +107,14 @@ steps:
           retention_count="1"
         fi
 
-        token="$(gcloud auth print-access-token)"
-        api_base="https://${_REGION}-aiplatform.googleapis.com/v1"
-        engines_json="$(curl -sSf -H "Authorization: Bearer $$token" \
-          "$$api_base/projects/${PROJECT_ID}/locations/${_REGION}/reasoningEngines")"
-
         delete_targets="$(printf '%s' "$$engines_json" | python3 -c 'import json,sys; retention=int(sys.argv[1]); display_name=sys.argv[2]; engines=json.load(sys.stdin).get("reasoningEngines", []); filtered=[e for e in engines if e.get("displayName")==display_name and e.get("name")]; filtered.sort(key=lambda e: e.get("createTime", ""), reverse=True); print("\n".join(e["name"] for e in filtered[retention:]))' "$$retention_count" "${_AGENT_NAME}")"
+
+        preserved_engine="$(gcloud secrets versions access latest \
+          --secret=vuln-agent-resource-name 2>/dev/null || echo '')"
+        if [ -n "$$preserved_engine" ]; then
+          delete_targets="$(printf '%s\n' "$$delete_targets" | awk -v preserve="$$preserved_engine" '$0 != preserve')"
+          echo "保持対象の Agent Engine を削除対象から除外しました: $$preserved_engine"
+        fi
 
         if [ -z "$$delete_targets" ]; then
           echo "削除対象の Agent Engine はありません。"
