@@ -318,7 +318,6 @@ echo "$DEPLOY_OUTPUT"
 
 # デプロイ出力からリソース名を抽出して Secret Manager に保存
 AGENT_RESOURCE_NAME=$(echo "$DEPLOY_OUTPUT" | grep -oP 'projects/[^\s]+/reasoningEngines/\d+' | head -1 || true)
-
 if [[ -z "$AGENT_RESOURCE_NAME" ]]; then
   warn "リソース名の自動検出に失敗しました。手動で入力してください。"
   echo "  gcloud ai reasoning-engines list --region=${REGION} --project=${PROJECT_ID}"
