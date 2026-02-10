@@ -74,6 +74,8 @@ gcloud projects add-iam-policy-binding $PROJECT_ID \
 
 ### Step 3: Cloud Functions デプロイ
 
+`AGENT_RESOURCE_NAME` は `--set-env-vars` に含めず、Secret 参照（`--set-secrets`）のみを使用します。
+
 ```bash
 cd scheduler
 
