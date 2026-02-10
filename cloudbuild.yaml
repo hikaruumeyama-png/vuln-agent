@@ -73,20 +73,20 @@ steps:
       - |
         AGENT_RESOURCE_NAME=$(gcloud secrets versions access latest \
           --secret=vuln-agent-resource-name 2>/dev/null || echo '')
-        if [ -z "$AGENT_RESOURCE_NAME" ]; then
+        if [ -z "$$AGENT_RESOURCE_NAME" ]; then
           echo "vuln-agent-resource-name が未登録です。Live Gateway のデプロイをスキップします。"
           exit 0
         fi
         GEMINI_KEY=$(gcloud secrets versions access latest \
           --secret=vuln-agent-gemini-api-key 2>/dev/null || echo '')
-        if [ -z "$GEMINI_KEY" ]; then
+        if [ -z "$$GEMINI_KEY" ]; then
           echo "vuln-agent-gemini-api-key が未登録です。Live Gateway のデプロイをスキップします。"
           exit 0
         fi
         gcloud run deploy vuln-agent-live-gateway \
           --source=live_gateway \
           --region=${_REGION} \
-          --set-env-vars="GCP_PROJECT_ID=${PROJECT_ID},GCP_LOCATION=${_REGION},AGENT_RESOURCE_NAME=$AGENT_RESOURCE_NAME" \
+          --set-env-vars="GCP_PROJECT_ID=${PROJECT_ID},GCP_LOCATION=${_REGION},AGENT_RESOURCE_NAME=$$AGENT_RESOURCE_NAME" \
           --set-secrets="GEMINI_API_KEY=vuln-agent-gemini-api-key:latest" \
           --service-account=vuln-agent-sa@${PROJECT_ID}.iam.gserviceaccount.com \
           --allow-unauthenticated \
@@ -107,7 +107,7 @@ steps:
       - |
         AGENT_RESOURCE_NAME=$(gcloud secrets versions access latest \
           --secret=vuln-agent-resource-name 2>/dev/null || echo '')
-        if [ -z "$AGENT_RESOURCE_NAME" ]; then
+        if [ -z "$$AGENT_RESOURCE_NAME" ]; then
           echo "vuln-agent-resource-name が未登録です。Scheduler のデプロイをスキップします。"
           exit 0
         fi
@@ -120,7 +120,7 @@ steps:
           --trigger-http \
           --no-allow-unauthenticated \
           --service-account=vuln-agent-sa@${PROJECT_ID}.iam.gserviceaccount.com \
-          --set-env-vars="GCP_PROJECT_ID=${PROJECT_ID},GCP_LOCATION=${_REGION},AGENT_RESOURCE_NAME=$AGENT_RESOURCE_NAME" \
+          --set-env-vars="GCP_PROJECT_ID=${PROJECT_ID},GCP_LOCATION=${_REGION},AGENT_RESOURCE_NAME=$$AGENT_RESOURCE_NAME" \
           --memory=512MB \
           --timeout=540s \
           --quiet
@@ -137,10 +137,10 @@ steps:
       - "-c"
       - |
         BUCKET=gs://${PROJECT_ID}-vuln-agent-ui
-        gsutil mb -p ${PROJECT_ID} -l ${_REGION} $BUCKET 2>/dev/null || true
-        gsutil web set -m index.html -e index.html $BUCKET
-        gsutil -m rsync -r -d web $BUCKET
-        gsutil iam ch allUsers:objectViewer $BUCKET
+        gsutil mb -p ${PROJECT_ID} -l ${_REGION} $$BUCKET 2>/dev/null || true
+        gsutil web set -m index.html -e index.html $$BUCKET
+        gsutil -m rsync -r -d web $$BUCKET
+        gsutil iam ch allUsers:objectViewer $$BUCKET
     waitFor:
       - "-"
 
