@@ -16,6 +16,7 @@
 substitutions:
   _REGION: asia-northeast1
   _AGENT_NAME: vulnerability-management-agent
+  _AGENT_ENGINE_RETENTION: "1"
 
 steps:
   # =========================================
@@ -81,6 +82,39 @@ steps:
           --region=${_REGION} \
           --display_name=${_AGENT_NAME} \
           --env_file=.env .
+
+        echo "[Step 2/5] 古い Agent Engine リソースを整理します"
+        retention_count="${_AGENT_ENGINE_RETENTION}"
+        if ! [[ "$$retention_count" =~ ^[0-9]+$$ ]] || [ "$$retention_count" -lt 1 ]; then
+          echo "_AGENT_ENGINE_RETENTION の値が不正なため 1 を使用します: $$retention_count"
+          retention_count="1"
+        fi
+
+        token="$(gcloud auth print-access-token)"
+        api_base="https://${_REGION}-aiplatform.googleapis.com/v1"
+        engines_json="$(curl -sSf -H "Authorization: Bearer $$token" \
+          "$$api_base/projects/${PROJECT_ID}/locations/${_REGION}/reasoningEngines")"
+
+        delete_targets="$(printf '%s' "$$engines_json" | python3 -c 'import json,sys; retention=int(sys.argv[1]); display_name=sys.argv[2]; engines=json.load(sys.stdin).get("reasoningEngines", []); filtered=[e for e in engines if e.get("displayName")==display_name and e.get("name")]; filtered.sort(key=lambda e: e.get("createTime", ""), reverse=True); print("\n".join(e["name"] for e in filtered[retention:]))' "$$retention_count" "${_AGENT_NAME}")"
+
+        preserved_engine="$(gcloud secrets versions access latest \
+          --secret=vuln-agent-resource-name 2>/dev/null || echo '')"
+        if [ -n "$$preserved_engine" ]; then
+          delete_targets="$(printf '%s\n' "$$delete_targets" | awk -v preserve="$$preserved_engine" '$0 != preserve')"
+          echo "保持対象の Agent Engine を削除対象から除外しました: $$preserved_engine"
+        fi
+
+        if [ -z "$$delete_targets" ]; then
+          echo "削除対象の Agent Engine はありません。"
+        else
+          while IFS= read -r engine_name; do
+            [ -z "$$engine_name" ] && continue
+            echo "削除: $$engine_name"
+            curl -sSf -X DELETE -H "Authorization: Bearer $$token" \
+              "$$api_base/$$engine_name" >/dev/null || \
+              echo "警告: 削除に失敗しました: $$engine_name"
+          done <<< "$$delete_targets"
+        fi
     waitFor:
       - build-env
 
