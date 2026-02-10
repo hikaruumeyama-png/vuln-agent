@@ -60,36 +60,6 @@ def _get_bigquery_client() -> bigquery.Client:
     return bigquery.Client(project=project)
 
 
-def _get_sbom_data_backend() -> str:
-    """
-    SBOMデータ取得バックエンドを返す。
-
-    環境変数:
-      - SBOM_DATA_BACKEND: sheets | bigquery | auto (default: sheets)
-
-    auto の場合は BigQuery テーブル設定があれば bigquery、なければ sheets を利用。
-    """
-    configured = os.environ.get("SBOM_DATA_BACKEND", "sheets").strip().lower()
-    if configured not in {"sheets", "bigquery", "auto"}:
-        logger.warning("Invalid SBOM_DATA_BACKEND=%s, fallback to sheets", configured)
-        return "sheets"
-
-    if configured == "auto":
-        sbom_table_id = os.environ.get("BQ_SBOM_TABLE_ID", "").strip()
-        owner_table_id = os.environ.get("BQ_OWNER_MAPPING_TABLE_ID", "").strip()
-        if sbom_table_id and owner_table_id:
-            return "bigquery"
-        return "sheets"
-
-    return configured
-
-
-def _get_bigquery_client() -> bigquery.Client:
-    """BigQueryクライアントを構築"""
-    project = os.environ.get("GCP_PROJECT_ID") or None
-    return bigquery.Client(project=project)
-
-
 def _get_sheets_service():
     """Sheets APIサービスを構築"""
     sa_path = os.environ.get("GOOGLE_APPLICATION_CREDENTIALS")
@@ -277,8 +247,9 @@ def _load_owner_mapping_from_sheets() -> list[dict]:
             while len(row) < 5:
                 row.append("")
 
+            normalized_pattern = row[0].strip() or "*"
             mappings.append({
-                "pattern": row[0],
+                "pattern": normalized_pattern,
                 "system_name": row[1],
                 "owner_email": row[2],
                 "owner_name": row[3],
