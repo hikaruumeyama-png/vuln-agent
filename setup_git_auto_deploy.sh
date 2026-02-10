@@ -92,8 +92,16 @@ if [[ "${AUTO_DEPLOY_DRY_RUN:-}" == "1" ]]; then
 fi
 
 log "変更を検知: Cloud Build で再デプロイを開始します"
-gcloud builds submit --config cloudbuild.yaml --project "$PROJECT_ID"
-log "Cloud Build 送信完了"
+log "実行内容: gcloud builds submit --async --format='value(name)'"
+BUILD_NAME="$(gcloud builds submit --config cloudbuild.yaml --project "$PROJECT_ID" --async --format='value(name)')"
+if [[ -z "$BUILD_NAME" ]]; then
+  log "ビルドIDの取得に失敗しました。gcloud の出力を確認してください。"
+  exit 1
+fi
+BUILD_ID="${BUILD_NAME##*/}"
+log "Cloud Build 送信完了 (build_id=$BUILD_ID)"
+log "ビルド確認URL: https://console.cloud.google.com/cloud-build/builds/$BUILD_ID?project=$PROJECT_ID"
+log "注意: Cloud Shell の gcloud ポーリング不具合回避のため、待機は行いません（非同期実行）。"
 HOOKEOF
 
   chmod +x "$HOOK_PATH"

@@ -27,6 +27,7 @@ steps:
     args:
       - "-c"
       - |
+        echo "[Step 1/5] Secret Manager から .env を生成します"
         cat > agent/.env <<EOF
         GMAIL_OAUTH_TOKEN=$(gcloud secrets versions access latest --secret=vuln-agent-gmail-oauth-token 2>/dev/null || echo '')
         SIDFM_SENDER_EMAIL=$(gcloud secrets versions access latest --secret=vuln-agent-sidfm-sender 2>/dev/null || echo 'noreply@sidfm.com')
@@ -52,6 +53,7 @@ steps:
     args:
       - "-c"
       - |
+        echo "[Step 2/5] Agent Engine のデプロイ準備: google-adk をインストールします"
         python3 -m pip install -q --user google-adk
         adk_bin="$(python3 -m site --user-base)/bin/adk"
         if [ ! -x "$$adk_bin" ]; then
@@ -59,6 +61,7 @@ steps:
           python3 -m pip show google-adk || true
           exit 127
         fi
+        echo "[Step 2/5] Agent Engine をデプロイします"
         cd agent
         "$$adk_bin" deploy agent_engine \
           --project=${PROJECT_ID} \
@@ -77,6 +80,7 @@ steps:
     args:
       - "-c"
       - |
+        echo "[Step 3/5] Live Gateway デプロイ条件を確認します"
         AGENT_RESOURCE_NAME=$(gcloud secrets versions access latest \
           --secret=vuln-agent-resource-name 2>/dev/null || echo '')
         if [ -z "$$AGENT_RESOURCE_NAME" ]; then
@@ -89,6 +93,7 @@ steps:
           echo "vuln-agent-gemini-api-key が未登録です。Live Gateway のデプロイをスキップします。"
           exit 0
         fi
+        echo "[Step 3/5] Live Gateway を Cloud Run にデプロイします"
         gcloud run deploy vuln-agent-live-gateway \
           --source=live_gateway \
           --region=${_REGION} \
@@ -111,12 +116,14 @@ steps:
     args:
       - "-c"
       - |
+        echo "[Step 4/5] Scheduler デプロイ条件を確認します"
         AGENT_RESOURCE_NAME=$(gcloud secrets versions access latest \
           --secret=vuln-agent-resource-name 2>/dev/null || echo '')
         if [ -z "$$AGENT_RESOURCE_NAME" ]; then
           echo "vuln-agent-resource-name が未登録です。Scheduler のデプロイをスキップします。"
           exit 0
         fi
+        echo "[Step 4/5] Scheduler を Cloud Functions にデプロイします"
         gcloud functions deploy vuln-agent-scheduler \
           --gen2 \
           --runtime=python312 \
@@ -142,6 +149,7 @@ steps:
     args:
       - "-c"
       - |
+        echo "[Step 5/5] Web UI を Cloud Storage にデプロイします"
         BUCKET=gs://${PROJECT_ID}-vuln-agent-ui
         gsutil mb -p ${PROJECT_ID} -l ${_REGION} $$BUCKET 2>/dev/null || true
         gsutil web set -m index.html -e index.html $$BUCKET
