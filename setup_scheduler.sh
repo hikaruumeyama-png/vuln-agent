@@ -117,6 +117,7 @@ gcloud services enable cloudfunctions.googleapis.com --project="$PROJECT_ID" --q
 gcloud services enable cloudscheduler.googleapis.com --project="$PROJECT_ID" --quiet
 gcloud services enable cloudbuild.googleapis.com --project="$PROJECT_ID" --quiet
 gcloud services enable run.googleapis.com --project="$PROJECT_ID" --quiet
+gcloud services enable secretmanager.googleapis.com --project="$PROJECT_ID" --quiet
 
 print_success "APIを有効化しました"
 
@@ -140,7 +141,28 @@ gcloud projects add-iam-policy-binding "$PROJECT_ID" \
     --role="roles/aiplatform.user" \
     --quiet 2>/dev/null || true
 
+gcloud projects add-iam-policy-binding "$PROJECT_ID" \
+    --member="serviceAccount:$SA_EMAIL" \
+    --role="roles/secretmanager.secretAccessor" \
+    --quiet 2>/dev/null || true
+
 print_success "サービスアカウント: $SA_EMAIL"
+
+# AGENT_RESOURCE_NAME を Secret Manager に保存
+print_step "Step 3.5: AGENT_RESOURCE_NAME シークレットを更新中..."
+
+if gcloud secrets describe "vuln-agent-resource-name" --project="$PROJECT_ID" &>/dev/null; then
+    echo -n "$AGENT_RESOURCE_NAME" | gcloud secrets versions add "vuln-agent-resource-name" \
+        --data-file=- \
+        --project="$PROJECT_ID" >/dev/null
+    print_success "vuln-agent-resource-name の新しいバージョンを追加しました"
+else
+    echo -n "$AGENT_RESOURCE_NAME" | gcloud secrets create "vuln-agent-resource-name" \
+        --data-file=- \
+        --replication-policy="automatic" \
+        --project="$PROJECT_ID" >/dev/null
+    print_success "vuln-agent-resource-name を作成しました"
+fi
 
 # ====================================
 # Step 4: Cloud Functions デプロイ
