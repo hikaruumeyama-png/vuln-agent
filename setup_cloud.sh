@@ -390,6 +390,7 @@ if [[ -n "$AGENT_RESOURCE_NAME" ]]; then
     --trigger-http \
     --no-allow-unauthenticated \
     --service-account="$SA_EMAIL" \
+    # AGENT_RESOURCE_NAME は Secret Manager から注入し、環境変数の直接設定はしない
     --set-env-vars="GCP_PROJECT_ID=${PROJECT_ID},GCP_LOCATION=${REGION}" \
     --remove-env-vars="AGENT_RESOURCE_NAME" \
     --set-secrets="AGENT_RESOURCE_NAME=vuln-agent-resource-name:latest" \
