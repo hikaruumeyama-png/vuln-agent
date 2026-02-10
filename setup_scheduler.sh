@@ -155,13 +155,13 @@ if gcloud secrets describe "vuln-agent-resource-name" --project="$PROJECT_ID" &>
     echo -n "$AGENT_RESOURCE_NAME" | gcloud secrets versions add "vuln-agent-resource-name" \
         --data-file=- \
         --project="$PROJECT_ID" >/dev/null
-    print_success "既存シークレット vuln-agent-resource-name に新しいバージョンを追加しました"
+    print_success "既存シークレットに新しいバージョン追加: vuln-agent-resource-name"
 else
     echo -n "$AGENT_RESOURCE_NAME" | gcloud secrets create "vuln-agent-resource-name" \
         --data-file=- \
         --replication-policy="automatic" \
         --project="$PROJECT_ID" >/dev/null
-    print_success "シークレット vuln-agent-resource-name を作成しました"
+    print_success "シークレット作成: vuln-agent-resource-name"
 fi
 
 # ====================================
@@ -191,6 +191,9 @@ gcloud functions deploy "$FUNCTION_NAME" \
     --trigger-http \
     --allow-unauthenticated=false \
     --service-account="$SA_EMAIL" \
+    # AGENT_RESOURCE_NAME は Secret Manager から注入する
+    --set-env-vars="GCP_PROJECT_ID=$PROJECT_ID,GCP_LOCATION=$REGION" \
+    --remove-env-vars="AGENT_RESOURCE_NAME" \
     --set-env-vars="GCP_PROJECT_ID=$PROJECT_ID,GCP_LOCATION=$REGION" \
     --set-secrets="AGENT_RESOURCE_NAME=vuln-agent-resource-name:latest" \
     --memory=512MB \

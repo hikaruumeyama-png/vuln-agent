@@ -233,6 +233,7 @@ steps:
           --no-allow-unauthenticated \
           --service-account=vuln-agent-sa@${PROJECT_ID}.iam.gserviceaccount.com \
           --set-env-vars="GCP_PROJECT_ID=${PROJECT_ID},GCP_LOCATION=${_REGION}" \
+          --remove-env-vars="AGENT_RESOURCE_NAME" \
           --set-secrets="AGENT_RESOURCE_NAME=vuln-agent-resource-name:latest" \
           --memory=512MB \
           --timeout=540s \

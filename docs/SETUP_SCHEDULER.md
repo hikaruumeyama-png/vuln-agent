@@ -74,6 +74,8 @@ gcloud projects add-iam-policy-binding $PROJECT_ID \
 
 ### Step 3: Cloud Functions デプロイ
 
+`AGENT_RESOURCE_NAME` は `--set-env-vars` に含めず、Secret 参照（`--set-secrets`）のみを使用します。
+
 ```bash
 cd scheduler
 
@@ -88,6 +90,7 @@ gcloud functions deploy vuln-agent-scheduler \
     --allow-unauthenticated=false \
     --service-account="vuln-agent-scheduler-sa@${PROJECT_ID}.iam.gserviceaccount.com" \
     --set-env-vars="GCP_PROJECT_ID=${PROJECT_ID},GCP_LOCATION=asia-northeast1" \
+    --remove-env-vars="AGENT_RESOURCE_NAME" \
     --set-secrets="AGENT_RESOURCE_NAME=vuln-agent-resource-name:latest" \
     --memory=512MB \
     --timeout=540s
@@ -274,8 +277,13 @@ printf %s "projects/${PROJECT_ID}/locations/asia-northeast1/reasoningEngines/正
 
 # Secret 参照で再デプロイ
 gcloud functions deploy vuln-agent-scheduler \
+    --region=asia-northeast1 \
+    --remove-env-vars="AGENT_RESOURCE_NAME" \
     --set-secrets="AGENT_RESOURCE_NAME=vuln-agent-resource-name:latest"
 ```
+
+> `AGENT_RESOURCE_NAME` を Secret 参照へ統一するため、再デプロイ時は
+> `--remove-env-vars` と `--set-secrets` を必ずセットで指定してください。
 
 ---
 
