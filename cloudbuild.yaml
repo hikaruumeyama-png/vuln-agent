@@ -97,13 +97,6 @@ steps:
 
         delete_targets="$(printf '%s' "$$engines_json" | python3 -c 'import json,sys; retention=int(sys.argv[1]); display_name=sys.argv[2]; engines=json.load(sys.stdin).get("reasoningEngines", []); filtered=[e for e in engines if e.get("displayName")==display_name and e.get("name")]; filtered.sort(key=lambda e: e.get("createTime", ""), reverse=True); print("\n".join(e["name"] for e in filtered[retention:]))' "$$retention_count" "${_AGENT_NAME}")"
 
-        preserved_engine="$(gcloud secrets versions access latest \
-          --secret=vuln-agent-resource-name 2>/dev/null || echo '')"
-        if [ -n "$$preserved_engine" ]; then
-          delete_targets="$(printf '%s\n' "$$delete_targets" | awk -v preserve="$$preserved_engine" '$0 != preserve')"
-          echo "保持対象の Agent Engine を削除対象から除外しました: $$preserved_engine"
-        fi
-
         if [ -z "$$delete_targets" ]; then
           echo "削除対象の Agent Engine はありません。"
         else
