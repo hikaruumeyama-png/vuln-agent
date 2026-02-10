@@ -54,7 +54,7 @@ steps:
       - "-c"
       - |
         echo "[Step 2/5] Agent Engine のデプロイ準備: google-adk をインストールします"
-        python3 -m pip install -q --user google-adk
+        python3 -m pip install -q --user --break-system-packages google-adk
         adk_bin="$(python3 -m site --user-base)/bin/adk"
         if [ ! -x "$$adk_bin" ]; then
           echo "adk CLI が見つかりません: $$adk_bin"
