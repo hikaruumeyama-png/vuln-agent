@@ -277,9 +277,13 @@ printf %s "projects/${PROJECT_ID}/locations/asia-northeast1/reasoningEngines/正
 
 # Secret 参照で再デプロイ
 gcloud functions deploy vuln-agent-scheduler \
+    --region=asia-northeast1 \
     --remove-env-vars="AGENT_RESOURCE_NAME" \
     --set-secrets="AGENT_RESOURCE_NAME=vuln-agent-resource-name:latest"
 ```
+
+> `AGENT_RESOURCE_NAME` を Secret 参照へ統一するため、再デプロイ時は
+> `--remove-env-vars` と `--set-secrets` を必ずセットで指定してください。
 
 ---
 
