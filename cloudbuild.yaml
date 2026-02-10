@@ -98,9 +98,11 @@ steps:
 
         latest_engine="$(printf '%s' "$$engines_json" | python3 -c 'import json,sys; display_name=sys.argv[1]; engines=json.load(sys.stdin).get("reasoningEngines", []); filtered=[e for e in engines if e.get("displayName")==display_name and e.get("name")]; filtered.sort(key=lambda e: e.get("createTime", ""), reverse=True); print(filtered[0]["name"] if filtered else "")' "${_AGENT_NAME}")"
         if [ -z "$$latest_engine" ]; then
-          echo "警告: 最新の Agent Engine を特定できませんでした。"
+          echo "エラー: 最新の Agent Engine を特定できませんでした。Secret を更新できません。"
+          exit 1
         elif ! verify_engine_exists "$$latest_engine"; then
-          echo "警告: 最新候補の Agent Engine が見つからないため Secret 更新をスキップします: $$latest_engine"
+          echo "エラー: デプロイした Agent Engine の疎通確認に失敗しました: $$latest_engine"
+          exit 1
         else
           if ! gcloud secrets describe vuln-agent-resource-name >/dev/null 2>&1; then
             echo "vuln-agent-resource-name が存在しないため作成します。"
@@ -150,32 +152,19 @@ steps:
       - "-c"
       - |
         echo "[Step 3/5] Live Gateway デプロイ条件を確認します"
-        token="$(gcloud auth print-access-token)"
-        api_base="https://${_REGION}-aiplatform.googleapis.com/v1"
-        verify_engine_exists() {
-          local engine_name="$1"
-          [ -z "$engine_name" ] && return 1
-          local status
-          status="$(curl -s -o /dev/null -w "%{http_code}" -H "Authorization: Bearer $$token" \
-            "$$api_base/$$engine_name")"
-          [ "$$status" = "200" ]
-        }
+        # AGENT_RESOURCE_NAME は --set-env-vars で埋め込むため値の取得が必要。
+        # ただし Agent Engine の疎通確認はデプロイ時には行わない。
         AGENT_RESOURCE_NAME=$(gcloud secrets versions access latest \
           --secret=vuln-agent-resource-name 2>/dev/null || echo '')
         if [ -z "$$AGENT_RESOURCE_NAME" ]; then
-          echo "vuln-agent-resource-name が未登録です。Live Gateway のデプロイをスキップします。"
-          exit 0
-        fi
-        if ! verify_engine_exists "$$AGENT_RESOURCE_NAME"; then
-          echo "vuln-agent-resource-name が不正です（ReasoningEngine が存在しません）: $$AGENT_RESOURCE_NAME"
-          echo "Live Gateway のデプロイを中止します。"
+          echo "エラー: vuln-agent-resource-name が未登録です。Live Gateway のデプロイに失敗しました。"
+          echo "初回セットアップ (setup_cloud.sh) を先に実行してください。"
           exit 1
         fi
-        GEMINI_KEY=$(gcloud secrets versions access latest \
-          --secret=vuln-agent-gemini-api-key 2>/dev/null || echo '')
-        if [ -z "$$GEMINI_KEY" ]; then
-          echo "vuln-agent-gemini-api-key が未登録です。Live Gateway のデプロイをスキップします。"
-          exit 0
+        if ! gcloud secrets describe vuln-agent-gemini-api-key >/dev/null 2>&1; then
+          echo "エラー: vuln-agent-gemini-api-key シークレットが存在しません。"
+          echo "初回セットアップ (setup_cloud.sh) を先に実行してください。"
+          exit 1
         fi
         echo "[Step 3/5] Live Gateway を Cloud Run にデプロイします"
         gcloud run deploy vuln-agent-live-gateway \
@@ -201,25 +190,12 @@ steps:
       - "-c"
       - |
         echo "[Step 4/5] Scheduler デプロイ条件を確認します"
-        token="$(gcloud auth print-access-token)"
-        api_base="https://${_REGION}-aiplatform.googleapis.com/v1"
-        verify_engine_exists() {
-          local engine_name="$1"
-          [ -z "$engine_name" ] && return 1
-          local status
-          status="$(curl -s -o /dev/null -w "%{http_code}" -H "Authorization: Bearer $$token" \
-            "$$api_base/$$engine_name")"
-          [ "$$status" = "200" ]
-        }
-        AGENT_RESOURCE_NAME=$(gcloud secrets versions access latest \
-          --secret=vuln-agent-resource-name 2>/dev/null || echo '')
-        if [ -z "$$AGENT_RESOURCE_NAME" ]; then
-          echo "vuln-agent-resource-name が未登録です。Scheduler のデプロイをスキップします。"
-          exit 0
-        fi
-        if ! verify_engine_exists "$$AGENT_RESOURCE_NAME"; then
-          echo "vuln-agent-resource-name が不正です（ReasoningEngine が存在しません）: $$AGENT_RESOURCE_NAME"
-          echo "Scheduler のデプロイを中止します。"
+        # --set-secrets で参照するため Secret の存在のみ確認する。
+        # Secret の値 (AGENT_RESOURCE_NAME) は Cloud Functions がランタイムで
+        # 読み取るため、デプロイ時に Agent Engine の疎通確認は行わない。
+        if ! gcloud secrets describe vuln-agent-resource-name >/dev/null 2>&1; then
+          echo "エラー: vuln-agent-resource-name シークレットが存在しません。"
+          echo "初回セットアップ (setup_cloud.sh) を先に実行してください。"
           exit 1
         fi
         echo "[Step 4/5] Scheduler を Cloud Functions にデプロイします"
