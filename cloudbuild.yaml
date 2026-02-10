@@ -52,7 +52,8 @@ steps:
     args:
       - "-c"
       - |
-        pip install -q google-adk
+        python3 -m pip install -q --user google-adk
+        export PATH="${HOME}/.local/bin:${PATH}"
         cd agent
         adk deploy agent_engine \
           --project=${PROJECT_ID} \
