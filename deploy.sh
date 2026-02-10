@@ -114,9 +114,12 @@ GMAIL_USER_EMAIL=security-team@your-domain.com
 SIDFM_SENDER_EMAIL=noreply@sidfm.com
 
 # SBOM設定
+SBOM_DATA_BACKEND=sheets
 SBOM_SPREADSHEET_ID=your-spreadsheet-id
 SBOM_SHEET_NAME=SBOM
 OWNER_SHEET_NAME=担当者マッピング
+BQ_SBOM_TABLE_ID=
+BQ_OWNER_MAPPING_TABLE_ID=
 
 # Google Chat設定
 DEFAULT_CHAT_SPACE_ID=spaces/your-space-id

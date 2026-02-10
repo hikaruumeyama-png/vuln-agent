@@ -30,9 +30,12 @@ steps:
         cat > agent/.env <<EOF
         GMAIL_OAUTH_TOKEN=$(gcloud secrets versions access latest --secret=vuln-agent-gmail-oauth-token 2>/dev/null || echo '')
         SIDFM_SENDER_EMAIL=$(gcloud secrets versions access latest --secret=vuln-agent-sidfm-sender 2>/dev/null || echo 'noreply@sidfm.com')
+        SBOM_DATA_BACKEND=$(gcloud secrets versions access latest --secret=vuln-agent-sbom-data-backend 2>/dev/null || echo 'sheets')
         SBOM_SPREADSHEET_ID=$(gcloud secrets versions access latest --secret=vuln-agent-sbom-spreadsheet-id 2>/dev/null || echo '')
         SBOM_SHEET_NAME=$(gcloud secrets versions access latest --secret=vuln-agent-sbom-sheet-name 2>/dev/null || echo 'SBOM')
         OWNER_SHEET_NAME=$(gcloud secrets versions access latest --secret=vuln-agent-owner-sheet-name 2>/dev/null || echo '担当者マッピング')
+        BQ_SBOM_TABLE_ID=$(gcloud secrets versions access latest --secret=vuln-agent-bq-sbom-table-id 2>/dev/null || echo '')
+        BQ_OWNER_MAPPING_TABLE_ID=$(gcloud secrets versions access latest --secret=vuln-agent-bq-owner-table-id 2>/dev/null || echo '')
         DEFAULT_CHAT_SPACE_ID=$(gcloud secrets versions access latest --secret=vuln-agent-chat-space-id 2>/dev/null || echo '')
         BQ_HISTORY_TABLE_ID=$(gcloud secrets versions access latest --secret=vuln-agent-bq-table-id 2>/dev/null || echo '')
         GCP_PROJECT_ID=${PROJECT_ID}
