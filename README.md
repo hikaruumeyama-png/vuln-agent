@@ -75,6 +75,7 @@ Google Workspace の管理者権限も不要で、個人アカウントまたは
 ├── web/                     # ブラウザ用チャット / 音声UI
 ├── docs/                    # 個別セットアップガイド
 ├── setup_cloud.sh           # Cloud Shell 用 初回セットアップスクリプト (自動化)
+├── setup_git_auto_deploy.sh # git pull 後の自動デプロイhook設定
 ├── cloudbuild.yaml          # Cloud Build CI/CD パイプライン定義
 ├── deploy_python.py         # (レガシー) Python SDK デプロイ
 └── setup_gmail_oauth.py     # Gmail OAuth トークン生成
@@ -388,6 +389,20 @@ gcloud builds triggers create github \
 ## 運用コマンド集
 
 デプロイ後の日常運用で使うコマンドです。すべて Cloud Shell で実行できます。
+
+### git pull 後に自動デプロイする（Cloud Shell 推奨）
+
+Cloud Shell で `git pull` したタイミングで、対象ファイル変更があれば
+`gcloud builds submit --config cloudbuild.yaml` を自動実行する Git Hook を設定できます。
+
+```bash
+./setup_git_auto_deploy.sh
+```
+
+- 一時無効化して pull: `SKIP_AUTO_DEPLOY=1 git pull`
+- 状態確認: `./setup_git_auto_deploy.sh --status`
+- 解除: `./setup_git_auto_deploy.sh --remove`
+- 既存hookを上書き: `./setup_git_auto_deploy.sh --force`
 
 ### シークレットの値を変更する
 

@@ -26,6 +26,38 @@ _sbom_cache = None
 _owner_mapping_cache = None
 _sbom_cache_timestamp = None
 _owner_mapping_cache_timestamp = None
+_sbom_cache_backend = None
+_owner_mapping_cache_backend = None
+
+
+def _get_sbom_data_backend() -> str:
+    """
+    SBOMデータ取得バックエンドを返す。
+
+    環境変数:
+      - SBOM_DATA_BACKEND: sheets | bigquery | auto (default: sheets)
+
+    auto の場合は BigQuery テーブル設定があれば bigquery、なければ sheets を利用。
+    """
+    configured = os.environ.get("SBOM_DATA_BACKEND", "sheets").strip().lower()
+    if configured not in {"sheets", "bigquery", "auto"}:
+        logger.warning("Invalid SBOM_DATA_BACKEND=%s, fallback to sheets", configured)
+        return "sheets"
+
+    if configured == "auto":
+        sbom_table_id = os.environ.get("BQ_SBOM_TABLE_ID", "").strip()
+        owner_table_id = os.environ.get("BQ_OWNER_MAPPING_TABLE_ID", "").strip()
+        if sbom_table_id and owner_table_id:
+            return "bigquery"
+        return "sheets"
+
+    return configured
+
+
+def _get_bigquery_client() -> bigquery.Client:
+    """BigQueryクライアントを構築"""
+    project = os.environ.get("GCP_PROJECT_ID") or None
+    return bigquery.Client(project=project)
 
 
 def _get_sbom_data_backend() -> str:
@@ -80,17 +112,18 @@ def _load_sbom(force_refresh: bool = False) -> list[dict]:
     
     シート構成: type | name | version | release | purl
     """
-    global _sbom_cache, _sbom_cache_timestamp
+    global _sbom_cache, _sbom_cache_timestamp, _sbom_cache_backend
     
     import time
     current_time = time.time()
     
     # 5分間キャッシュ
+    backend = _get_sbom_data_backend()
+
     if _sbom_cache and _sbom_cache_timestamp and not force_refresh:
-        if current_time - _sbom_cache_timestamp < 300:
+        if _sbom_cache_backend == backend and current_time - _sbom_cache_timestamp < 300:
             return _sbom_cache
     
-    backend = _get_sbom_data_backend()
 
     if backend == "bigquery":
         sbom_entries = _load_sbom_from_bigquery()
@@ -99,6 +132,7 @@ def _load_sbom(force_refresh: bool = False) -> list[dict]:
 
     _sbom_cache = sbom_entries
     _sbom_cache_timestamp = current_time
+    _sbom_cache_backend = backend
     return sbom_entries
 
 
@@ -188,17 +222,18 @@ def _load_owner_mapping(force_refresh: bool = False) -> list[dict]:
     
     シート構成: pattern | system_name | owner_email | owner_name | notes
     """
-    global _owner_mapping_cache, _owner_mapping_cache_timestamp
+    global _owner_mapping_cache, _owner_mapping_cache_timestamp, _owner_mapping_cache_backend
     
     import time
     current_time = time.time()
     
     # 5分間キャッシュ
+    backend = _get_sbom_data_backend()
+
     if _owner_mapping_cache and _owner_mapping_cache_timestamp and not force_refresh:
-        if current_time - _owner_mapping_cache_timestamp < 300:
+        if _owner_mapping_cache_backend == backend and current_time - _owner_mapping_cache_timestamp < 300:
             return _owner_mapping_cache
     
-    backend = _get_sbom_data_backend()
 
     if backend == "bigquery":
         mappings = _load_owner_mapping_from_bigquery()
@@ -211,6 +246,7 @@ def _load_owner_mapping(force_refresh: bool = False) -> list[dict]:
 
     _owner_mapping_cache = mappings
     _owner_mapping_cache_timestamp = current_time
+    _owner_mapping_cache_backend = backend
     return mappings
 
 
@@ -266,7 +302,7 @@ def _load_owner_mapping_from_bigquery() -> list[dict]:
         client = _get_bigquery_client()
         query = f"""
             SELECT
-              COALESCE(pattern, '*') AS pattern,
+              COALESCE(NULLIF(TRIM(pattern), ''), '*') AS pattern,
               COALESCE(system_name, '') AS system_name,
               COALESCE(owner_email, '') AS owner_email,
               COALESCE(owner_name, '') AS owner_name,
