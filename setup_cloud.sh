@@ -22,6 +22,12 @@ step()    { echo -e "\n${GREEN}==> $1${NC}"; }
 info()    { echo -e "${BLUE}    $1${NC}"; }
 warn()    { echo -e "${YELLOW}[WARN] $1${NC}"; }
 err()     { echo -e "${RED}[ERROR] $1${NC}"; }
+_engine_exists() {
+  local resource_name="$1"
+  gcloud ai reasoning-engines describe "$resource_name" \
+    --project="$PROJECT_ID" \
+    --region="$REGION" >/dev/null 2>&1
+}
 
 REGION="asia-northeast1"
 AGENT_NAME="vulnerability-management-agent"
