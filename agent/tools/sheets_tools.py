@@ -14,6 +14,7 @@ import fnmatch
 import logging
 from typing import Any
 
+from google.cloud import bigquery
 from google.oauth2 import service_account
 from googleapiclient.discovery import build
 from packaging import version as pkg_version
@@ -25,6 +26,36 @@ _sbom_cache = None
 _owner_mapping_cache = None
 _sbom_cache_timestamp = None
 _owner_mapping_cache_timestamp = None
+
+
+def _get_sbom_data_backend() -> str:
+    """
+    SBOMデータ取得バックエンドを返す。
+
+    環境変数:
+      - SBOM_DATA_BACKEND: sheets | bigquery | auto (default: sheets)
+
+    auto の場合は BigQuery テーブル設定があれば bigquery、なければ sheets を利用。
+    """
+    configured = os.environ.get("SBOM_DATA_BACKEND", "sheets").strip().lower()
+    if configured not in {"sheets", "bigquery", "auto"}:
+        logger.warning("Invalid SBOM_DATA_BACKEND=%s, fallback to sheets", configured)
+        return "sheets"
+
+    if configured == "auto":
+        sbom_table_id = os.environ.get("BQ_SBOM_TABLE_ID", "").strip()
+        owner_table_id = os.environ.get("BQ_OWNER_MAPPING_TABLE_ID", "").strip()
+        if sbom_table_id and owner_table_id:
+            return "bigquery"
+        return "sheets"
+
+    return configured
+
+
+def _get_bigquery_client() -> bigquery.Client:
+    """BigQueryクライアントを構築"""
+    project = os.environ.get("GCP_PROJECT_ID") or None
+    return bigquery.Client(project=project)
 
 
 def _get_sheets_service():
@@ -59,32 +90,46 @@ def _load_sbom(force_refresh: bool = False) -> list[dict]:
         if current_time - _sbom_cache_timestamp < 300:
             return _sbom_cache
     
+    backend = _get_sbom_data_backend()
+
+    if backend == "bigquery":
+        sbom_entries = _load_sbom_from_bigquery()
+    else:
+        sbom_entries = _load_sbom_from_sheets()
+
+    _sbom_cache = sbom_entries
+    _sbom_cache_timestamp = current_time
+    return sbom_entries
+
+
+def _load_sbom_from_sheets() -> list[dict]:
+    """SBOMをGoogle Sheetsからロード"""
     spreadsheet_id = os.environ.get("SBOM_SPREADSHEET_ID", "")
     sheet_name = os.environ.get("SBOM_SHEET_NAME", "SBOM")
-    
+
     if not spreadsheet_id:
         logger.warning("SBOM_SPREADSHEET_ID not set")
         return []
-    
+
     try:
         service = _get_sheets_service()
-        
+
         result = service.spreadsheets().values().get(
             spreadsheetId=spreadsheet_id,
             range=f"{sheet_name}!A:E"  # type, name, version, release, purl
         ).execute()
-        
+
         rows = result.get("values", [])
-        
+
         if len(rows) < 2:
             return []
-        
+
         # ヘッダー行をスキップしてパース
         sbom_entries = []
         for row in rows[1:]:
             while len(row) < 5:
                 row.append("")
-            
+
             sbom_entries.append({
                 "type": row[0],
                 "name": row[1],
@@ -92,15 +137,48 @@ def _load_sbom(force_refresh: bool = False) -> list[dict]:
                 "release": row[3],
                 "purl": row[4],
             })
-        
-        _sbom_cache = sbom_entries
-        _sbom_cache_timestamp = current_time
-        
-        logger.info(f"Loaded {len(sbom_entries)} SBOM entries")
+
+        logger.info("Loaded %s SBOM entries from Sheets", len(sbom_entries))
         return sbom_entries
-        
+
     except Exception as e:
-        logger.error(f"Error loading SBOM: {e}")
+        logger.error("Error loading SBOM from Sheets: %s", e)
+        return []
+
+
+def _load_sbom_from_bigquery() -> list[dict]:
+    """SBOMをBigQueryからロード"""
+    table_id = os.environ.get("BQ_SBOM_TABLE_ID", "").strip()
+    if not table_id:
+        logger.warning("BQ_SBOM_TABLE_ID not set")
+        return []
+
+    try:
+        client = _get_bigquery_client()
+        query = f"""
+            SELECT
+              COALESCE(type, '') AS type,
+              COALESCE(name, '') AS name,
+              COALESCE(version, '') AS version,
+              COALESCE(release, '') AS release,
+              COALESCE(purl, '') AS purl
+            FROM `{table_id}`
+        """
+        rows = client.query(query).result()
+        sbom_entries = [
+            {
+                "type": row.type,
+                "name": row.name,
+                "version": row.version,
+                "release": row.release,
+                "purl": row.purl,
+            }
+            for row in rows
+        ]
+        logger.info("Loaded %s SBOM entries from BigQuery", len(sbom_entries))
+        return sbom_entries
+    except Exception as e:
+        logger.error("Error loading SBOM from BigQuery: %s", e)
         return []
 
 
@@ -120,31 +198,49 @@ def _load_owner_mapping(force_refresh: bool = False) -> list[dict]:
         if current_time - _owner_mapping_cache_timestamp < 300:
             return _owner_mapping_cache
     
+    backend = _get_sbom_data_backend()
+
+    if backend == "bigquery":
+        mappings = _load_owner_mapping_from_bigquery()
+    else:
+        mappings = _load_owner_mapping_from_sheets()
+
+    # より具体的なパターン（長いパターン）を優先するためにソート
+    # ワイルドカード「*」のみは最後に
+    mappings.sort(key=lambda x: (x["pattern"] == "*", -len(x["pattern"])))
+
+    _owner_mapping_cache = mappings
+    _owner_mapping_cache_timestamp = current_time
+    return mappings
+
+
+def _load_owner_mapping_from_sheets() -> list[dict]:
+    """担当者マッピングをGoogle Sheetsからロード"""
     spreadsheet_id = os.environ.get("SBOM_SPREADSHEET_ID", "")
     owner_sheet_name = os.environ.get("OWNER_SHEET_NAME", "担当者マッピング")
-    
+
     if not spreadsheet_id:
+        logger.warning("SBOM_SPREADSHEET_ID not set")
         return []
-    
+
     try:
         service = _get_sheets_service()
-        
+
         result = service.spreadsheets().values().get(
             spreadsheetId=spreadsheet_id,
             range=f"{owner_sheet_name}!A:E"  # pattern, system_name, owner_email, owner_name, notes
         ).execute()
-        
+
         rows = result.get("values", [])
-        
+
         if len(rows) < 2:
             return []
-        
-        # パース & パターンの長さでソート（より具体的なパターンを優先）
+
         mappings = []
         for row in rows[1:]:
             while len(row) < 5:
                 row.append("")
-            
+
             mappings.append({
                 "pattern": row[0],
                 "system_name": row[1],
@@ -152,19 +248,46 @@ def _load_owner_mapping(force_refresh: bool = False) -> list[dict]:
                 "owner_name": row[3],
                 "notes": row[4],
             })
-        
-        # より具体的なパターン（長いパターン）を優先するためにソート
-        # ワイルドカード「*」のみは最後に
-        mappings.sort(key=lambda x: (x["pattern"] == "*", -len(x["pattern"])))
-        
-        _owner_mapping_cache = mappings
-        _owner_mapping_cache_timestamp = current_time
-        
-        logger.info(f"Loaded {len(mappings)} owner mappings")
+        logger.info("Loaded %s owner mappings from Sheets", len(mappings))
         return mappings
-        
     except Exception as e:
-        logger.error(f"Error loading owner mapping: {e}")
+        logger.error("Error loading owner mapping from Sheets: %s", e)
+        return []
+
+
+def _load_owner_mapping_from_bigquery() -> list[dict]:
+    """担当者マッピングをBigQueryからロード"""
+    table_id = os.environ.get("BQ_OWNER_MAPPING_TABLE_ID", "").strip()
+    if not table_id:
+        logger.warning("BQ_OWNER_MAPPING_TABLE_ID not set")
+        return []
+
+    try:
+        client = _get_bigquery_client()
+        query = f"""
+            SELECT
+              COALESCE(pattern, '*') AS pattern,
+              COALESCE(system_name, '') AS system_name,
+              COALESCE(owner_email, '') AS owner_email,
+              COALESCE(owner_name, '') AS owner_name,
+              COALESCE(notes, '') AS notes
+            FROM `{table_id}`
+        """
+        rows = client.query(query).result()
+        mappings = [
+            {
+                "pattern": row.pattern,
+                "system_name": row.system_name,
+                "owner_email": row.owner_email,
+                "owner_name": row.owner_name,
+                "notes": row.notes,
+            }
+            for row in rows
+        ]
+        logger.info("Loaded %s owner mappings from BigQuery", len(mappings))
+        return mappings
+    except Exception as e:
+        logger.error("Error loading owner mapping from BigQuery: %s", e)
         return []
 
 
