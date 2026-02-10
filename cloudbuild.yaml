@@ -53,14 +53,19 @@ steps:
     args:
       - "-c"
       - |
+        set -euo pipefail
         echo "[Step 2/5] Agent Engine のデプロイ準備: google-adk をインストールします"
-        python3 -m pip install -q --user google-adk
-        adk_bin="$(python3 -m site --user-base)/bin/adk"
+        rm -rf /workspace/.venv-adk
+        python3 -m venv /workspace/.venv-adk
+        /workspace/.venv-adk/bin/python -m pip install -q --upgrade pip
+        /workspace/.venv-adk/bin/python -m pip install -q google-adk
+        adk_bin="/workspace/.venv-adk/bin/adk"
         if [ ! -x "$$adk_bin" ]; then
           echo "adk CLI が見つかりません: $$adk_bin"
-          python3 -m pip show google-adk || true
+          /workspace/.venv-adk/bin/python -m pip show google-adk || true
           exit 127
         fi
+        "$$adk_bin" --version || true
         echo "[Step 2/5] Agent Engine をデプロイします"
         cd agent
         "$$adk_bin" deploy agent_engine \
