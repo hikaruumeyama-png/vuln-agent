@@ -22,12 +22,6 @@ step()    { echo -e "\n${GREEN}==> $1${NC}"; }
 info()    { echo -e "${BLUE}    $1${NC}"; }
 warn()    { echo -e "${YELLOW}[WARN] $1${NC}"; }
 err()     { echo -e "${RED}[ERROR] $1${NC}"; }
-_engine_exists() {
-  local resource_name="$1"
-  gcloud ai reasoning-engines describe "$resource_name" \
-    --project="$PROJECT_ID" \
-    --region="$REGION" >/dev/null 2>&1
-}
 
 REGION="asia-northeast1"
 AGENT_NAME="vulnerability-management-agent"
@@ -390,10 +384,8 @@ if [[ -n "$AGENT_RESOURCE_NAME" ]]; then
     --trigger-http \
     --no-allow-unauthenticated \
     --service-account="$SA_EMAIL" \
-    # AGENT_RESOURCE_NAME は Secret Manager から注入し、環境変数の直接設定はしない
     --set-env-vars="GCP_PROJECT_ID=${PROJECT_ID},GCP_LOCATION=${REGION}" \
     --remove-env-vars="AGENT_RESOURCE_NAME" \
-    --set-env-vars="GCP_PROJECT_ID=${PROJECT_ID},GCP_LOCATION=${REGION}" \
     --set-secrets="AGENT_RESOURCE_NAME=vuln-agent-resource-name:latest" \
     --memory=512MB \
     --timeout=540s \

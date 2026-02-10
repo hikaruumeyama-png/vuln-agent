@@ -137,12 +137,11 @@ print_step "Step 5/5: Deploying to Vertex AI Agent Engine..."
 cd agent
 
 # ADK deploy コマンドでデプロイ
-adk deploy \
+adk deploy agent_engine \
     --project="$PROJECT_ID" \
     --region="$REGION" \
-    --staging_bucket="$STAGING_BUCKET" \
     --display_name="$AGENT_NAME" \
-    --env_file=".env"
+    --env_file=".env" .
 
 cd ..
 

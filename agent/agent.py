@@ -136,6 +136,8 @@ def create_vulnerability_agent() -> Agent:
         FunctionTool(send_simple_message),
         FunctionTool(check_chat_connection),
         FunctionTool(list_space_members),
+
+        # History Tools
         FunctionTool(log_vulnerability_history),
 
         # A2A Tools (Agent-to-Agent連携)
