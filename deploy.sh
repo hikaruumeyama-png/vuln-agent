@@ -98,11 +98,13 @@ print_info "APIs enabled"
 print_step "Step 3/5: Creating staging bucket..."
 
 # バケットが存在しない場合は作成
-if ! gsutil ls "$STAGING_BUCKET" &> /dev/null; then
-    gsutil mb -p "$PROJECT_ID" -l "$REGION" "$STAGING_BUCKET"
+if gsutil ls "$STAGING_BUCKET" &> /dev/null; then
+    print_info "Bucket already exists"
+elif gsutil mb -p "$PROJECT_ID" -l "$REGION" "$STAGING_BUCKET"; then
     print_info "Created bucket: $STAGING_BUCKET"
 else
-    print_info "Bucket already exists"
+    print_error "Failed to create bucket: $STAGING_BUCKET"
+    exit 1
 fi
 
 # ====================================
