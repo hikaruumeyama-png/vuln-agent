@@ -407,9 +407,9 @@ if [[ -n "$AGENT_RESOURCE_NAME" ]]; then
       --source=live_gateway \
       --region="$REGION" \
       --project="$PROJECT_ID" \
-      --set-env-vars="GCP_PROJECT_ID=${PROJECT_ID},GCP_LOCATION=${REGION}" \
+      --update-env-vars="GCP_PROJECT_ID=${PROJECT_ID},GCP_LOCATION=${REGION}" \
       --remove-env-vars="AGENT_RESOURCE_NAME" \
-      --set-secrets="AGENT_RESOURCE_NAME=vuln-agent-resource-name:latest,GEMINI_API_KEY=vuln-agent-gemini-api-key:latest" \
+      --update-secrets="AGENT_RESOURCE_NAME=vuln-agent-resource-name:latest,GEMINI_API_KEY=vuln-agent-gemini-api-key:latest" \
       --service-account="$SA_EMAIL" \
       --allow-unauthenticated \
       --memory=512Mi \
