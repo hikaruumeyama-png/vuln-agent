@@ -31,13 +31,22 @@ SEVERITY_DEADLINES = {
 
 
 _chat_service = None
+_chat_service_timestamp = None
+_SERVICE_CACHE_TTL = 1800  # 30分
 
 
 def _get_chat_service():
     """Chat APIサービスを構築"""
-    global _chat_service
-    if _chat_service:
-        return _chat_service
+    global _chat_service, _chat_service_timestamp
+
+    import time
+    current_time = time.time()
+
+    if _chat_service and _chat_service_timestamp:
+        if current_time - _chat_service_timestamp < _SERVICE_CACHE_TTL:
+            return _chat_service
+        logger.info("Chat service cache expired, re-initializing")
+        _chat_service = None
 
     sa_path = os.environ.get("GOOGLE_APPLICATION_CREDENTIALS")
     credentials = None
@@ -61,6 +70,7 @@ def _get_chat_service():
             raise RuntimeError("Chat認証に失敗しました。GOOGLE_APPLICATION_CREDENTIALS を確認してください。")
 
     _chat_service = build("chat", "v1", credentials=credentials)
+    _chat_service_timestamp = current_time
     return _chat_service
 
 

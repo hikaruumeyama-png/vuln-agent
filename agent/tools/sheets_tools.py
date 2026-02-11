@@ -61,13 +61,22 @@ def _get_bigquery_client() -> bigquery.Client:
 
 
 _sheets_service = None
+_sheets_service_timestamp = None
+_SERVICE_CACHE_TTL = 1800  # 30分
 
 
 def _get_sheets_service():
     """Sheets APIサービスを構築"""
-    global _sheets_service
-    if _sheets_service:
-        return _sheets_service
+    global _sheets_service, _sheets_service_timestamp
+
+    import time
+    current_time = time.time()
+
+    if _sheets_service and _sheets_service_timestamp:
+        if current_time - _sheets_service_timestamp < _SERVICE_CACHE_TTL:
+            return _sheets_service
+        logger.info("Sheets service cache expired, re-initializing")
+        _sheets_service = None
 
     sa_path = os.environ.get("GOOGLE_APPLICATION_CREDENTIALS")
     credentials = None
@@ -91,6 +100,7 @@ def _get_sheets_service():
             raise RuntimeError("Sheets認証に失敗しました。GOOGLE_APPLICATION_CREDENTIALS を確認してください。")
 
     _sheets_service = build("sheets", "v4", credentials=credentials)
+    _sheets_service_timestamp = current_time
     return _sheets_service
 
 
