@@ -30,20 +30,38 @@ SEVERITY_DEADLINES = {
 }
 
 
+_chat_service = None
+
+
 def _get_chat_service():
     """Chat APIサービスを構築"""
+    global _chat_service
+    if _chat_service:
+        return _chat_service
+
     sa_path = os.environ.get("GOOGLE_APPLICATION_CREDENTIALS")
-    
+    credentials = None
+
     if sa_path and os.path.exists(sa_path):
-        credentials = service_account.Credentials.from_service_account_file(
-            sa_path,
-            scopes=["https://www.googleapis.com/auth/chat.bot"]
-        )
-    else:
-        from google.auth import default
-        credentials, _ = default(scopes=["https://www.googleapis.com/auth/chat.bot"])
-    
-    return build("chat", "v1", credentials=credentials)
+        try:
+            credentials = service_account.Credentials.from_service_account_file(
+                sa_path,
+                scopes=["https://www.googleapis.com/auth/chat.bot"]
+            )
+        except Exception as e:
+            logger.error(f"Service account file error: {e}")
+            credentials = None
+
+    if not credentials:
+        try:
+            from google.auth import default
+            credentials, _ = default(scopes=["https://www.googleapis.com/auth/chat.bot"])
+        except Exception as e:
+            logger.error(f"Default auth error: {e}")
+            raise RuntimeError("Chat認証に失敗しました。GOOGLE_APPLICATION_CREDENTIALS を確認してください。")
+
+    _chat_service = build("chat", "v1", credentials=credentials)
+    return _chat_service
 
 
 def send_vulnerability_alert(

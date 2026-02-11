@@ -61,8 +61,12 @@ def _get_gmail_service():
                 scopes=token_data.get("scopes", ["https://www.googleapis.com/auth/gmail.modify"]),
             )
 
-            # トークンが期限切れなら更新
-            if credentials.expired and credentials.refresh_token:
+            # トークンが無効または期限切れなら更新
+            # NOTE: 新規作成した Credentials は expiry が未設定のため
+            # credentials.expired は常に False を返す。
+            # credentials.valid（token が存在し expired でない）も同様に
+            # 誤って True を返すため、refresh_token がある場合は常に更新を試みる。
+            if credentials.refresh_token:
                 credentials.refresh(Request())
                 logger.info("OAuth token refreshed")
 

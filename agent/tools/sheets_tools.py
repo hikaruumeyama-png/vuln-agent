@@ -60,20 +60,38 @@ def _get_bigquery_client() -> bigquery.Client:
     return bigquery.Client(project=project)
 
 
+_sheets_service = None
+
+
 def _get_sheets_service():
     """Sheets APIサービスを構築"""
+    global _sheets_service
+    if _sheets_service:
+        return _sheets_service
+
     sa_path = os.environ.get("GOOGLE_APPLICATION_CREDENTIALS")
-    
+    credentials = None
+
     if sa_path and os.path.exists(sa_path):
-        credentials = service_account.Credentials.from_service_account_file(
-            sa_path,
-            scopes=["https://www.googleapis.com/auth/spreadsheets.readonly"]
-        )
-    else:
-        from google.auth import default
-        credentials, _ = default(scopes=["https://www.googleapis.com/auth/spreadsheets.readonly"])
-    
-    return build("sheets", "v4", credentials=credentials)
+        try:
+            credentials = service_account.Credentials.from_service_account_file(
+                sa_path,
+                scopes=["https://www.googleapis.com/auth/spreadsheets.readonly"]
+            )
+        except Exception as e:
+            logger.error(f"Service account file error: {e}")
+            credentials = None
+
+    if not credentials:
+        try:
+            from google.auth import default
+            credentials, _ = default(scopes=["https://www.googleapis.com/auth/spreadsheets.readonly"])
+        except Exception as e:
+            logger.error(f"Default auth error: {e}")
+            raise RuntimeError("Sheets認証に失敗しました。GOOGLE_APPLICATION_CREDENTIALS を確認してください。")
+
+    _sheets_service = build("sheets", "v4", credentials=credentials)
+    return _sheets_service
 
 
 def _load_sbom(force_refresh: bool = False) -> list[dict]:
