@@ -122,7 +122,7 @@ CB_ROLES=(
   roles/run.admin
   roles/cloudfunctions.admin
   roles/storage.admin
-  roles/secretmanager.secretAccessor
+  roles/secretmanager.admin
   roles/iam.serviceAccountUser
 )
 for role in "${CB_ROLES[@]}"; do
