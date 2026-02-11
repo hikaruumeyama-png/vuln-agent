@@ -10,6 +10,7 @@ Vertex AI Agent Engine版
 
 import os
 import re
+import time
 import base64
 import json
 import logging
@@ -36,7 +37,6 @@ def _get_gmail_service():
     """
     global _gmail_service, _gmail_service_timestamp
 
-    import time
     current_time = time.time()
 
     if _gmail_service and _gmail_service_timestamp:
@@ -176,7 +176,7 @@ def get_sidfm_emails(max_results: int = 10) -> dict[str, Any]:
 
     except Exception as e:
         logger.error(f"Gmail API error: {e}")
-        return {"error": str(e), "emails": [], "count": 0}
+        return {"status": "error", "message": str(e), "emails": [], "count": 0}
 
 
 def get_unread_emails(query: str = "is:unread", max_results: int = 10) -> dict[str, Any]:
@@ -224,7 +224,7 @@ def get_unread_emails(query: str = "is:unread", max_results: int = 10) -> dict[s
 
     except Exception as e:
         logger.error(f"Gmail API error: {e}")
-        return {"error": str(e), "emails": [], "count": 0}
+        return {"status": "error", "message": str(e), "emails": [], "count": 0}
 
 
 def mark_email_as_read(email_id: str) -> dict[str, Any]:
@@ -378,7 +378,7 @@ def _parse_sidfm_content(body: str) -> list[dict[str, Any]]:
         vuln = {
             "cve_id": cve_id,
             "title": _extract_title(body, cve_id),
-            "cvss_score": float(cvss_matches[i]) if i < len(cvss_matches) else None,
+            "cvss_score": float(cvss_matches[i]) if i < len(cvss_matches) else (float(cvss_matches[0]) if len(cvss_matches) == 1 else None),
             "affected_products": list(set(affected_products)),
             "purls": purls,
             "description": _extract_section(body, ["概要", "Description", "詳細"]),

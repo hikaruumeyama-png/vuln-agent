@@ -45,6 +45,7 @@ __all__ = [
     "send_simple_message",
     "check_chat_connection",
     "list_space_members",
+    # History
     "log_vulnerability_history",
     # A2A
     "register_remote_agent",

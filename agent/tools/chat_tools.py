@@ -5,6 +5,7 @@ Vertex AI Agent Engine版
 """
 
 import os
+import time
 import logging
 from typing import Any
 from datetime import datetime, timedelta
@@ -39,7 +40,6 @@ def _get_chat_service():
     """Chat APIサービスを構築"""
     global _chat_service, _chat_service_timestamp
 
-    import time
     current_time = time.time()
 
     if _chat_service and _chat_service_timestamp:
@@ -74,15 +74,26 @@ def _get_chat_service():
     return _chat_service
 
 
+def _resolve_space_id(space_id: str | None = None) -> str | None:
+    """スペースIDを解決する。未設定時はNoneを返す。"""
+    if not space_id:
+        space_id = os.environ.get("DEFAULT_CHAT_SPACE_ID", "")
+    if not space_id:
+        return None
+    if not space_id.startswith("spaces/"):
+        space_id = f"spaces/{space_id}"
+    return space_id
+
+
 def send_vulnerability_alert(
     vulnerability_id: str,
     title: str,
     severity: str,
     affected_systems: list[str],
-    cvss_score: float = None,
+    cvss_score: float | None = None,
     description: str = None,
     remediation: str = None,
-    owners: list[str] = None,
+    owners: list[str] | None = None,
     space_id: str = None,
     record_history: bool = True,
 ) -> dict[str, Any]:
@@ -99,23 +110,18 @@ def send_vulnerability_alert(
         remediation: 推奨される対策（オプション）
         owners: 担当者メールアドレス（オプション）
         space_id: 送信先スペースID（省略時はデフォルト）
+        record_history: 履歴を記録するか（デフォルト: True）
     
     Returns:
         送信結果
     """
     try:
         service = _get_chat_service()
-        
-        # スペースID
-        if not space_id:
-            space_id = os.environ.get("DEFAULT_CHAT_SPACE_ID", "")
-        
-        if not space_id:
+
+        space_id = _resolve_space_id(space_id)
+        if space_id is None:
             return {"status": "error", "message": "Chat space ID not configured"}
-        
-        if not space_id.startswith("spaces/"):
-            space_id = f"spaces/{space_id}"
-        
+
         # 対応期限
         deadline = _calculate_deadline(severity)
         
@@ -191,16 +197,11 @@ def send_simple_message(message: str, space_id: str = None) -> dict[str, Any]:
     """
     try:
         service = _get_chat_service()
-        
-        if not space_id:
-            space_id = os.environ.get("DEFAULT_CHAT_SPACE_ID", "")
-        
-        if not space_id:
+
+        space_id = _resolve_space_id(space_id)
+        if space_id is None:
             return {"status": "error", "message": "Chat space ID not configured"}
-        
-        if not space_id.startswith("spaces/"):
-            space_id = f"spaces/{space_id}"
-        
+
         response = service.spaces().messages().create(
             parent=space_id,
             body={"text": message}
@@ -295,17 +296,9 @@ def check_chat_connection(space_id: str = None) -> dict[str, Any]:
     try:
         service = _get_chat_service()
 
-        if not space_id:
-            space_id = os.environ.get("DEFAULT_CHAT_SPACE_ID", "")
-
-        if not space_id:
-            return {
-                "status": "error",
-                "message": "Chat space ID not configured. Set DEFAULT_CHAT_SPACE_ID environment variable."
-            }
-
-        if not space_id.startswith("spaces/"):
-            space_id = f"spaces/{space_id}"
+        space_id = _resolve_space_id(space_id)
+        if space_id is None:
+            return {"status": "error", "message": "Chat space ID not configured"}
 
         # スペース情報を取得
         space = service.spaces().get(name=space_id).execute()
@@ -339,14 +332,9 @@ def list_space_members(space_id: str = None) -> dict[str, Any]:
     try:
         service = _get_chat_service()
 
-        if not space_id:
-            space_id = os.environ.get("DEFAULT_CHAT_SPACE_ID", "")
-
-        if not space_id:
+        space_id = _resolve_space_id(space_id)
+        if space_id is None:
             return {"status": "error", "message": "Chat space ID not configured"}
-
-        if not space_id.startswith("spaces/"):
-            space_id = f"spaces/{space_id}"
 
         # メンバー一覧を取得
         response = service.spaces().members().list(parent=space_id).execute()

@@ -160,7 +160,7 @@ def create_jira_ticket_request(
     severity: str,
     affected_systems: list[str],
     assignee: str,
-    description: str = None,
+    description: str | None = None,
 ) -> dict[str, Any]:
     """
     Jiraチケット作成リクエストを構築します。
@@ -230,7 +230,7 @@ def create_approval_request(
     vulnerability_id: str,
     action: str,
     approvers: list[str],
-    details: str = None,
+    details: str | None = None,
 ) -> dict[str, Any]:
     """
     承認リクエストを構築します。
