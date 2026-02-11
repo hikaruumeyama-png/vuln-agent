@@ -28,6 +28,7 @@ steps:
     args:
       - "-c"
       - |
+        set -euo pipefail
         echo "[Step 1/5] Secret Manager から .env を生成します"
         cat > agent/.env <<EOF
         GMAIL_OAUTH_TOKEN=$(gcloud secrets versions access latest --secret=vuln-agent-gmail-oauth-token 2>/dev/null || echo '')

@@ -83,7 +83,11 @@ apis=(
 )
 
 for api in "${apis[@]}"; do
-    gcloud services enable "$api" --project="$PROJECT_ID" 2>/dev/null || true
+    if ! gcloud services enable "$api" --project="$PROJECT_ID"; then
+        print_error "Failed to enable API: $api"
+        print_error "Check billing and permissions for project: $PROJECT_ID"
+        exit 1
+    fi
 done
 
 print_info "APIs enabled"

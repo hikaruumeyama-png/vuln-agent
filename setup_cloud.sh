@@ -77,8 +77,15 @@ APIS=(
   artifactregistry.googleapis.com
 )
 
-gcloud services enable "${APIS[@]}" --project="$PROJECT_ID" 2>/dev/null
+if ! gcloud services enable "${APIS[@]}" --project="$PROJECT_ID"; then
+  err "API の有効化に失敗しました。"
+  err "課金が有効か、必要な権限があるか確認してください。"
+  err "  https://console.cloud.google.com/billing/linkedaccount?project=${PROJECT_ID}"
+  exit 1
+fi
 info "API 有効化完了"
+info "API の反映を待機しています (30秒)..."
+sleep 30
 
 # ====================================================
 # 2. サービスアカウントの作成と権限付与
@@ -273,8 +280,20 @@ _engine_exists() {
   token="$(gcloud auth print-access-token)"
   local endpoint="https://${REGION}-aiplatform.googleapis.com/v1/${engine_name}"
   local status
-  status="$(curl -s -o /dev/null -w "%{http_code}" -H "Authorization: Bearer ${token}" "${endpoint}")"
+  status="$(curl -s -o /dev/null -w "%{http_code}" --max-time 30 -H "Authorization: Bearer ${token}" "${endpoint}")"
   [[ "$status" == "200" ]]
+}
+
+_wait_engine_ready() {
+  local engine_name="$1"
+  for i in 1 2 3 4 5; do
+    if _engine_exists "$engine_name"; then
+      return 0
+    fi
+    info "  Agent Engine の反映待ち (${i}/5)..."
+    sleep 10
+  done
+  return 1
 }
 
 cat > agent/.env <<ENVEOF
@@ -294,7 +313,11 @@ ENVEOF
 
 info ".env ファイルを Secret Manager の値から生成しました"
 
-pip install -q google-adk 2>/dev/null
+if ! pip install -q google-adk; then
+  err "google-adk のインストールに失敗しました。"
+  err "Python 環境を確認してください: $(python3 --version 2>&1)"
+  exit 1
+fi
 
 cd agent
 DEPLOY_OUTPUT=$(adk deploy agent_engine \
@@ -319,7 +342,8 @@ if [[ -z "$AGENT_RESOURCE_NAME" ]]; then
 fi
 
 if [[ -n "$AGENT_RESOURCE_NAME" ]]; then
-  if ! _engine_exists "$AGENT_RESOURCE_NAME"; then
+  info "Agent Engine の反映を確認しています..."
+  if ! _wait_engine_ready "$AGENT_RESOURCE_NAME"; then
     err "デプロイ直後の Agent Resource Name が存在しません: ${AGENT_RESOURCE_NAME}"
     err "Secret の更新を中止します。デプロイ出力を確認してください。"
     exit 1
@@ -343,7 +367,8 @@ rm -f agent/.env
 step "7/8: Live Gateway と Scheduler をデプロイしています..."
 
 if [[ -n "$AGENT_RESOURCE_NAME" ]]; then
-  if ! _engine_exists "$AGENT_RESOURCE_NAME"; then
+  info "Agent Engine の存在を確認しています..."
+  if ! _wait_engine_ready "$AGENT_RESOURCE_NAME"; then
     err "Agent Resource Name が無効です（ReasoningEngine が存在しません）: ${AGENT_RESOURCE_NAME}"
     err "Live Gateway / Scheduler のデプロイを中止します。"
     exit 1
