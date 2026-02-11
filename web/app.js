@@ -1,3 +1,8 @@
+/* ========================================================
+   Vulnerability Agent – Frontend Application
+   ======================================================== */
+
+// ── DOM References ──────────────────────────────────────
 const statusIndicator = document.getElementById("status-indicator");
 const statusText = document.getElementById("status-text");
 const connectButton = document.getElementById("connect-button");
@@ -5,16 +10,21 @@ const disconnectButton = document.getElementById("disconnect-button");
 const gatewayInput = document.getElementById("gateway-url");
 const chatForm = document.getElementById("chat-form");
 const chatInput = document.getElementById("chat-input");
-const messages = document.getElementById("messages");
+const messagesArea = document.getElementById("messages");
 const startAudioButton = document.getElementById("start-audio");
 const stopAudioButton = document.getElementById("stop-audio");
-const audioStatus = document.getElementById("audio-status");
+const audioStatusText = document.getElementById("audio-status");
+const audioLevelBar = document.getElementById("audio-level-bar");
+const activityFeed = document.getElementById("activity-feed");
+const clearActivityButton = document.getElementById("clear-activity");
 
+// ── Audio Detection Constants ───────────────────────────
 const RMS_SPEECH_THRESHOLD = 0.025;
 const RMS_SILENCE_THRESHOLD = 0.012;
 const RMS_SMOOTHING = 0.2;
 const PAUSE_TRIGGER_MS = 650;
 
+// ── State ───────────────────────────────────────────────
 let socket = null;
 let audioContext = null;
 let mediaStream = null;
@@ -23,10 +33,33 @@ let currentPlaybackSource = null;
 let lastSpeechTimestamp = 0;
 let smoothedRms = 0;
 let mode = "idle";
+let thinkingBubble = null;
+let activityCount = 0;
 
+// ── Utility Functions ───────────────────────────────────
+function escapeHtml(str) {
+  const el = document.createElement("div");
+  el.textContent = str;
+  return el.innerHTML;
+}
+
+function formatTime() {
+  return new Date().toLocaleTimeString([], {
+    hour: "2-digit",
+    minute: "2-digit",
+    second: "2-digit",
+  });
+}
+
+function renderIcons(root) {
+  if (typeof lucide !== "undefined") {
+    lucide.createIcons({ nodes: root ? [root] : undefined });
+  }
+}
+
+// ── Connection Status ───────────────────────────────────
 function setStatus(online, message) {
   statusIndicator.classList.toggle("online", online);
-  statusIndicator.classList.toggle("offline", !online);
   statusText.textContent = message;
   connectButton.disabled = online;
   disconnectButton.disabled = !online;
@@ -34,19 +67,179 @@ function setStatus(online, message) {
   stopAudioButton.disabled = true;
 }
 
+// ── Audio Mode ──────────────────────────────────────────
 function setMode(nextMode) {
   mode = nextMode;
-  audioStatus.textContent = `Audio: ${mode}`;
+  audioStatusText.textContent = mode.charAt(0).toUpperCase() + mode.slice(1);
 }
 
+// ── Audio Level Visualization ───────────────────────────
+function updateAudioLevel(rmsValue) {
+  const pct = Math.min(100, Math.max(0, rmsValue * 1000));
+  audioLevelBar.style.width = pct + "%";
+}
+
+// ── Chat Messages ───────────────────────────────────────
 function appendMessage(text, type) {
+  hideThinking();
+
   const bubble = document.createElement("div");
   bubble.className = `message ${type}`;
-  bubble.textContent = text;
-  messages.appendChild(bubble);
-  messages.scrollTop = messages.scrollHeight;
+
+  const time = formatTime();
+  const roleLabel = type === "user" ? "You" : type === "agent" ? "Agent" : "System";
+  const roleIcon = type === "user" ? "user" : type === "agent" ? "bot" : "info";
+
+  bubble.innerHTML = `
+    <div class="message-header">
+      <i data-lucide="${roleIcon}"></i>
+      <span>${roleLabel}</span>
+    </div>
+    <div class="message-body">${escapeHtml(text)}</div>
+    <div class="message-meta">
+      <i data-lucide="clock"></i>
+      <span>${time}</span>
+    </div>
+  `;
+
+  messagesArea.appendChild(bubble);
+  messagesArea.scrollTop = messagesArea.scrollHeight;
+  renderIcons(bubble);
 }
 
+// ── Thinking Bubble ─────────────────────────────────────
+function showThinking() {
+  if (thinkingBubble) return;
+  thinkingBubble = document.createElement("div");
+  thinkingBubble.className = "message agent thinking-message";
+  thinkingBubble.innerHTML = `
+    <div class="message-header">
+      <i data-lucide="bot"></i>
+      <span>Agent</span>
+    </div>
+    <div class="thinking-dots">
+      <span></span><span></span><span></span>
+    </div>
+  `;
+  messagesArea.appendChild(thinkingBubble);
+  messagesArea.scrollTop = messagesArea.scrollHeight;
+  renderIcons(thinkingBubble);
+}
+
+function hideThinking() {
+  if (thinkingBubble) {
+    thinkingBubble.remove();
+    thinkingBubble = null;
+  }
+}
+
+// ── Agent Activity Feed ─────────────────────────────────
+function handleAgentActivity(payload) {
+  const { activity, message, icon, status } = payload;
+
+  if (activity === "thinking") {
+    clearActivityFeed();
+    addActivityItem("thinking", icon || "brain", message, true);
+    showThinking();
+    return;
+  }
+
+  if (activity === "tool_call") {
+    addActivityItem("tool-call", icon || "wrench", message, true);
+    return;
+  }
+
+  if (activity === "tool_result") {
+    markLastToolComplete(status === "success");
+    return;
+  }
+
+  if (activity === "done") {
+    addActivityItem("done", icon || "check-circle-2", message, false);
+    return;
+  }
+}
+
+function clearActivityFeed() {
+  activityFeed.innerHTML = "";
+  activityCount = 0;
+}
+
+function resetActivityFeed() {
+  activityFeed.innerHTML = `
+    <div class="activity-empty">
+      <i data-lucide="bot" class="empty-icon"></i>
+      <p>リクエスト処理時にエージェントの動作がここに表示されます。</p>
+    </div>
+  `;
+  activityCount = 0;
+  renderIcons(activityFeed);
+}
+
+function addActivityItem(type, iconName, labelText, showSpinner) {
+  activityCount++;
+
+  const emptyEl = activityFeed.querySelector(".activity-empty");
+  if (emptyEl) emptyEl.remove();
+
+  const item = document.createElement("div");
+  item.className = `activity-item activity-${type}`;
+  item.dataset.index = activityCount;
+
+  const iconClass =
+    type === "done" ? "done" : type === "tool-call" ? "tool-call" : "thinking";
+  const time = formatTime();
+
+  item.innerHTML = `
+    <div class="activity-icon ${iconClass}">
+      <i data-lucide="${escapeHtml(iconName)}"></i>
+    </div>
+    <div class="activity-text">
+      <div class="activity-label">${escapeHtml(labelText)}</div>
+      <div class="activity-time">${time}</div>
+    </div>
+    ${
+      showSpinner
+        ? '<div class="spinner"></div>'
+        : '<div class="activity-check"><i data-lucide="check"></i></div>'
+    }
+  `;
+
+  activityFeed.appendChild(item);
+  activityFeed.scrollTop = activityFeed.scrollHeight;
+  renderIcons(item);
+}
+
+function markLastToolComplete(success) {
+  const items = activityFeed.querySelectorAll(".activity-item.activity-tool-call");
+  const lastItem = items[items.length - 1];
+  if (!lastItem) return;
+
+  const spinner = lastItem.querySelector(".spinner");
+  if (spinner) {
+    spinner.remove();
+
+    const checkDiv = document.createElement("div");
+    checkDiv.className = success ? "activity-check" : "activity-check error-check";
+    const iconName = success ? "check-circle-2" : "x-circle";
+    checkDiv.innerHTML = `<i data-lucide="${iconName}"></i>`;
+    lastItem.appendChild(checkDiv);
+    renderIcons(checkDiv);
+  }
+
+  const iconEl = lastItem.querySelector(".activity-icon");
+  if (iconEl) {
+    iconEl.classList.remove("tool-call");
+    iconEl.classList.add(success ? "success" : "error");
+  }
+}
+
+// ── Clear Activity Button ───────────────────────────────
+clearActivityButton.addEventListener("click", () => {
+  resetActivityFeed();
+});
+
+// ── WebSocket Connection ────────────────────────────────
 connectButton.addEventListener("click", () => {
   const url = gatewayInput.value.trim();
   if (!url) {
@@ -64,19 +257,29 @@ connectButton.addEventListener("click", () => {
   socket.addEventListener("message", (event) => {
     try {
       const payload = JSON.parse(event.data);
+
+      if (payload.type === "agent_activity") {
+        handleAgentActivity(payload);
+        return;
+      }
+
       if (payload.type === "agent_response") {
+        hideThinking();
         appendMessage(payload.text || "(no response)", "agent");
         return;
       }
+
       if (payload.type === "live_text") {
         appendMessage(payload.text || "(no response)", "agent");
         return;
       }
+
       if (payload.type === "live_audio") {
         setMode("speaking");
         playAudio(payload.audio, payload.mime_type);
         return;
       }
+
       if (payload.type === "live_status") {
         if (payload.status === "started") {
           setMode("listening");
@@ -87,12 +290,18 @@ connectButton.addEventListener("click", () => {
         }
         return;
       }
+
       if (payload.type === "error") {
         appendMessage(payload.message || "Error", "system");
         return;
       }
+
+      if (payload.type === "pong") {
+        return;
+      }
+
       appendMessage(event.data, "system");
-    } catch (error) {
+    } catch {
       appendMessage(event.data, "system");
     }
   });
@@ -116,6 +325,7 @@ disconnectButton.addEventListener("click", () => {
   }
 });
 
+// ── Audio Capture ───────────────────────────────────────
 startAudioButton.addEventListener("click", async () => {
   if (!socket || socket.readyState !== WebSocket.OPEN) {
     appendMessage("接続してから音声を開始してください。", "system");
@@ -131,9 +341,11 @@ startAudioButton.addEventListener("click", async () => {
     processor.onaudioprocess = (event) => {
       const input = event.inputBuffer.getChannelData(0);
       const rms = Math.sqrt(
-        input.reduce((sum, value) => sum + value * value, 0) / input.length
+        input.reduce((sum, value) => sum + value * value, 0) / input.length,
       );
       smoothedRms = RMS_SMOOTHING * rms + (1 - RMS_SMOOTHING) * smoothedRms;
+      updateAudioLevel(smoothedRms);
+
       const now = Date.now();
       if (smoothedRms > RMS_SPEECH_THRESHOLD) {
         lastSpeechTimestamp = now;
@@ -154,6 +366,7 @@ startAudioButton.addEventListener("click", async () => {
         socket.send(JSON.stringify({ type: "speech_pause" }));
         lastSpeechTimestamp = 0;
       }
+
       const int16 = new Int16Array(input.length);
       for (let i = 0; i < input.length; i++) {
         int16[i] = Math.max(-1, Math.min(1, input[i])) * 0x7fff;
@@ -165,7 +378,7 @@ startAudioButton.addEventListener("click", async () => {
           type: "audio_chunk",
           audio: base64,
           sample_rate: audioContext.sampleRate,
-        })
+        }),
       );
     };
 
@@ -175,8 +388,8 @@ startAudioButton.addEventListener("click", async () => {
     setMode("listening");
     startAudioButton.disabled = true;
     stopAudioButton.disabled = false;
-  } catch (error) {
-    appendMessage(`音声開始に失敗しました: ${error.message}`, "system");
+  } catch (err) {
+    appendMessage(`音声開始に失敗しました: ${err.message}`, "system");
   }
 });
 
@@ -193,10 +406,12 @@ stopAudioButton.addEventListener("click", async () => {
     socket.send(JSON.stringify({ type: "live_stop" }));
   }
   setMode("idle");
+  audioLevelBar.style.width = "0%";
   startAudioButton.disabled = false;
   stopAudioButton.disabled = true;
 });
 
+// ── Chat Form ───────────────────────────────────────────
 chatForm.addEventListener("submit", (event) => {
   event.preventDefault();
   if (!socket || socket.readyState !== WebSocket.OPEN) {
@@ -212,6 +427,7 @@ chatForm.addEventListener("submit", (event) => {
   chatInput.value = "";
 });
 
+// ── Audio Playback ──────────────────────────────────────
 function playAudio(base64Audio, mimeType) {
   if (!base64Audio) return;
   const audioBytes = Uint8Array.from(atob(base64Audio), (c) => c.charCodeAt(0));
@@ -241,5 +457,7 @@ function playAudio(base64Audio, mimeType) {
   };
 }
 
+// ── Initialize ──────────────────────────────────────────
 setStatus(false, "Disconnected");
 setMode("idle");
+renderIcons();

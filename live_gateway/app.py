@@ -20,6 +20,50 @@ GCP_PROJECT_ID = os.environ.get("GCP_PROJECT_ID")
 GCP_LOCATION = os.environ.get("GCP_LOCATION", "asia-northeast1")
 AGENT_RESOURCE_NAME = os.environ.get("AGENT_RESOURCE_NAME")
 
+TOOL_DISPLAY_MAP: dict[str, dict[str, str]] = {
+    "get_sidfm_emails":         {"label": "SIDfm脆弱性メールを取得中",     "icon": "mail"},
+    "get_unread_emails":        {"label": "未読メールを確認中",           "icon": "mail"},
+    "mark_email_as_read":       {"label": "メールを既読にマーク中",       "icon": "mail-check"},
+    "check_gmail_connection":   {"label": "Gmail接続を確認中",           "icon": "mail"},
+    "search_sbom_by_purl":      {"label": "SBOMをパッケージURLで検索中",   "icon": "search"},
+    "search_sbom_by_product":   {"label": "SBOMを製品名で検索中",         "icon": "search"},
+    "get_affected_systems":     {"label": "影響を受けるシステムを特定中",   "icon": "server"},
+    "get_owner_mapping":        {"label": "システムオーナーを検索中",      "icon": "users"},
+    "send_vulnerability_alert": {"label": "脆弱性アラートを送信中",       "icon": "alert-triangle"},
+    "send_simple_message":      {"label": "通知を送信中",               "icon": "message-square"},
+    "check_chat_connection":    {"label": "Chat接続を確認中",            "icon": "message-square"},
+    "list_space_members":       {"label": "スペースメンバーを取得中",     "icon": "users"},
+    "log_vulnerability_history": {"label": "脆弱性履歴を記録中",         "icon": "database"},
+    "register_remote_agent":    {"label": "リモートエージェントを登録中",  "icon": "link"},
+    "call_remote_agent":        {"label": "リモートエージェントを呼出中",  "icon": "link"},
+    "list_registered_agents":   {"label": "登録済エージェントを取得中",    "icon": "link"},
+    "create_jira_ticket_request": {"label": "Jiraチケットを作成中",      "icon": "clipboard"},
+    "create_approval_request":  {"label": "承認リクエストを作成中",       "icon": "check-circle"},
+}
+
+
+def _tool_display_message(tool_name: str) -> str:
+    return TOOL_DISPLAY_MAP.get(tool_name, {}).get("label", f"{tool_name} を実行中")
+
+
+def _tool_display_icon(tool_name: str) -> str:
+    return TOOL_DISPLAY_MAP.get(tool_name, {}).get("icon", "wrench")
+
+
+def _is_error_response(response_data: Any) -> bool:
+    return isinstance(response_data, dict) and (
+        response_data.get("status") == "error" or "error" in response_data
+    )
+
+
+async def _safe_send(websocket: WebSocket, data: dict[str, Any]) -> None:
+    """Send JSON via WebSocket, silently ignoring disconnection errors."""
+    try:
+        await websocket.send_text(json.dumps(data, ensure_ascii=False))
+    except Exception:
+        pass
+
+
 app = FastAPI()
 
 app.add_middleware(
@@ -38,18 +82,64 @@ def _init_vertex() -> Client:
     return Client(project=GCP_PROJECT_ID, location=GCP_LOCATION)
 
 
-async def _query_agent(client: Client, message: str) -> dict[str, Any]:
+async def _query_agent(
+    client: Client, message: str, websocket: WebSocket,
+) -> dict[str, Any]:
     app_client = client.agent_engines.get(name=AGENT_RESOURCE_NAME)
     chunks: list[str] = []
+
+    await _safe_send(websocket, {
+        "type": "agent_activity",
+        "activity": "thinking",
+        "tool": None,
+        "icon": "brain",
+        "message": "リクエストを分析中...",
+    })
 
     async for event in app_client.async_stream_query(
         user_id="live_gateway",
         message=message,
     ):
         if hasattr(event, "content"):
-            for part in event.content.get("parts", []):
+            content = event.content
+            if not isinstance(content, dict):
+                continue
+            for part in content.get("parts", []):
                 if "text" in part:
                     chunks.append(part["text"])
+                elif "function_call" in part:
+                    fc = part["function_call"]
+                    tool_name = fc.get("name", "unknown")
+                    await _safe_send(websocket, {
+                        "type": "agent_activity",
+                        "activity": "tool_call",
+                        "tool": tool_name,
+                        "icon": _tool_display_icon(tool_name),
+                        "message": _tool_display_message(tool_name),
+                    })
+                elif "function_response" in part:
+                    fr = part["function_response"]
+                    tool_name = fr.get("name", "unknown")
+                    status = "error" if _is_error_response(
+                        fr.get("response", {}),
+                    ) else "success"
+                    label = _tool_display_message(tool_name)
+                    suffix = "完了" if status == "success" else "失敗"
+                    await _safe_send(websocket, {
+                        "type": "agent_activity",
+                        "activity": "tool_result",
+                        "tool": tool_name,
+                        "status": status,
+                        "message": f"{label} - {suffix}",
+                    })
+
+    await _safe_send(websocket, {
+        "type": "agent_activity",
+        "activity": "done",
+        "tool": None,
+        "icon": "check-circle-2",
+        "message": "分析完了",
+    })
 
     return {
         "type": "agent_response",
@@ -147,7 +237,7 @@ async def websocket_endpoint(websocket: WebSocket):
             if not transcript:
                 return
             last_response_index = len(transcript_parts)
-            agent_response = await _query_agent(client, transcript)
+            agent_response = await _query_agent(client, transcript, websocket)
             await websocket.send_text(json.dumps(agent_response, ensure_ascii=False))
             tts_client = GeminiLiveClient()
             async for response in tts_client.stream_text(agent_response.get("text", "")):
@@ -209,7 +299,7 @@ async def websocket_endpoint(websocket: WebSocket):
                     )
                     continue
 
-                response = await _query_agent(client, message)
+                response = await _query_agent(client, message, websocket)
                 await websocket.send_text(json.dumps(response, ensure_ascii=False))
                 continue
 
