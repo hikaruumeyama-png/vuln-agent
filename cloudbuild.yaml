@@ -190,6 +190,7 @@ steps:
     args:
       - "-c"
       - |
+        set -euo pipefail
         echo "[Step 4/5] Scheduler デプロイ条件を確認します"
         # --set-secrets で参照するため Secret の存在のみ確認する。
         # Secret の値 (AGENT_RESOURCE_NAME) は Cloud Functions がランタイムで
@@ -227,6 +228,7 @@ steps:
     args:
       - "-c"
       - |
+        set -euo pipefail
         echo "[Step 5/5] Web UI を Cloud Storage にデプロイします"
         BUCKET=gs://${PROJECT_ID}-vuln-agent-ui
         gsutil mb -p ${PROJECT_ID} -l ${_REGION} $$BUCKET 2>/dev/null || true

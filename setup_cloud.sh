@@ -169,10 +169,13 @@ create_secret() {
     return
   fi
 
-  echo -n "$value" | gcloud secrets create "$name" \
+  if ! echo -n "$value" | gcloud secrets create "$name" \
     --data-file=- \
     --replication-policy="automatic" \
-    --project="$PROJECT_ID" 2>/dev/null
+    --project="$PROJECT_ID"; then
+    err "シークレット '${name}' の作成に失敗しました"
+    exit 1
+  fi
   info "登録: ${name}"
 }
 
@@ -249,17 +252,29 @@ fi
 
 # BQ テーブル ID をシークレットに保存 (未登録なら)
 if ! gcloud secrets describe "vuln-agent-bq-table-id" --project="$PROJECT_ID" &>/dev/null; then
-  echo -n "$FULL_HISTORY_TABLE_ID" | gcloud secrets create "vuln-agent-bq-table-id"     --data-file=- --replication-policy="automatic" --project="$PROJECT_ID" 2>/dev/null
+  if ! echo -n "$FULL_HISTORY_TABLE_ID" | gcloud secrets create "vuln-agent-bq-table-id" \
+    --data-file=- --replication-policy="automatic" --project="$PROJECT_ID"; then
+    err "vuln-agent-bq-table-id シークレットの作成に失敗しました"
+    exit 1
+  fi
   info "BigQuery 履歴テーブル ID を Secret Manager に登録"
 fi
 
 if ! gcloud secrets describe "vuln-agent-bq-sbom-table-id" --project="$PROJECT_ID" &>/dev/null; then
-  echo -n "$FULL_SBOM_TABLE_ID" | gcloud secrets create "vuln-agent-bq-sbom-table-id"     --data-file=- --replication-policy="automatic" --project="$PROJECT_ID" 2>/dev/null
+  if ! echo -n "$FULL_SBOM_TABLE_ID" | gcloud secrets create "vuln-agent-bq-sbom-table-id" \
+    --data-file=- --replication-policy="automatic" --project="$PROJECT_ID"; then
+    err "vuln-agent-bq-sbom-table-id シークレットの作成に失敗しました"
+    exit 1
+  fi
   info "BigQuery SBOM テーブル ID を Secret Manager に登録"
 fi
 
 if ! gcloud secrets describe "vuln-agent-bq-owner-table-id" --project="$PROJECT_ID" &>/dev/null; then
-  echo -n "$FULL_OWNER_TABLE_ID" | gcloud secrets create "vuln-agent-bq-owner-table-id"     --data-file=- --replication-policy="automatic" --project="$PROJECT_ID" 2>/dev/null
+  if ! echo -n "$FULL_OWNER_TABLE_ID" | gcloud secrets create "vuln-agent-bq-owner-table-id" \
+    --data-file=- --replication-policy="automatic" --project="$PROJECT_ID"; then
+    err "vuln-agent-bq-owner-table-id シークレットの作成に失敗しました"
+    exit 1
+  fi
   info "BigQuery 担当者マッピングテーブル ID を Secret Manager に登録"
 fi
 

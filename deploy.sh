@@ -57,7 +57,7 @@ echo ""
 print_step "Step 1/5: Checking prerequisites..."
 
 # gcloud認証確認
-if ! gcloud auth list --filter=status:ACTIVE --format="value(account)" | head -1 > /dev/null 2>&1; then
+if ! gcloud auth list --filter=status:ACTIVE --format="value(account)" 2>/dev/null | grep -q .; then
     print_error "Not authenticated with gcloud. Run: gcloud auth login"
     exit 1
 fi
