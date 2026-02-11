@@ -78,17 +78,11 @@ def run_vulnerability_scan(request):
                         if 'text' in part:
                             results.append(part['text'])
 
+        loop = asyncio.new_event_loop()
         try:
-            loop = asyncio.get_running_loop()
-        except RuntimeError:
-            loop = None
-
-        if loop and loop.is_running():
-            import concurrent.futures
-            with concurrent.futures.ThreadPoolExecutor() as pool:
-                pool.submit(asyncio.run, execute_scan()).result()
-        else:
-            asyncio.run(execute_scan())
+            loop.run_until_complete(execute_scan())
+        finally:
+            loop.close()
         
         summary = "\n".join(results)
         print(f"Scan completed. Summary: {summary[:500]}")
