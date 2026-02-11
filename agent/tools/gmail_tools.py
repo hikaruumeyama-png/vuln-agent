@@ -21,6 +21,8 @@ logger = logging.getLogger(__name__)
 
 # Gmail APIサービスのキャッシュ
 _gmail_service = None
+_gmail_service_timestamp = None
+_SERVICE_CACHE_TTL = 1800  # 30分
 
 
 def _get_gmail_service():
@@ -32,9 +34,16 @@ def _get_gmail_service():
       2. GMAIL_USER_EMAIL あり → Workspace（ドメイン委任）
       3. どちらもなし → デフォルト認証
     """
-    global _gmail_service
-    if _gmail_service:
-        return _gmail_service
+    global _gmail_service, _gmail_service_timestamp
+
+    import time
+    current_time = time.time()
+
+    if _gmail_service and _gmail_service_timestamp:
+        if current_time - _gmail_service_timestamp < _SERVICE_CACHE_TTL:
+            return _gmail_service
+        logger.info("Gmail service cache expired, re-initializing")
+        _gmail_service = None
 
     oauth_token = os.environ.get("GMAIL_OAUTH_TOKEN")
     gmail_user = os.environ.get("GMAIL_USER_EMAIL")
@@ -61,8 +70,12 @@ def _get_gmail_service():
                 scopes=token_data.get("scopes", ["https://www.googleapis.com/auth/gmail.modify"]),
             )
 
-            # トークンが期限切れなら更新
-            if credentials.expired and credentials.refresh_token:
+            # トークンが無効または期限切れなら更新
+            # NOTE: 新規作成した Credentials は expiry が未設定のため
+            # credentials.expired は常に False を返す。
+            # credentials.valid（token が存在し expired でない）も同様に
+            # 誤って True を返すため、refresh_token がある場合は常に更新を試みる。
+            if credentials.refresh_token:
                 credentials.refresh(Request())
                 logger.info("OAuth token refreshed")
 
@@ -107,6 +120,7 @@ def _get_gmail_service():
             raise RuntimeError("Gmail認証に失敗しました。GMAIL_OAUTH_TOKEN または GMAIL_USER_EMAIL を設定してください。")
 
     _gmail_service = build("gmail", "v1", credentials=credentials)
+    _gmail_service_timestamp = current_time
     logger.info(f"Gmail service initialized (auth_method={auth_method})")
 
     return _gmail_service
