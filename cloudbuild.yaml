@@ -158,14 +158,12 @@ steps:
         # Secret の値 (AGENT_RESOURCE_NAME) は Cloud Run がランタイムで
         # 読み取るため、デプロイ時に値の取得は不要。
         if ! gcloud secrets describe vuln-agent-resource-name >/dev/null 2>&1; then
-          echo "エラー: vuln-agent-resource-name シークレットが存在しません。"
-          echo "初回セットアップ (setup_cloud.sh) を先に実行してください。"
-          exit 1
+          echo "警告: vuln-agent-resource-name シークレットが存在しないため Live Gateway のデプロイをスキップします"
+          exit 0
         fi
         if ! gcloud secrets describe vuln-agent-gemini-api-key >/dev/null 2>&1; then
-          echo "エラー: vuln-agent-gemini-api-key シークレットが存在しません。"
-          echo "初回セットアップ (setup_cloud.sh) を先に実行してください。"
-          exit 1
+          echo "警告: vuln-agent-gemini-api-key シークレットが存在しないため Live Gateway のデプロイをスキップします"
+          exit 0
         fi
         echo "[Step 3/5] Live Gateway を Cloud Run にデプロイします"
         gcloud run deploy vuln-agent-live-gateway \
