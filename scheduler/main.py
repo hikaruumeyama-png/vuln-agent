@@ -11,6 +11,9 @@ import os
 import json
 import functions_framework
 import vertexai
+import logging
+
+logger = logging.getLogger(__name__)
 
 
 # 環境変数から設定を取得
@@ -33,9 +36,9 @@ def run_vulnerability_scan(request):
         - URL: Cloud FunctionのURL
         - メソッド: POST
     """
-    print(f"Starting vulnerability scan...")
-    print(f"Project: {PROJECT_ID}, Location: {LOCATION}")
-    print(f"Agent: {AGENT_RESOURCE_NAME}")
+    logger.info("Starting vulnerability scan...")
+    logger.info("Project: %s, Location: %s", PROJECT_ID, LOCATION)
+    logger.info("Agent: %s", AGENT_RESOURCE_NAME)
     
     if not all([PROJECT_ID, LOCATION, AGENT_RESOURCE_NAME]):
         return json.dumps({
@@ -48,7 +51,8 @@ def run_vulnerability_scan(request):
         vertexai.init(project=PROJECT_ID, location=LOCATION)
         
         # デプロイ済みエージェントを取得
-        client = vertexai.Client(project=PROJECT_ID, location=LOCATION)
+        from vertexai import Client
+        client = Client(project=PROJECT_ID, location=LOCATION)
         app = client.agent_engines.get(name=AGENT_RESOURCE_NAME)
         
         # スキャン実行プロンプト
@@ -85,7 +89,7 @@ def run_vulnerability_scan(request):
             loop.close()
         
         summary = "\n".join(results)
-        print(f"Scan completed. Summary: {summary[:500]}")
+        logger.info("Scan completed. Summary: %s", summary[:500])
         
         return json.dumps({
             "status": "success",
@@ -93,14 +97,8 @@ def run_vulnerability_scan(request):
         }), 200
         
     except Exception as e:
-        print(f"Error during scan: {e}")
+        logger.error("Error during scan: %s", e)
         return json.dumps({
             "status": "error",
             "message": str(e)
         }), 500
-
-
-@functions_framework.http
-def health_check(request):
-    """ヘルスチェック用エンドポイント"""
-    return json.dumps({"status": "healthy"}), 200

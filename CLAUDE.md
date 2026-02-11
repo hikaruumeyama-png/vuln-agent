@@ -79,7 +79,7 @@ setup_gmail_oauth.py    # Gmail OAuthトークン生成
 ## テスト
 
 - `test_agent.sh "メッセージ"` でAgent Engineに直接クエリ
-- `test_agent.py` でPython SDKからのストリーミングテスト
+- `test_agent.py` でPython SDKからのストリーミングテスト（`.gitignore` 対象のため各自作成）
 
 ## 重要な注意事項
 

@@ -27,7 +27,7 @@ Google Workspace の管理者権限も不要で、個人アカウントまたは
 │  ┌─────────────────────────────────────────────────────────┐    │
 │  │          Vertex AI Agent Engine                         │    │
 │  │  ┌─────────────────────────────────────────────────┐    │    │
-│  │  │  Vulnerability Management Agent (gemini-2.5)    │    │    │
+│  │  │  Vulnerability Management Agent (gemini-2.5-flash)│   │    │
 │  │  │                                                 │    │    │
 │  │  │  Gmail Tools │ Sheets Tools │ Chat Tools        │    │    │
 │  │  │  A2A Tools   │ History Tools                    │    │    │
@@ -74,11 +74,19 @@ Google Workspace の管理者権限も不要で、個人アカウントまたは
 │   └── live_api.py
 ├── web/                     # ブラウザ用チャット / 音声UI
 ├── docs/                    # 個別セットアップガイド
+│   ├── SETUP_GMAIL.md         # Gmail OAuth 設定
+│   ├── SETUP_CHAT.md          # Google Chat Bot 設定
+│   ├── SETUP_SCHEDULER.md     # Cloud Scheduler 設定
+│   ├── SETUP_A2A.md           # Agent-to-Agent 連携設定
+│   └── LIVE_VOICE_SETUP.md    # Gemini Live 音声設定
 ├── setup_cloud.sh           # Cloud Shell 用 初回セットアップスクリプト (自動化)
 ├── setup_git_auto_deploy.sh # git pull 後の自動デプロイhook設定
 ├── cloudbuild.yaml          # Cloud Build CI/CD パイプライン定義
 ├── deploy_python.py         # (レガシー) Python SDK デプロイ
-└── setup_gmail_oauth.py     # Gmail OAuth トークン生成
+├── setup_gmail_oauth.py     # Gmail OAuth トークン生成
+├── deploy.sh                # (レガシー) Shell デプロイスクリプト
+├── setup_scheduler.sh       # (レガシー) Scheduler 個別セットアップ
+└── test_agent.sh            # Agent Engine 動作テスト
 ```
 
 ---
@@ -205,7 +213,7 @@ bash setup_cloud.sh
 > 2. **サービスアカウントの作成** --- `vuln-agent-sa` を作成し、Vertex AI / BigQuery / Secret Manager / Cloud Storage のロールを付与します。Cloud Build 用サービスアカウントにも必要な権限を追加します
 > 3. **Secret Manager への設定値登録** --- 対話形式で入力した SIDfm 送信元・スプレッドシート ID・Chat スペース ID などを Secret Manager に保存します (Gmail OAuth トークンは Step 3 で登録済み)
 > 4. **Cloud Storage バケットの作成** --- Web UI 配信用とステージング用の 2 つのバケットを作成します
-> 5. **BigQuery テーブルの作成** --- 脆弱性対応履歴を記録する `vuln_agent.incident_response_history` テーブルを作成します
+> 5. **BigQuery テーブルの作成** --- `vuln_agent.incident_response_history` (対応履歴)、`vuln_agent.sbom_packages` (SBOM)、`vuln_agent.owner_mapping` (担当者マッピング) の 3 テーブルを作成します
 > 6. **Agent Engine のデプロイ** --- Secret Manager の値から `.env` を生成し、ADK CLI でエージェントを Vertex AI Agent Engine にデプロイします。デプロイ後のリソース名は自動的に Secret Manager に保存されます
 > 7. **Live Gateway のデプロイ** --- WebSocket ゲートウェイを Cloud Run にデプロイします (Gemini API Key が登録済みの場合のみ)
 > 8. **Scheduler のデプロイ** --- 定期スキャン用の Cloud Functions と、毎時実行の Cloud Scheduler ジョブを作成します
@@ -442,6 +450,16 @@ curl -X POST "$FUNCTION_URL" \
   -H "Content-Type: application/json"
 ```
 
+### Agent Engine の動作をテストする
+
+```bash
+# デフォルトのテストメッセージで実行
+bash test_agent.sh
+
+# カスタムメッセージで実行
+bash test_agent.sh "CVE-2024-12345の影響を教えてください"
+```
+
 ### ログを確認する
 
 ```bash
@@ -505,11 +523,14 @@ echo -n "projects/xxx/locations/xxx/reasoningEngines/xxx" | \
 | `get_owner_mapping` | 担当者マッピング確認 |
 | `send_vulnerability_alert` | Chat アラート送信 |
 | `send_simple_message` | Chat テキスト送信 |
+| `check_chat_connection` | Chat 接続確認 |
+| `list_space_members` | スペースメンバー取得 |
 | `log_vulnerability_history` | BigQuery 履歴記録 |
 | `register_remote_agent` | A2A エージェント登録 |
 | `call_remote_agent` | A2A エージェント呼出 |
 | `create_jira_ticket_request` | Jira チケットリクエスト構築 |
 | `create_approval_request` | 承認リクエスト構築 |
+| `list_registered_agents` | 登録済エージェント一覧 |
 
 ### Scheduler (`scheduler/`)
 

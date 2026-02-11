@@ -372,7 +372,11 @@ startAudioButton.addEventListener("click", async () => {
         int16[i] = Math.max(-1, Math.min(1, input[i])) * 0x7fff;
       }
       const bytes = new Uint8Array(int16.buffer);
-      const base64 = btoa(String.fromCharCode(...bytes));
+      let binary = '';
+      for (let i = 0; i < bytes.length; i++) {
+        binary += String.fromCharCode(bytes[i]);
+      }
+      const base64 = btoa(binary);
       socket.send(
         JSON.stringify({
           type: "audio_chunk",

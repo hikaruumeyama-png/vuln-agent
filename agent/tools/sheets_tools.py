@@ -10,6 +10,7 @@ Vertex AI Agent Engine版
 
 import os
 import re
+import time
 import fnmatch
 import logging
 from typing import Any
@@ -69,7 +70,6 @@ def _get_sheets_service():
     """Sheets APIサービスを構築"""
     global _sheets_service, _sheets_service_timestamp
 
-    import time
     current_time = time.time()
 
     if _sheets_service and _sheets_service_timestamp:
@@ -111,8 +111,7 @@ def _load_sbom(force_refresh: bool = False) -> list[dict]:
     シート構成: type | name | version | release | purl
     """
     global _sbom_cache, _sbom_cache_timestamp, _sbom_cache_backend
-    
-    import time
+
     current_time = time.time()
     
     # 5分間キャッシュ
@@ -221,8 +220,7 @@ def _load_owner_mapping(force_refresh: bool = False) -> list[dict]:
     シート構成: pattern | system_name | owner_email | owner_name | notes
     """
     global _owner_mapping_cache, _owner_mapping_cache_timestamp, _owner_mapping_cache_backend
-    
-    import time
+
     current_time = time.time()
     
     # 5分間キャッシュ
@@ -425,9 +423,9 @@ def search_sbom_by_purl(purl_pattern: str) -> dict[str, Any]:
 
 
 def search_sbom_by_product(
-    product_type: str = None,
-    product_name: str = None,
-    version_range: str = None
+    product_type: str | None = None,
+    product_name: str | None = None,
+    version_range: str | None = None
 ) -> dict[str, Any]:
     """
     製品情報でSBOMを検索します。

@@ -69,7 +69,7 @@ app = FastAPI()
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
-    allow_credentials=True,
+    allow_credentials=False,
     allow_methods=["*"],
     allow_headers=["*"],
 )
@@ -184,9 +184,7 @@ async def websocket_endpoint(websocket: WebSocket):
             async for response in live_client.stream_transcription(audio_queue):
                 if response.text:
                     transcript_parts.append(response.text)
-                    await websocket.send_text(
-                        json.dumps({"type": "live_text", "text": response.text}, ensure_ascii=False)
-                    )
+                    await _safe_send(websocket, {"type": "live_text", "text": response.text})
                     now = time.monotonic()
                     if response_task is None and now - last_response_at > 2.0:
                         response_task = asyncio.create_task(_trigger_agent_response())
@@ -197,20 +195,13 @@ async def websocket_endpoint(websocket: WebSocket):
             tts_client = GeminiLiveClient()
             async for response in tts_client.stream_text("こんにちは。要件を教えてください。"):
                 if response.text:
-                    await websocket.send_text(
-                        json.dumps({"type": "live_text", "text": response.text}, ensure_ascii=False)
-                    )
+                    await _safe_send(websocket, {"type": "live_text", "text": response.text})
                 if response.audio_bytes:
-                    await websocket.send_text(
-                        json.dumps(
-                            {
-                                "type": "live_audio",
-                                "audio": base64.b64encode(response.audio_bytes).decode("utf-8"),
-                                "mime_type": response.mime_type or "audio/pcm",
-                            },
-                            ensure_ascii=False,
-                        )
-                    )
+                    await _safe_send(websocket, {
+                        "type": "live_audio",
+                        "audio": base64.b64encode(response.audio_bytes).decode("utf-8"),
+                        "mime_type": response.mime_type or "audio/pcm",
+                    })
 
         greeting_task = asyncio.create_task(_greeting())
 
@@ -238,27 +229,17 @@ async def websocket_endpoint(websocket: WebSocket):
                 return
             last_response_index = len(transcript_parts)
             agent_response = await _query_agent(client, transcript, websocket)
-            await websocket.send_text(json.dumps(agent_response, ensure_ascii=False))
+            await _safe_send(websocket, agent_response)
             tts_client = GeminiLiveClient()
             async for response in tts_client.stream_text(agent_response.get("text", "")):
                 if response.text:
-                    await websocket.send_text(
-                        json.dumps(
-                            {"type": "live_text", "text": response.text},
-                            ensure_ascii=False,
-                        )
-                    )
+                    await _safe_send(websocket, {"type": "live_text", "text": response.text})
                 if response.audio_bytes:
-                    await websocket.send_text(
-                        json.dumps(
-                            {
-                                "type": "live_audio",
-                                "audio": base64.b64encode(response.audio_bytes).decode("utf-8"),
-                                "mime_type": response.mime_type or "audio/pcm",
-                            },
-                            ensure_ascii=False,
-                        )
-                    )
+                    await _safe_send(websocket, {
+                        "type": "live_audio",
+                        "audio": base64.b64encode(response.audio_bytes).decode("utf-8"),
+                        "mime_type": response.mime_type or "audio/pcm",
+                    })
             last_response_at = time.monotonic()
         finally:
             response_task = None
