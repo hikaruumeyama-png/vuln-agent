@@ -77,8 +77,15 @@ APIS=(
   artifactregistry.googleapis.com
 )
 
-gcloud services enable "${APIS[@]}" --project="$PROJECT_ID" 2>/dev/null
+if ! gcloud services enable "${APIS[@]}" --project="$PROJECT_ID"; then
+  err "API の有効化に失敗しました。"
+  err "課金が有効か、必要な権限があるか確認してください。"
+  err "  https://console.cloud.google.com/billing/linkedaccount?project=${PROJECT_ID}"
+  exit 1
+fi
 info "API 有効化完了"
+info "API の反映を待機しています (30秒)..."
+sleep 30
 
 # ====================================================
 # 2. サービスアカウントの作成と権限付与
@@ -162,10 +169,13 @@ create_secret() {
     return
   fi
 
-  echo -n "$value" | gcloud secrets create "$name" \
+  if ! echo -n "$value" | gcloud secrets create "$name" \
     --data-file=- \
     --replication-policy="automatic" \
-    --project="$PROJECT_ID" 2>/dev/null
+    --project="$PROJECT_ID"; then
+    err "シークレット '${name}' の作成に失敗しました"
+    exit 1
+  fi
   info "登録: ${name}"
 }
 
@@ -191,11 +201,13 @@ info "Secret Manager 設定完了"
 step "4/8: Cloud Storage バケットを作成しています..."
 
 for bucket in "$STAGING_BUCKET" "$WEB_UI_BUCKET"; do
-  if ! gsutil ls "$bucket" &>/dev/null; then
-    gsutil mb -p "$PROJECT_ID" -l "$REGION" "$bucket"
+  if gsutil ls "$bucket" &>/dev/null; then
+    info "既存: ${bucket}"
+  elif gsutil mb -p "$PROJECT_ID" -l "$REGION" "$bucket"; then
     info "作成: ${bucket}"
   else
-    info "既存: ${bucket}"
+    err "バケットの作成に失敗しました: ${bucket}"
+    exit 1
   fi
 done
 
@@ -212,47 +224,67 @@ FULL_HISTORY_TABLE_ID="${PROJECT_ID}.${DATASET_ID}.${HISTORY_TABLE_ID}"
 FULL_SBOM_TABLE_ID="${PROJECT_ID}.${DATASET_ID}.${SBOM_TABLE_ID}"
 FULL_OWNER_TABLE_ID="${PROJECT_ID}.${DATASET_ID}.${OWNER_TABLE_ID}"
 
-if ! bq show --project_id="$PROJECT_ID" "${DATASET_ID}" &>/dev/null; then
-  bq --location="$REGION" mk -d "${PROJECT_ID}:${DATASET_ID}"
+if bq show --project_id="$PROJECT_ID" "${DATASET_ID}" &>/dev/null; then
+  info "データセット既存: ${DATASET_ID}"
+elif bq --location="$REGION" mk -d "${PROJECT_ID}:${DATASET_ID}"; then
   info "データセット作成: ${DATASET_ID}"
 else
-  info "データセット既存: ${DATASET_ID}"
+  err "データセットの作成に失敗しました: ${DATASET_ID}"
+  exit 1
 fi
 
-if ! bq show --project_id="$PROJECT_ID" "${DATASET_ID}.${HISTORY_TABLE_ID}" &>/dev/null; then
-  bq mk --table "${PROJECT_ID}:${DATASET_ID}.${HISTORY_TABLE_ID}"     incident_id:STRING,vulnerability_id:STRING,title:STRING,severity:STRING,affected_systems:STRING,cvss_score:FLOAT,description:STRING,remediation:STRING,owners:STRING,status:STRING,occurred_at:TIMESTAMP,source:STRING,extra:STRING
+if bq show --project_id="$PROJECT_ID" "${DATASET_ID}.${HISTORY_TABLE_ID}" &>/dev/null; then
+  info "テーブル既存: ${HISTORY_TABLE_ID}"
+elif bq mk --table "${PROJECT_ID}:${DATASET_ID}.${HISTORY_TABLE_ID}"     incident_id:STRING,vulnerability_id:STRING,title:STRING,severity:STRING,affected_systems:STRING,cvss_score:FLOAT,description:STRING,remediation:STRING,owners:STRING,status:STRING,occurred_at:TIMESTAMP,source:STRING,extra:STRING; then
   info "テーブル作成: ${HISTORY_TABLE_ID}"
 else
-  info "テーブル既存: ${HISTORY_TABLE_ID}"
+  err "テーブルの作成に失敗しました: ${HISTORY_TABLE_ID}"
+  exit 1
 fi
 
-if ! bq show --project_id="$PROJECT_ID" "${DATASET_ID}.${SBOM_TABLE_ID}" &>/dev/null; then
-  bq mk --table "${PROJECT_ID}:${DATASET_ID}.${SBOM_TABLE_ID}"     type:STRING,name:STRING,version:STRING,release:STRING,purl:STRING
+if bq show --project_id="$PROJECT_ID" "${DATASET_ID}.${SBOM_TABLE_ID}" &>/dev/null; then
+  info "テーブル既存: ${SBOM_TABLE_ID}"
+elif bq mk --table "${PROJECT_ID}:${DATASET_ID}.${SBOM_TABLE_ID}"     type:STRING,name:STRING,version:STRING,release:STRING,purl:STRING; then
   info "テーブル作成: ${SBOM_TABLE_ID}"
 else
-  info "テーブル既存: ${SBOM_TABLE_ID}"
+  err "テーブルの作成に失敗しました: ${SBOM_TABLE_ID}"
+  exit 1
 fi
 
-if ! bq show --project_id="$PROJECT_ID" "${DATASET_ID}.${OWNER_TABLE_ID}" &>/dev/null; then
-  bq mk --table "${PROJECT_ID}:${DATASET_ID}.${OWNER_TABLE_ID}"     pattern:STRING,system_name:STRING,owner_email:STRING,owner_name:STRING,notes:STRING
+if bq show --project_id="$PROJECT_ID" "${DATASET_ID}.${OWNER_TABLE_ID}" &>/dev/null; then
+  info "テーブル既存: ${OWNER_TABLE_ID}"
+elif bq mk --table "${PROJECT_ID}:${DATASET_ID}.${OWNER_TABLE_ID}"     pattern:STRING,system_name:STRING,owner_email:STRING,owner_name:STRING,notes:STRING; then
   info "テーブル作成: ${OWNER_TABLE_ID}"
 else
-  info "テーブル既存: ${OWNER_TABLE_ID}"
+  err "テーブルの作成に失敗しました: ${OWNER_TABLE_ID}"
+  exit 1
 fi
 
 # BQ テーブル ID をシークレットに保存 (未登録なら)
 if ! gcloud secrets describe "vuln-agent-bq-table-id" --project="$PROJECT_ID" &>/dev/null; then
-  echo -n "$FULL_HISTORY_TABLE_ID" | gcloud secrets create "vuln-agent-bq-table-id"     --data-file=- --replication-policy="automatic" --project="$PROJECT_ID" 2>/dev/null
+  if ! echo -n "$FULL_HISTORY_TABLE_ID" | gcloud secrets create "vuln-agent-bq-table-id" \
+    --data-file=- --replication-policy="automatic" --project="$PROJECT_ID"; then
+    err "vuln-agent-bq-table-id シークレットの作成に失敗しました"
+    exit 1
+  fi
   info "BigQuery 履歴テーブル ID を Secret Manager に登録"
 fi
 
 if ! gcloud secrets describe "vuln-agent-bq-sbom-table-id" --project="$PROJECT_ID" &>/dev/null; then
-  echo -n "$FULL_SBOM_TABLE_ID" | gcloud secrets create "vuln-agent-bq-sbom-table-id"     --data-file=- --replication-policy="automatic" --project="$PROJECT_ID" 2>/dev/null
+  if ! echo -n "$FULL_SBOM_TABLE_ID" | gcloud secrets create "vuln-agent-bq-sbom-table-id" \
+    --data-file=- --replication-policy="automatic" --project="$PROJECT_ID"; then
+    err "vuln-agent-bq-sbom-table-id シークレットの作成に失敗しました"
+    exit 1
+  fi
   info "BigQuery SBOM テーブル ID を Secret Manager に登録"
 fi
 
 if ! gcloud secrets describe "vuln-agent-bq-owner-table-id" --project="$PROJECT_ID" &>/dev/null; then
-  echo -n "$FULL_OWNER_TABLE_ID" | gcloud secrets create "vuln-agent-bq-owner-table-id"     --data-file=- --replication-policy="automatic" --project="$PROJECT_ID" 2>/dev/null
+  if ! echo -n "$FULL_OWNER_TABLE_ID" | gcloud secrets create "vuln-agent-bq-owner-table-id" \
+    --data-file=- --replication-policy="automatic" --project="$PROJECT_ID"; then
+    err "vuln-agent-bq-owner-table-id シークレットの作成に失敗しました"
+    exit 1
+  fi
   info "BigQuery 担当者マッピングテーブル ID を Secret Manager に登録"
 fi
 
@@ -273,8 +305,20 @@ _engine_exists() {
   token="$(gcloud auth print-access-token)"
   local endpoint="https://${REGION}-aiplatform.googleapis.com/v1/${engine_name}"
   local status
-  status="$(curl -s -o /dev/null -w "%{http_code}" -H "Authorization: Bearer ${token}" "${endpoint}")"
+  status="$(curl -s -o /dev/null -w "%{http_code}" --max-time 30 -H "Authorization: Bearer ${token}" "${endpoint}")"
   [[ "$status" == "200" ]]
+}
+
+_wait_engine_ready() {
+  local engine_name="$1"
+  for i in 1 2 3 4 5; do
+    if _engine_exists "$engine_name"; then
+      return 0
+    fi
+    info "  Agent Engine の反映待ち (${i}/5)..."
+    sleep 10
+  done
+  return 1
 }
 
 cat > agent/.env <<ENVEOF
@@ -294,7 +338,11 @@ ENVEOF
 
 info ".env ファイルを Secret Manager の値から生成しました"
 
-pip install -q google-adk 2>/dev/null
+if ! pip install -q google-adk; then
+  err "google-adk のインストールに失敗しました。"
+  err "Python 環境を確認してください: $(python3 --version 2>&1)"
+  exit 1
+fi
 
 cd agent
 DEPLOY_OUTPUT=$(adk deploy agent_engine \
@@ -319,7 +367,8 @@ if [[ -z "$AGENT_RESOURCE_NAME" ]]; then
 fi
 
 if [[ -n "$AGENT_RESOURCE_NAME" ]]; then
-  if ! _engine_exists "$AGENT_RESOURCE_NAME"; then
+  info "Agent Engine の反映を確認しています..."
+  if ! _wait_engine_ready "$AGENT_RESOURCE_NAME"; then
     err "デプロイ直後の Agent Resource Name が存在しません: ${AGENT_RESOURCE_NAME}"
     err "Secret の更新を中止します。デプロイ出力を確認してください。"
     exit 1
@@ -343,7 +392,8 @@ rm -f agent/.env
 step "7/8: Live Gateway と Scheduler をデプロイしています..."
 
 if [[ -n "$AGENT_RESOURCE_NAME" ]]; then
-  if ! _engine_exists "$AGENT_RESOURCE_NAME"; then
+  info "Agent Engine の存在を確認しています..."
+  if ! _wait_engine_ready "$AGENT_RESOURCE_NAME"; then
     err "Agent Resource Name が無効です（ReasoningEngine が存在しません）: ${AGENT_RESOURCE_NAME}"
     err "Live Gateway / Scheduler のデプロイを中止します。"
     exit 1
@@ -353,7 +403,7 @@ if [[ -n "$AGENT_RESOURCE_NAME" ]]; then
   GEMINI_KEY=$(_sm_get vuln-agent-gemini-api-key)
   if [[ -n "$GEMINI_KEY" ]]; then
     info "Live Gateway を Cloud Run にデプロイ中..."
-    gcloud run deploy vuln-agent-live-gateway \
+    if ! gcloud run deploy vuln-agent-live-gateway \
       --source=live_gateway \
       --region="$REGION" \
       --project="$PROJECT_ID" \
@@ -363,7 +413,10 @@ if [[ -n "$AGENT_RESOURCE_NAME" ]]; then
       --allow-unauthenticated \
       --memory=512Mi \
       --timeout=3600 \
-      --quiet
+      --quiet; then
+      err "Live Gateway のデプロイに失敗しました"
+      exit 1
+    fi
 
     GATEWAY_URL=$(gcloud run services describe vuln-agent-live-gateway \
       --region="$REGION" --project="$PROJECT_ID" --format='value(status.url)')
@@ -374,7 +427,7 @@ if [[ -n "$AGENT_RESOURCE_NAME" ]]; then
 
   # --- Scheduler (Cloud Functions) ---
   info "Scheduler を Cloud Functions にデプロイ中..."
-  gcloud functions deploy vuln-agent-scheduler \
+  if ! gcloud functions deploy vuln-agent-scheduler \
     --gen2 \
     --runtime=python312 \
     --region="$REGION" \
@@ -389,15 +442,19 @@ if [[ -n "$AGENT_RESOURCE_NAME" ]]; then
     --set-secrets="AGENT_RESOURCE_NAME=vuln-agent-resource-name:latest" \
     --memory=512MB \
     --timeout=540s \
-    --quiet
+    --quiet; then
+    err "Scheduler のデプロイに失敗しました"
+    exit 1
+  fi
 
   FUNCTION_URL=$(gcloud functions describe vuln-agent-scheduler \
     --region="$REGION" --project="$PROJECT_ID" --format='value(serviceConfig.uri)')
   info "Scheduler Function: ${FUNCTION_URL}"
 
   # --- Cloud Scheduler ジョブ ---
-  if ! gcloud scheduler jobs describe vuln-agent-scan --location="$REGION" --project="$PROJECT_ID" &>/dev/null; then
-    gcloud scheduler jobs create http vuln-agent-scan \
+  if gcloud scheduler jobs describe vuln-agent-scan --location="$REGION" --project="$PROJECT_ID" &>/dev/null; then
+    info "Cloud Scheduler ジョブは既に存在します"
+  elif gcloud scheduler jobs create http vuln-agent-scan \
       --location="$REGION" \
       --project="$PROJECT_ID" \
       --schedule="0 * * * *" \
@@ -405,10 +462,11 @@ if [[ -n "$AGENT_RESOURCE_NAME" ]]; then
       --uri="$FUNCTION_URL" \
       --http-method=POST \
       --oidc-service-account-email="$SA_EMAIL" \
-      --oidc-token-audience="$FUNCTION_URL"
+      --oidc-token-audience="$FUNCTION_URL"; then
     info "Cloud Scheduler ジョブ作成 (毎時実行)"
   else
-    info "Cloud Scheduler ジョブは既に存在します"
+    err "Cloud Scheduler ジョブの作成に失敗しました"
+    exit 1
   fi
 else
   warn "Agent Resource Name が不明のため、Live Gateway / Scheduler のデプロイをスキップしました"

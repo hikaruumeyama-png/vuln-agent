@@ -57,7 +57,7 @@ echo ""
 print_step "Step 1/5: Checking prerequisites..."
 
 # gcloud認証確認
-if ! gcloud auth list --filter=status:ACTIVE --format="value(account)" | head -1 > /dev/null 2>&1; then
+if ! gcloud auth list --filter=status:ACTIVE --format="value(account)" 2>/dev/null | grep -q .; then
     print_error "Not authenticated with gcloud. Run: gcloud auth login"
     exit 1
 fi
@@ -83,7 +83,11 @@ apis=(
 )
 
 for api in "${apis[@]}"; do
-    gcloud services enable "$api" --project="$PROJECT_ID" 2>/dev/null || true
+    if ! gcloud services enable "$api" --project="$PROJECT_ID"; then
+        print_error "Failed to enable API: $api"
+        print_error "Check billing and permissions for project: $PROJECT_ID"
+        exit 1
+    fi
 done
 
 print_info "APIs enabled"
@@ -94,11 +98,13 @@ print_info "APIs enabled"
 print_step "Step 3/5: Creating staging bucket..."
 
 # バケットが存在しない場合は作成
-if ! gsutil ls "$STAGING_BUCKET" &> /dev/null; then
-    gsutil mb -p "$PROJECT_ID" -l "$REGION" "$STAGING_BUCKET"
+if gsutil ls "$STAGING_BUCKET" &> /dev/null; then
+    print_info "Bucket already exists"
+elif gsutil mb -p "$PROJECT_ID" -l "$REGION" "$STAGING_BUCKET"; then
     print_info "Created bucket: $STAGING_BUCKET"
 else
-    print_info "Bucket already exists"
+    print_error "Failed to create bucket: $STAGING_BUCKET"
+    exit 1
 fi
 
 # ====================================
