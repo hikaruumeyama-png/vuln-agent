@@ -3,59 +3,117 @@
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>Vulnerability Agent Live UI</title>
+    <title>Vulnerability Agent</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap"
+      rel="stylesheet"
+    />
     <link rel="stylesheet" href="style.css" />
   </head>
   <body>
-    <main class="container">
-      <header>
-        <h1>Vulnerability Agent Live UI</h1>
-        <p>WebSocket で Live Gateway と接続し、テキストで問い合わせします。</p>
+    <div class="app-layout">
+      <!-- Header -->
+      <header class="app-header">
+        <div class="header-left">
+          <div class="app-logo">
+            <i data-lucide="shield" class="logo-icon"></i>
+            <div>
+              <h1 class="app-title">Vulnerability Agent</h1>
+              <p class="app-subtitle">AI-powered vulnerability management</p>
+            </div>
+          </div>
+        </div>
+        <div class="header-right">
+          <div class="connection-badge" id="connection-badge">
+            <span class="connection-dot" id="status-indicator"></span>
+            <span class="connection-label" id="status-text">Disconnected</span>
+          </div>
+        </div>
       </header>
 
-      <section class="status">
-        <span id="status-indicator" class="indicator offline"></span>
-        <span id="status-text">Disconnected</span>
+      <!-- Connection bar -->
+      <section class="connection-bar">
+        <div class="connection-form">
+          <div class="url-input-group">
+            <i data-lucide="link" class="input-icon"></i>
+            <input
+              id="gateway-url"
+              type="url"
+              placeholder="wss://your-gateway-url/ws"
+              class="url-input"
+            />
+          </div>
+          <button id="connect-button" class="btn btn-primary">
+            <i data-lucide="wifi"></i>
+            <span>Connect</span>
+          </button>
+          <button id="disconnect-button" class="btn btn-outline" disabled>
+            <i data-lucide="wifi-off"></i>
+            <span>Disconnect</span>
+          </button>
+        </div>
       </section>
 
-      <section class="controls">
-        <label class="input-label">
-          Gateway URL
-          <input id="gateway-url" type="url" placeholder="wss://YOUR_RUN_URL/ws" />
-        </label>
-        <button id="connect-button">Connect</button>
-        <button id="disconnect-button" disabled>Disconnect</button>
-      </section>
+      <!-- Main content: two-panel layout -->
+      <div class="main-content">
+        <!-- Left: Chat panel -->
+        <section class="chat-panel">
+          <div class="panel-header">
+            <i data-lucide="message-square"></i>
+            <span>Chat</span>
+          </div>
+          <div id="messages" class="messages-area"></div>
 
-      <section class="audio-controls">
-        <button id="start-audio" disabled>Start Audio</button>
-        <button id="stop-audio" disabled>Stop Audio</button>
-        <span id="audio-status" class="audio-status">Audio: idle</span>
-      </section>
+          <!-- Audio controls -->
+          <div class="audio-bar" id="audio-bar">
+            <button id="start-audio" class="btn btn-audio" disabled title="Start Audio">
+              <i data-lucide="mic"></i>
+            </button>
+            <button id="stop-audio" class="btn btn-audio btn-audio-stop" disabled title="Stop Audio">
+              <i data-lucide="mic-off"></i>
+            </button>
+            <div class="audio-level-container" id="audio-level-container">
+              <div class="audio-level-bar" id="audio-level-bar"></div>
+            </div>
+            <span id="audio-status" class="audio-status-text">Idle</span>
+          </div>
 
-      <section class="chat">
-        <div id="messages" class="messages"></div>
-        <form id="chat-form" class="chat-form">
-          <input
-            id="chat-input"
-            type="text"
-            placeholder="例: CVE-2024-12345の影響を教えて"
-            required
-          />
-          <button type="submit">Send</button>
-        </form>
-      </section>
+          <!-- Chat input -->
+          <form id="chat-form" class="chat-input-form">
+            <input
+              id="chat-input"
+              type="text"
+              placeholder="脆弱性について質問してください (例: CVE-2024-12345)"
+              required
+            />
+            <button type="submit" class="btn btn-send" title="Send">
+              <i data-lucide="send"></i>
+            </button>
+          </form>
+        </section>
 
-      <section class="note">
-        <h2>音声/Barge-inについて</h2>
-        <p>
-          対話開始時にエージェントが挨拶し、発話中でも返答が割り込んでくる
-          双方向ストリームに対応しています。ユーザーが話し始めると再生は停止し、
-          そのまま聞き取りを続けます。短い無音区間で返答が入りやすいテンポに調整しています。
-        </p>
-      </section>
-    </main>
+        <!-- Right: Agent activity panel -->
+        <section class="activity-panel" id="activity-panel">
+          <div class="panel-header">
+            <i data-lucide="activity"></i>
+            <span>Agent Activity</span>
+            <button class="btn-icon" id="clear-activity" title="Clear">
+              <i data-lucide="x"></i>
+            </button>
+          </div>
+          <div id="activity-feed" class="activity-feed">
+            <div class="activity-empty">
+              <i data-lucide="bot" class="empty-icon"></i>
+              <p>リクエスト処理時にエージェントの動作がここに表示されます。</p>
+            </div>
+          </div>
+        </section>
+      </div>
+    </div>
 
+    <script src="https://unpkg.com/lucide@0.460.0/dist/umd/lucide.min.js"></script>
     <script src="app.js"></script>
   </body>
 </html>
