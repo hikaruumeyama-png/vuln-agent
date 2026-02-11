@@ -206,7 +206,6 @@ steps:
           --source=scheduler \
           --entry-point=run_vulnerability_scan \
           --trigger-http \
-          --no-allow-unauthenticated \
           --service-account=vuln-agent-sa@${PROJECT_ID}.iam.gserviceaccount.com \
           --update-env-vars="GCP_PROJECT_ID=${PROJECT_ID},GCP_LOCATION=${_REGION}" \
           --remove-env-vars="AGENT_RESOURCE_NAME" \
