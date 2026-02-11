@@ -43,7 +43,7 @@ steps:
         GCP_PROJECT_ID=${PROJECT_ID}
         GCP_LOCATION=${_REGION}
         EOF
-        cat agent/.env
+        echo ".env ファイル生成完了 ($(wc -l < agent/.env) 行)"
 
   # =========================================
   # Step 2: Agent Engine をデプロイ
@@ -153,22 +153,11 @@ steps:
       - |
         set -euo pipefail
         echo "[Step 3/5] Live Gateway デプロイ条件を確認します"
-        # AGENT_RESOURCE_NAME は --set-env-vars で埋め込むため値の取得が必要。
-        # ただし Agent Engine の疎通確認はデプロイ時には行わない。
-        # Secret Manager への書き込み直後はレプリケーション遅延が発生する
-        # 場合があるため、リトライ付きで取得する。
-        AGENT_RESOURCE_NAME=""
-        for i in 1 2 3 4 5; do
-          AGENT_RESOURCE_NAME=$(gcloud secrets versions access latest \
-            --secret=vuln-agent-resource-name 2>/dev/null || echo '')
-          if [ -n "$$AGENT_RESOURCE_NAME" ]; then
-            break
-          fi
-          echo "vuln-agent-resource-name の取得を待機中... ($$i/5)"
-          sleep $$i
-        done
-        if [ -z "$$AGENT_RESOURCE_NAME" ]; then
-          echo "エラー: vuln-agent-resource-name が未登録です。Live Gateway のデプロイに失敗しました。"
+        # --set-secrets で参照するため Secret の存在のみ確認する。
+        # Secret の値 (AGENT_RESOURCE_NAME) は Cloud Run がランタイムで
+        # 読み取るため、デプロイ時に値の取得は不要。
+        if ! gcloud secrets describe vuln-agent-resource-name >/dev/null 2>&1; then
+          echo "エラー: vuln-agent-resource-name シークレットが存在しません。"
           echo "初回セットアップ (setup_cloud.sh) を先に実行してください。"
           exit 1
         fi
@@ -181,8 +170,8 @@ steps:
         gcloud run deploy vuln-agent-live-gateway \
           --source=live_gateway \
           --region=${_REGION} \
-          --set-env-vars="GCP_PROJECT_ID=${PROJECT_ID},GCP_LOCATION=${_REGION},AGENT_RESOURCE_NAME=$$AGENT_RESOURCE_NAME" \
-          --set-secrets="GEMINI_API_KEY=vuln-agent-gemini-api-key:latest" \
+          --set-env-vars="GCP_PROJECT_ID=${PROJECT_ID},GCP_LOCATION=${_REGION}" \
+          --update-secrets="AGENT_RESOURCE_NAME=vuln-agent-resource-name:latest,GEMINI_API_KEY=vuln-agent-gemini-api-key:latest" \
           --service-account=vuln-agent-sa@${PROJECT_ID}.iam.gserviceaccount.com \
           --allow-unauthenticated \
           --memory=512Mi \
