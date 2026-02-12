@@ -7,7 +7,7 @@ import os
 import time
 from typing import Any
 
-from fastapi import FastAPI, WebSocket, WebSocketDisconnect
+from fastapi import FastAPI, Request, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 import vertexai
 from vertexai import Client
@@ -175,7 +175,13 @@ async def _query_agent(
 
 
 @app.get("/healthz")
-def healthz():
+def healthz(request: Request):
+    logger.info("healthz called headers=%s", dict(request.headers))
+    return {"status": "ok"}
+
+
+@app.get("/ping")
+def ping():
     return {"status": "ok"}
 
 
