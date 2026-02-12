@@ -45,8 +45,48 @@ _chat_service_timestamp = None
 _SERVICE_CACHE_TTL = 1800  # 30分
 
 
+_CHAT_SCOPES = ["https://www.googleapis.com/auth/chat.bot"]
+
+
+def _load_sa_credentials_from_secret() -> service_account.Credentials | None:
+    """Secret Manager からChat app用のSA鍵JSONを読み込んで認証情報を生成する。
+
+    Agent Engine ランタイムではADCがGoogle管理SAになるため、
+    Chat appとして構成されたSAの鍵を明示的にロードする必要がある。
+    """
+    import json as _json
+
+    sa_json_str = get_config_value(
+        ["CHAT_SA_CREDENTIALS_JSON"],
+        secret_name="vuln-agent-chat-sa-key",
+        default="",
+    )
+    if not sa_json_str:
+        return None
+
+    try:
+        sa_info = _json.loads(sa_json_str)
+        creds = service_account.Credentials.from_service_account_info(
+            sa_info, scopes=_CHAT_SCOPES,
+        )
+        logger.info("Chat credentials loaded from Secret Manager (vuln-agent-chat-sa-key)")
+        return creds
+    except Exception as e:
+        logger.warning(f"Secret Manager SA key parse failed: {e}")
+        return None
+
+
 def _get_chat_service():
-    """Chat APIサービスを構築"""
+    """Chat APIサービスを構築
+
+    認証の優先順位:
+      1. Secret Manager の SA鍵JSON (vuln-agent-chat-sa-key)
+         → Agent Engine上でChat appのSAとして認証するために必要
+      2. GOOGLE_APPLICATION_CREDENTIALS ファイル
+         → ローカル開発環境向け
+      3. Application Default Credentials (ADC)
+         → フォールバック（Agent Engine管理SAになるため403の可能性あり）
+    """
     global _chat_service, _chat_service_timestamp
 
     current_time = time.time()
@@ -57,28 +97,41 @@ def _get_chat_service():
         logger.info("Chat service cache expired, re-initializing")
         _chat_service = None
 
-    sa_path = os.environ.get("GOOGLE_APPLICATION_CREDENTIALS")
     credentials = None
 
-    if sa_path and os.path.exists(sa_path):
-        try:
-            credentials = service_account.Credentials.from_service_account_file(
-                sa_path,
-                scopes=["https://www.googleapis.com/auth/chat.bot"]
-            )
-            logger.info("Chat credentials loaded from service account file")
-        except Exception as e:
-            logger.error(f"Service account file error: {e}")
-            credentials = None
+    # 方式1: Secret Manager から Chat app 用の SA鍵を取得
+    credentials = _load_sa_credentials_from_secret()
 
+    # 方式2: ローカルファイルのサービスアカウント
+    if not credentials:
+        sa_path = os.environ.get("GOOGLE_APPLICATION_CREDENTIALS")
+        if sa_path and os.path.exists(sa_path):
+            try:
+                credentials = service_account.Credentials.from_service_account_file(
+                    sa_path, scopes=_CHAT_SCOPES,
+                )
+                logger.info("Chat credentials loaded from service account file")
+            except Exception as e:
+                logger.error(f"Service account file error: {e}")
+                credentials = None
+
+    # 方式3: ADC フォールバック（Agent Engineでは管理SAになるため注意）
     if not credentials:
         try:
             from google.auth import default
-            credentials, _ = default(scopes=["https://www.googleapis.com/auth/chat.bot"])
-            logger.info("Chat credentials loaded from application default credentials")
+            credentials, _ = default(scopes=_CHAT_SCOPES)
+            logger.warning(
+                "Chat credentials loaded from ADC. "
+                "Agent Engine上では管理SAが使われるため403になる可能性があります。"
+                "vuln-agent-chat-sa-key シークレットの設定を推奨します。"
+            )
         except Exception as e:
             logger.error(f"Default auth error: {e}")
-            raise RuntimeError("Chat認証に失敗しました。GOOGLE_APPLICATION_CREDENTIALS を確認してください。")
+            raise RuntimeError(
+                "Chat認証に失敗しました。以下のいずれかを設定してください: "
+                "(1) Secret Manager に vuln-agent-chat-sa-key (SA鍵JSON) "
+                "(2) GOOGLE_APPLICATION_CREDENTIALS 環境変数"
+            )
 
     _chat_service = build("chat", "v1", credentials=credentials)
     _chat_service_timestamp = current_time

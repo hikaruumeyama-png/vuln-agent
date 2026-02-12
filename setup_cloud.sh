@@ -206,6 +206,21 @@ fi
 create_secret "vuln-agent-gemini-api-key"      "Gemini API Key (Live Gateway 用)"
 create_secret "vuln-agent-bq-table-id"         "BigQuery テーブル ID (project.dataset.table、任意)"
 
+# Chat app 用のサービスアカウント鍵を自動生成・登録
+if ! gcloud secrets describe "vuln-agent-chat-sa-key" --project="$PROJECT_ID" &>/dev/null; then
+  info "Chat app 用の SA鍵を生成・登録します..."
+  _sa_key_file=$(mktemp)
+  gcloud iam service-accounts keys create "$_sa_key_file" \
+    --iam-account="$SA_EMAIL" --project="$PROJECT_ID"
+  gcloud secrets create "vuln-agent-chat-sa-key" \
+    --data-file="$_sa_key_file" --project="$PROJECT_ID"
+  rm -f "$_sa_key_file"
+  info "vuln-agent-chat-sa-key を作成しました"
+  info "Google Cloud Console > Chat API > 構成 で、このSA (${SA_EMAIL}) をChat appに設定してください"
+else
+  info "vuln-agent-chat-sa-key は既存です"
+fi
+
 info "Secret Manager 設定完了"
 
 # ====================================================
