@@ -17,8 +17,97 @@ substitutions:
   _REGION: asia-northeast1
   _AGENT_NAME: vulnerability-management-agent
   _AGENT_ENGINE_RETENTION: "1"
+  _ADK_BUILDER_IMAGE: gcr.io/google.com/cloudsdktool/cloud-sdk
+  _FORCE_FULL_DEPLOY: "false"
+  _CHANGED_FILES: ""
 
 steps:
+  # =========================================
+  # Step 0: 変更内容からデプロイ対象を判定
+  # =========================================
+  - name: "gcr.io/google.com/cloudsdktool/cloud-sdk"
+    id: detect-changes
+    entrypoint: bash
+    args:
+      - "-c"
+      - |
+        set -euo pipefail
+
+        flags_file="/workspace/.deploy_flags"
+        DEPLOY_AGENT=false
+        DEPLOY_GATEWAY=false
+        DEPLOY_SCHEDULER=false
+        DEPLOY_WEB=false
+
+        full_deploy="${_FORCE_FULL_DEPLOY,,}"
+        changed_files_raw="${_CHANGED_FILES}"
+
+        # 手動指定があれば _CHANGED_FILES を優先。未指定時は git diff で推定。
+        if [ -z "$$changed_files_raw" ] && [ -d .git ] \
+          && [ -n "${BEFORE_SHA:-}" ] && [ -n "${COMMIT_SHA:-}" ]; then
+          zeros="0000000000000000000000000000000000000000"
+          if [ "${BEFORE_SHA}" != "$$zeros" ] && [ "${BEFORE_SHA}" != "${COMMIT_SHA}" ]; then
+            changed_files_raw="$(git diff --name-only "${BEFORE_SHA}" "${COMMIT_SHA}" || true)"
+          fi
+        fi
+
+        if [ "$$full_deploy" = "true" ]; then
+          DEPLOY_AGENT=true
+          DEPLOY_GATEWAY=true
+          DEPLOY_SCHEDULER=true
+          DEPLOY_WEB=true
+          echo "強制フルデプロイを有効化しました。"
+        elif [ -z "$$changed_files_raw" ]; then
+          DEPLOY_AGENT=true
+          DEPLOY_GATEWAY=true
+          DEPLOY_SCHEDULER=true
+          DEPLOY_WEB=true
+          echo "変更ファイルを判定できないため安全側で全デプロイを実行します。"
+        else
+          unknown_path_detected=false
+          while IFS= read -r path; do
+            [ -z "$$path" ] && continue
+            case "$$path" in
+              agent/*)
+                DEPLOY_AGENT=true
+                ;;
+              live_gateway/*)
+                DEPLOY_GATEWAY=true
+                ;;
+              scheduler/*)
+                DEPLOY_SCHEDULER=true
+                ;;
+              web/*)
+                DEPLOY_WEB=true
+                ;;
+              README.md|CLAUDE.md|docs/*|.gitignore)
+                ;;
+              *)
+                unknown_path_detected=true
+                ;;
+            esac
+          done <<< "$(printf '%s' "$$changed_files_raw" | tr ', ' '\n\n')"
+
+          # 影響範囲を特定できない変更は安全側で全デプロイ。
+          if [ "$$unknown_path_detected" = "true" ]; then
+            DEPLOY_AGENT=true
+            DEPLOY_GATEWAY=true
+            DEPLOY_SCHEDULER=true
+            DEPLOY_WEB=true
+            echo "共通または未知パスの変更を検知したため全デプロイを実行します。"
+          fi
+        fi
+
+        cat > "$$flags_file" <<EOF
+        DEPLOY_AGENT=$$DEPLOY_AGENT
+        DEPLOY_GATEWAY=$$DEPLOY_GATEWAY
+        DEPLOY_SCHEDULER=$$DEPLOY_SCHEDULER
+        DEPLOY_WEB=$$DEPLOY_WEB
+        EOF
+
+        echo "デプロイ判定結果:"
+        cat "$$flags_file"
+
   # =========================================
   # Step 1: Secret Manager から .env を生成
   # =========================================
@@ -29,6 +118,13 @@ steps:
       - "-c"
       - |
         set -euo pipefail
+        if [ -f /workspace/.deploy_flags ]; then
+          source /workspace/.deploy_flags
+        fi
+        if [ "${DEPLOY_AGENT:-true}" != "true" ]; then
+          echo "[Step 1/5] Agent が対象外のため .env 生成をスキップします"
+          exit 0
+        fi
         echo "[Step 1/5] Secret Manager から .env を生成します"
         cat > agent/.env <<EOF
         GMAIL_OAUTH_TOKEN=$(gcloud secrets versions access latest --secret=vuln-agent-gmail-oauth-token 2>/dev/null || echo '')
@@ -45,29 +141,47 @@ steps:
         GCP_LOCATION=${_REGION}
         EOF
         echo ".env ファイル生成完了 ($(wc -l < agent/.env) 行)"
+    waitFor:
+      - detect-changes
 
   # =========================================
   # Step 2: Agent Engine をデプロイ
   # =========================================
-  - name: "gcr.io/google.com/cloudsdktool/cloud-sdk"
+  - name: "${_ADK_BUILDER_IMAGE}"
     id: deploy-agent
     entrypoint: bash
     args:
       - "-c"
       - |
         set -euo pipefail
-        echo "[Step 2/5] Agent Engine のデプロイ準備: google-adk をインストールします"
-        rm -rf /workspace/.venv-adk
+        if [ -f /workspace/.deploy_flags ]; then
+          source /workspace/.deploy_flags
+        fi
+        if [ "${DEPLOY_AGENT:-true}" != "true" ]; then
+          echo "[Step 2/5] Agent が対象外のためデプロイをスキップします"
+          exit 0
+        fi
+
+        echo "[Step 2/5] Agent Engine のデプロイ準備を開始します"
         adk_bin=""
-        if python3 -m venv /workspace/.venv-adk 2>/tmp/venv_err.log; then
-          /workspace/.venv-adk/bin/python -m pip install -q --upgrade pip
-          /workspace/.venv-adk/bin/python -m pip install -q google-adk
+        if command -v adk >/dev/null 2>&1; then
+          adk_bin="$(command -v adk)"
+          echo "プリインストール済み ADK を利用します: $$adk_bin"
+        elif [ -x /workspace/.venv-adk/bin/adk ]; then
           adk_bin="/workspace/.venv-adk/bin/adk"
+          echo "既存 venv の ADK を利用します: $$adk_bin"
         else
-          echo "venv 作成に失敗したため user site インストールにフォールバックします"
-          cat /tmp/venv_err.log || true
-          python3 -m pip install -q --user --break-system-packages google-adk
-          adk_bin="$(python3 -m site --user-base)/bin/adk"
+          echo "google-adk が見つからないため venv にインストールします"
+          if python3 -m venv /workspace/.venv-adk 2>/tmp/venv_err.log; then
+            /workspace/.venv-adk/bin/python -m pip install -q --upgrade pip
+            /workspace/.venv-adk/bin/python -m pip install -q google-adk
+            adk_bin="/workspace/.venv-adk/bin/adk"
+          else
+            echo "venv 作成に失敗したため user site インストールにフォールバックします"
+            cat /tmp/venv_err.log || true
+            python3 -m pip install -q --user --break-system-packages google-adk
+            adk_bin="$(python3 -m site --user-base)/bin/adk"
+          fi
         fi
         if [ ! -x "$$adk_bin" ]; then
           echo "adk CLI が見つかりません: $$adk_bin"
@@ -153,6 +267,13 @@ steps:
       - "-c"
       - |
         set -euo pipefail
+        if [ -f /workspace/.deploy_flags ]; then
+          source /workspace/.deploy_flags
+        fi
+        if [ "${DEPLOY_GATEWAY:-true}" != "true" ]; then
+          echo "[Step 3/5] Live Gateway が対象外のためデプロイをスキップします"
+          exit 0
+        fi
         echo "[Step 3/5] Live Gateway デプロイ条件を確認します"
         # --set-secrets で参照するため Secret の存在のみ確認する。
         # Secret の値 (AGENT_RESOURCE_NAME) は Cloud Run がランタイムで
@@ -189,6 +310,13 @@ steps:
       - "-c"
       - |
         set -euo pipefail
+        if [ -f /workspace/.deploy_flags ]; then
+          source /workspace/.deploy_flags
+        fi
+        if [ "${DEPLOY_SCHEDULER:-true}" != "true" ]; then
+          echo "[Step 4/5] Scheduler が対象外のためデプロイをスキップします"
+          exit 0
+        fi
         echo "[Step 4/5] Scheduler デプロイ条件を確認します"
         # --set-secrets で参照するため Secret の存在のみ確認する。
         # Secret の値 (AGENT_RESOURCE_NAME) は Cloud Functions がランタイムで
@@ -226,6 +354,13 @@ steps:
       - "-c"
       - |
         set -euo pipefail
+        if [ -f /workspace/.deploy_flags ]; then
+          source /workspace/.deploy_flags
+        fi
+        if [ "${DEPLOY_WEB:-true}" != "true" ]; then
+          echo "[Step 5/5] Web UI が対象外のためデプロイをスキップします"
+          exit 0
+        fi
         echo "[Step 5/5] Web UI を Cloud Storage にデプロイします"
         BUCKET=gs://${PROJECT_ID}-vuln-agent-ui
         gsutil mb -p ${PROJECT_ID} -l ${_REGION} $$BUCKET 2>/dev/null || true

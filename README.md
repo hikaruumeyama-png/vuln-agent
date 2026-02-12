@@ -364,20 +364,32 @@ echo "https://console.cloud.google.com/vertex-ai/agents?project=$(gcloud config 
 
 ### Step 8 (任意): Cloud Build で CI/CD を設定する
 
-コードを変更した際に自動で全コンポーネントを再デプロイする CI/CD パイプラインを設定します。
+コードを変更した際に自動で再デプロイする CI/CD パイプラインを設定します。
 
 Cloud Build パイプラインは以下を自動で実行します:
 
-1. Secret Manager から `.env` を再生成
-2. Agent Engine を再デプロイ
-3. Live Gateway (Cloud Run) を再デプロイ
-4. Scheduler (Cloud Functions) を再デプロイ
-5. Web UI (Cloud Storage) を更新
+1. 変更ファイルからデプロイ対象 (`agent` / `live_gateway` / `scheduler` / `web`) を判定
+2. `agent/` が対象のときのみ `.env` を再生成して Agent Engine を再デプロイ
+3. `live_gateway/` が対象のときのみ Live Gateway (Cloud Run) を再デプロイ
+4. `scheduler/` が対象のときのみ Scheduler (Cloud Functions) を再デプロイ
+5. `web/` が対象のときのみ Web UI (Cloud Storage) を更新
+
+`cloudbuild.yaml` の追加 substitution:
+
+- `_ADK_BUILDER_IMAGE`: ADK 同梱済みのカスタムビルダーイメージに差し替え可能（既定: `gcr.io/google.com/cloudsdktool/cloud-sdk`）
+- `_FORCE_FULL_DEPLOY`: `true` にすると変更判定を無視して全コンポーネントを再デプロイ
+- `_CHANGED_FILES`: `agent/a.py,web/index.html` のように変更ファイル一覧を明示指定可能
 
 **手動で Cloud Build を実行する場合:**
 
 ```bash
 gcloud builds submit --config cloudbuild.yaml
+```
+
+```bash
+# 例: ADK 同梱ビルダーを使い、agent と web だけをデプロイ対象にする
+gcloud builds submit --config cloudbuild.yaml \
+  --substitutions=_ADK_BUILDER_IMAGE=asia-northeast1-docker.pkg.dev/YOUR_PROJECT/builders/adk-cloud-sdk:latest,_CHANGED_FILES=agent/agent.py,web/index.html
 ```
 
 **Git push 時に自動実行させたい場合 (トリガー登録):**
