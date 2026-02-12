@@ -196,6 +196,24 @@ def healthz(request: Request):
     return {"status": "ok"}
 
 
+@app.get("/healthz/")
+def healthz_slash(request: Request):
+    logger.info("healthz called headers=%s", _safe_healthz_headers(request))
+    return {"status": "ok"}
+
+
+@app.get("/health")
+def health(request: Request):
+    logger.info("health called headers=%s", _safe_healthz_headers(request))
+    return {"status": "ok"}
+
+
+@app.get("/health/")
+def health_slash(request: Request):
+    logger.info("health called headers=%s", _safe_healthz_headers(request))
+    return {"status": "ok"}
+
+
 @app.get("/ping")
 def ping():
     return {"status": "ok"}
