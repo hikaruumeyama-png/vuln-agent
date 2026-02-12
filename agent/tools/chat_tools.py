@@ -5,6 +5,7 @@ Vertex AI Agent Engine版
 """
 
 import os
+import re
 import time
 import logging
 from typing import Any
@@ -21,11 +22,11 @@ except ImportError:
 logger = logging.getLogger(__name__)
 
 # 重大度設定
-SEVERITY_COLORS = {
-    "緊急": "#D32F2F",
-    "高": "#F57C00",
-    "中": "#FBC02D",
-    "低": "#388E3C",
+SEVERITY_EMOJI = {
+    "緊急": "🔴",
+    "高": "🟠",
+    "中": "🟡",
+    "低": "🟢",
 }
 
 SEVERITY_DEADLINES = {
@@ -35,6 +36,8 @@ SEVERITY_DEADLINES = {
     "低": timedelta(days=30),
 }
 
+# スペースIDの正規表現パターン
+_SPACE_ID_PATTERN = re.compile(r"^spaces/[A-Za-z0-9_-]+$")
 
 _chat_service = None
 _chat_service_timestamp = None
@@ -62,6 +65,7 @@ def _get_chat_service():
                 sa_path,
                 scopes=["https://www.googleapis.com/auth/chat.bot"]
             )
+            logger.info("Chat credentials loaded from service account file")
         except Exception as e:
             logger.error(f"Service account file error: {e}")
             credentials = None
@@ -70,6 +74,7 @@ def _get_chat_service():
         try:
             from google.auth import default
             credentials, _ = default(scopes=["https://www.googleapis.com/auth/chat.bot"])
+            logger.info("Chat credentials loaded from application default credentials")
         except Exception as e:
             logger.error(f"Default auth error: {e}")
             raise RuntimeError("Chat認証に失敗しました。GOOGLE_APPLICATION_CREDENTIALS を確認してください。")
@@ -80,7 +85,7 @@ def _get_chat_service():
 
 
 def _resolve_space_id(space_id: str | None = None) -> str | None:
-    """スペースIDを解決する。未設定時はNoneを返す。"""
+    """スペースIDを解決・正規化する。未設定時はNoneを返す。"""
     if not space_id:
         space_id = get_config_value(
             ["DEFAULT_CHAT_SPACE_ID", "CHAT_SPACE_ID", "GOOGLE_CHAT_SPACE_ID"],
@@ -89,9 +94,13 @@ def _resolve_space_id(space_id: str | None = None) -> str | None:
         )
     space_id = space_id.strip()
     if not space_id:
+        logger.warning("Chat space ID が未設定です。DEFAULT_CHAT_SPACE_ID 環境変数を設定してください。")
         return None
     if not space_id.startswith("spaces/"):
         space_id = f"spaces/{space_id}"
+    if not _SPACE_ID_PATTERN.match(space_id):
+        logger.error(f"Chat space ID のフォーマットが不正です: {space_id}")
+        return None
     return space_id
 
 
@@ -101,15 +110,15 @@ def send_vulnerability_alert(
     severity: str,
     affected_systems: list[str],
     cvss_score: float | None = None,
-    description: str = None,
-    remediation: str = None,
+    description: str | None = None,
+    remediation: str | None = None,
     owners: list[str] | None = None,
-    space_id: str = None,
+    space_id: str | None = None,
     record_history: bool = True,
 ) -> dict[str, Any]:
     """
     脆弱性アラートをGoogle Chatスペースに送信します。
-    
+
     Args:
         vulnerability_id: CVE番号等
         title: 脆弱性のタイトル
@@ -121,45 +130,58 @@ def send_vulnerability_alert(
         owners: 担当者メールアドレス（オプション）
         space_id: 送信先スペースID（省略時はデフォルト）
         record_history: 履歴を記録するか（デフォルト: True）
-    
+
     Returns:
         送信結果
+
+    Example:
+        >>> result = send_vulnerability_alert(
+        ...     vulnerability_id="CVE-2024-1234",
+        ...     title="Apache Log4j RCE",
+        ...     severity="緊急",
+        ...     affected_systems=["web-server-01"],
+        ... )
+        >>> print(result["status"])
+        sent
     """
     try:
         service = _get_chat_service()
 
-        space_id = _resolve_space_id(space_id)
-        if space_id is None:
-            return {"status": "error", "message": "Chat space ID not configured"}
+        resolved_space = _resolve_space_id(space_id)
+        if resolved_space is None:
+            return {"status": "error", "message": "Chat space ID が未設定または不正です。DEFAULT_CHAT_SPACE_ID を確認してください。"}
 
         # 対応期限
         deadline = _calculate_deadline(severity)
-        
+
         # カードメッセージを構築
         card = _build_card(
             vulnerability_id, title, severity, cvss_score,
             affected_systems, description, remediation, deadline, owners
         )
-        
-        # メンション
+
+        # テキスト本文（メンション付き）
         text = f"🚨 新しい脆弱性が検出されました: {vulnerability_id}"
         if owners:
-            mentions = [f"<users/{email}>" for email in owners]
+            mentions = [f"<{email}>" for email in owners]
             text = f"📢 {', '.join(mentions)} 対応をお願いします。\n\n" + text
-        
+
         # 送信
+        message_body = {"text": text, "cardsV2": [card]}
+        logger.info(f"Chat API 送信開始: space={resolved_space}, vuln={vulnerability_id}")
+
         response = service.spaces().messages().create(
-            parent=space_id,
-            body={"text": text, "cardsV2": [card]}
+            parent=resolved_space,
+            body=message_body,
         ).execute()
-        
-        logger.info(f"Sent alert to {space_id}: {vulnerability_id}")
-        
-        result = {
+
+        logger.info(f"Chat API 送信成功: space={resolved_space}, vuln={vulnerability_id}, message={response.get('name')}")
+
+        result: dict[str, Any] = {
             "status": "sent",
             "message_id": response.get("name"),
-            "space_id": space_id,
-            "vulnerability_id": vulnerability_id
+            "space_id": resolved_space,
+            "vulnerability_id": vulnerability_id,
         }
 
         if record_history:
@@ -179,48 +201,49 @@ def send_vulnerability_alert(
                     source="chat_alert",
                     extra={
                         "message_id": response.get("name"),
-                        "space_id": space_id,
+                        "space_id": resolved_space,
                     },
                 )
                 result["history"] = history_result
             except Exception as history_error:
                 logger.error(f"Failed to record history: {history_error}")
                 result["history"] = {"status": "error", "message": str(history_error)}
-        
+
         return result
 
     except Exception as e:
-        logger.error(f"Failed to send chat message: {e}")
+        logger.error(f"Chat API 送信失敗: space={space_id}, vuln={vulnerability_id}, error={e}")
         return {"status": "error", "message": str(e), "vulnerability_id": vulnerability_id}
 
 
-def send_simple_message(message: str, space_id: str = None) -> dict[str, Any]:
+def send_simple_message(message: str, space_id: str | None = None) -> dict[str, Any]:
     """
     シンプルなテキストメッセージを送信します。
-    
+
     Args:
         message: 送信するメッセージ
         space_id: 送信先スペースID（省略時はデフォルト）
-    
+
     Returns:
         送信結果
     """
     try:
         service = _get_chat_service()
 
-        space_id = _resolve_space_id(space_id)
-        if space_id is None:
-            return {"status": "error", "message": "Chat space ID not configured"}
+        resolved_space = _resolve_space_id(space_id)
+        if resolved_space is None:
+            return {"status": "error", "message": "Chat space ID が未設定または不正です。DEFAULT_CHAT_SPACE_ID を確認してください。"}
 
         response = service.spaces().messages().create(
-            parent=space_id,
-            body={"text": message}
+            parent=resolved_space,
+            body={"text": message},
         ).execute()
-        
+
+        logger.info(f"Chat メッセージ送信成功: space={resolved_space}")
         return {"status": "sent", "message_id": response.get("name")}
-        
+
     except Exception as e:
-        logger.error(f"Failed to send message: {e}")
+        logger.error(f"Chat メッセージ送信失敗: space={space_id}, error={e}")
         return {"status": "error", "message": str(e)}
 
 
@@ -233,57 +256,60 @@ def _build_card(
     description: str | None,
     remediation: str | None,
     deadline: str,
-    owners: list[str] | None
+    owners: list[str] | None,
 ) -> dict:
-    """脆弱性カードを構築"""
-    
-    color = SEVERITY_COLORS.get(severity, "#757575")
-    
+    """脆弱性カードを構築（Google Chat Cards v2 形式）"""
+
+    severity_emoji = SEVERITY_EMOJI.get(severity, "⚪")
+
     # 概要セクション
-    overview = [
-        {"decoratedText": {"topLabel": "重大度", "text": f"<font color='{color}'><b>{severity}</b></font>"}}
+    overview: list[dict[str, Any]] = [
+        {"decoratedText": {"topLabel": "重大度", "text": f"{severity_emoji} {severity}"}},
     ]
     if cvss_score is not None:
-        overview.append({"decoratedText": {"topLabel": "CVSSスコア", "text": f"<b>{cvss_score}</b>"}})
-    overview.append({"decoratedText": {"topLabel": "対応期限", "text": f"<b>{deadline}</b>"}})
-    
+        overview.append({"decoratedText": {"topLabel": "CVSSスコア", "text": str(cvss_score)}})
+    overview.append({"decoratedText": {"topLabel": "対応期限", "text": deadline}})
+
     # 影響システム
-    systems_text = "\n".join([f"• {s}" for s in affected_systems[:10]])
+    systems_text = "\n".join(f"• {s}" for s in affected_systems[:10])
     if len(affected_systems) > 10:
         systems_text += f"\n... 他 {len(affected_systems) - 10} システム"
-    
-    sections = [
+
+    sections: list[dict[str, Any]] = [
         {"header": "概要", "widgets": overview},
-        {"header": "📋 影響を受けるシステム", "widgets": [{"textParagraph": {"text": systems_text or "該当なし"}}]}
+        {"header": "影響を受けるシステム", "widgets": [{"textParagraph": {"text": systems_text or "該当なし"}}]},
     ]
-    
+
     if description:
-        sections.append({"header": "📝 説明", "widgets": [{"textParagraph": {"text": description[:500]}}]})
-    
+        sections.append({"header": "説明", "widgets": [{"textParagraph": {"text": description[:500]}}]})
+
     if remediation:
-        sections.append({"header": "✅ 推奨対策", "widgets": [{"textParagraph": {"text": remediation[:500]}}]})
-    
+        sections.append({"header": "推奨対策", "widgets": [{"textParagraph": {"text": remediation[:500]}}]})
+
     if owners:
-        sections.append({"header": "👤 担当者", "widgets": [{"textParagraph": {"text": "\n".join(f"• {o}" for o in owners)}}]})
-    
+        sections.append({"header": "担当者", "widgets": [{"textParagraph": {"text": "\n".join(f"• {o}" for o in owners)}}]})
+
     # アクションボタン
     sections.append({
         "widgets": [{
             "buttonList": {
                 "buttons": [{
-                    "text": "🔍 NVDで詳細確認",
-                    "onClick": {"openLink": {"url": f"https://nvd.nist.gov/vuln/detail/{vulnerability_id}"}}
-                }]
-            }
-        }]
+                    "text": "NVDで詳細確認",
+                    "onClick": {"openLink": {"url": f"https://nvd.nist.gov/vuln/detail/{vulnerability_id}"}},
+                }],
+            },
+        }],
     })
-    
+
     return {
         "cardId": f"vuln-{vulnerability_id}",
         "card": {
-            "header": {"title": f"🛡️ {vulnerability_id}", "subtitle": title[:100] if title else ""},
-            "sections": sections
-        }
+            "header": {
+                "title": vulnerability_id,
+                "subtitle": title[:100] if title else "",
+            },
+            "sections": sections,
+        },
     }
 
 
@@ -293,7 +319,7 @@ def _calculate_deadline(severity: str) -> str:
     return (datetime.now() + delta).strftime("%Y年%m月%d日")
 
 
-def check_chat_connection(space_id: str = None) -> dict[str, Any]:
+def check_chat_connection(space_id: str | None = None) -> dict[str, Any]:
     """
     Google Chat APIへの接続を確認します。
 
@@ -306,30 +332,30 @@ def check_chat_connection(space_id: str = None) -> dict[str, Any]:
     try:
         service = _get_chat_service()
 
-        space_id = _resolve_space_id(space_id)
-        if space_id is None:
-            return {"status": "error", "message": "Chat space ID not configured"}
+        resolved_space = _resolve_space_id(space_id)
+        if resolved_space is None:
+            return {"status": "error", "message": "Chat space ID が未設定または不正です。DEFAULT_CHAT_SPACE_ID を確認してください。"}
 
         # スペース情報を取得
-        space = service.spaces().get(name=space_id).execute()
+        space = service.spaces().get(name=resolved_space).execute()
 
         return {
             "status": "connected",
-            "space_id": space_id,
+            "space_id": resolved_space,
             "space_name": space.get("displayName", ""),
             "space_type": space.get("spaceType", ""),
             "member_count": space.get("membershipCount", 0),
         }
 
     except Exception as e:
-        logger.error(f"Chat connection check failed: {e}")
+        logger.error(f"Chat connection check failed: space={space_id}, error={e}")
         return {
             "status": "error",
-            "message": str(e)
+            "message": str(e),
         }
 
 
-def list_space_members(space_id: str = None) -> dict[str, Any]:
+def list_space_members(space_id: str | None = None) -> dict[str, Any]:
     """
     スペースのメンバー一覧を取得します。
 
@@ -342,12 +368,12 @@ def list_space_members(space_id: str = None) -> dict[str, Any]:
     try:
         service = _get_chat_service()
 
-        space_id = _resolve_space_id(space_id)
-        if space_id is None:
-            return {"status": "error", "message": "Chat space ID not configured"}
+        resolved_space = _resolve_space_id(space_id)
+        if resolved_space is None:
+            return {"status": "error", "message": "Chat space ID が未設定または不正です。DEFAULT_CHAT_SPACE_ID を確認してください。"}
 
         # メンバー一覧を取得
-        response = service.spaces().members().list(parent=space_id).execute()
+        response = service.spaces().members().list(parent=resolved_space).execute()
         members = response.get("memberships", [])
 
         member_list = []
@@ -361,11 +387,11 @@ def list_space_members(space_id: str = None) -> dict[str, Any]:
 
         return {
             "status": "success",
-            "space_id": space_id,
+            "space_id": resolved_space,
             "members": member_list,
             "count": len(member_list),
         }
 
     except Exception as e:
-        logger.error(f"Failed to list members: {e}")
+        logger.error(f"Failed to list members: space={space_id}, error={e}")
         return {"status": "error", "message": str(e)}

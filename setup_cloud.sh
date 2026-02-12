@@ -190,7 +190,19 @@ create_secret "vuln-agent-sbom-data-backend"   "SBOM データソース (sheets/
 create_secret "vuln-agent-sbom-spreadsheet-id" "SBOM スプレッドシート ID"
 create_secret "vuln-agent-sbom-sheet-name"     "SBOM シート名"                             "SBOM"
 create_secret "vuln-agent-owner-sheet-name"    "担当者マッピング シート名"                  "担当者マッピング"
-create_secret "vuln-agent-chat-space-id"       "Google Chat スペース ID (spaces/xxx)"
+create_secret "vuln-agent-chat-space-id"       "Google Chat スペース ID (spaces/xxx形式)"
+
+# Chat Space ID のフォーマットを検証
+if gcloud secrets describe "vuln-agent-chat-space-id" --project="$PROJECT_ID" &>/dev/null; then
+  _chat_val=$(_sm_get vuln-agent-chat-space-id)
+  if [[ -n "$_chat_val" && ! "$_chat_val" =~ ^spaces/ ]]; then
+    warn "Chat Space ID が spaces/ で始まっていません: ${_chat_val}"
+    warn "spaces/${_chat_val} に修正して Secret Manager を更新します"
+    echo -n "spaces/${_chat_val}" | gcloud secrets versions add "vuln-agent-chat-space-id" \
+      --data-file=- --project="$PROJECT_ID"
+    info "vuln-agent-chat-space-id を spaces/${_chat_val} に修正しました"
+  fi
+fi
 create_secret "vuln-agent-gemini-api-key"      "Gemini API Key (Live Gateway 用)"
 create_secret "vuln-agent-bq-table-id"         "BigQuery テーブル ID (project.dataset.table、任意)"
 
