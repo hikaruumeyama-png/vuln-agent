@@ -13,6 +13,11 @@ from datetime import datetime, timedelta
 from google.oauth2 import service_account
 from googleapiclient.discovery import build
 
+try:
+    from .secret_config import get_config_value
+except ImportError:
+    from secret_config import get_config_value
+
 logger = logging.getLogger(__name__)
 
 # 重大度設定
@@ -77,11 +82,10 @@ def _get_chat_service():
 def _resolve_space_id(space_id: str | None = None) -> str | None:
     """スペースIDを解決する。未設定時はNoneを返す。"""
     if not space_id:
-        space_id = (
-            os.environ.get("DEFAULT_CHAT_SPACE_ID")
-            or os.environ.get("CHAT_SPACE_ID")
-            or os.environ.get("GOOGLE_CHAT_SPACE_ID")
-            or ""
+        space_id = get_config_value(
+            ["DEFAULT_CHAT_SPACE_ID", "CHAT_SPACE_ID", "GOOGLE_CHAT_SPACE_ID"],
+            secret_name="vuln-agent-chat-space-id",
+            default="",
         )
     space_id = space_id.strip()
     if not space_id:

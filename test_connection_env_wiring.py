@@ -38,6 +38,20 @@ def _stub_google_modules() -> None:
     sys.modules["googleapiclient.discovery"] = discovery
 
 
+def _stub_secret_config_module() -> None:
+    mod = types.ModuleType("secret_config")
+
+    def get_config_value(env_names, secret_name=None, default=""):
+        for env_name in env_names:
+            value = (os.environ.get(env_name) or "").strip()
+            if value:
+                return value
+        return default
+
+    mod.get_config_value = get_config_value
+    sys.modules["secret_config"] = mod
+
+
 def _load_module(name: str, path: Path):
     spec = importlib.util.spec_from_file_location(name, path)
     module = importlib.util.module_from_spec(spec)
@@ -50,6 +64,7 @@ class ConnectionEnvWiringTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
         _stub_google_modules()
+        _stub_secret_config_module()
         cls.chat_tools = _load_module("chat_tools_test", CHAT_TOOLS_PATH)
         cls.gmail_tools_source = GMAIL_TOOLS_PATH.read_text(encoding="utf-8")
         cls.setup_cloud_source = SETUP_CLOUD_PATH.read_text(encoding="utf-8")
@@ -70,8 +85,13 @@ class ConnectionEnvWiringTests(unittest.TestCase):
         self.assertEqual(self.chat_tools._resolve_space_id(), "spaces/CCCC")
 
     def test_gmail_tools_supports_workspace_env_alias(self):
-        self.assertIn('os.environ.get("GMAIL_USER_EMAIL")', self.gmail_tools_source)
-        self.assertIn('os.environ.get("GOOGLE_WORKSPACE_USER_EMAIL")', self.gmail_tools_source)
+        self.assertIn('["GMAIL_USER_EMAIL", "GOOGLE_WORKSPACE_USER_EMAIL"]', self.gmail_tools_source)
+        self.assertIn('secret_name="vuln-agent-gmail-oauth-token"', self.gmail_tools_source)
+        self.assertIn('secret_name="vuln-agent-gmail-user-email"', self.gmail_tools_source)
+
+    def test_chat_tools_uses_chat_secret_fallback(self):
+        chat_source = CHAT_TOOLS_PATH.read_text(encoding="utf-8")
+        self.assertIn('secret_name="vuln-agent-chat-space-id"', chat_source)
 
     def test_setup_cloud_has_gmail_user_secret(self):
         self.assertIn("vuln-agent-gmail-user-email", self.setup_cloud_source)
