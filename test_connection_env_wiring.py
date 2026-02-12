@@ -30,12 +30,16 @@ def _stub_google_modules() -> None:
     discovery = types.ModuleType("googleapiclient.discovery")
     discovery.build = lambda *args, **kwargs: object()
     googleapiclient.discovery = discovery
+    errors = types.ModuleType("googleapiclient.errors")
+    errors.HttpError = type("HttpError", (Exception,), {"resp": None})
+    googleapiclient.errors = errors
 
     sys.modules["google"] = google
     sys.modules["google.oauth2"] = oauth2
     sys.modules["google.oauth2.service_account"] = service_account
     sys.modules["googleapiclient"] = googleapiclient
     sys.modules["googleapiclient.discovery"] = discovery
+    sys.modules["googleapiclient.errors"] = errors
 
 
 def _stub_secret_config_module() -> None:

@@ -190,9 +190,36 @@ create_secret "vuln-agent-sbom-data-backend"   "SBOM データソース (sheets/
 create_secret "vuln-agent-sbom-spreadsheet-id" "SBOM スプレッドシート ID"
 create_secret "vuln-agent-sbom-sheet-name"     "SBOM シート名"                             "SBOM"
 create_secret "vuln-agent-owner-sheet-name"    "担当者マッピング シート名"                  "担当者マッピング"
-create_secret "vuln-agent-chat-space-id"       "Google Chat スペース ID (spaces/xxx)"
+create_secret "vuln-agent-chat-space-id"       "Google Chat スペース ID (spaces/xxx形式)"
+
+# Chat Space ID のフォーマットを検証
+if gcloud secrets describe "vuln-agent-chat-space-id" --project="$PROJECT_ID" &>/dev/null; then
+  _chat_val=$(_sm_get vuln-agent-chat-space-id)
+  if [[ -n "$_chat_val" && ! "$_chat_val" =~ ^spaces/ ]]; then
+    warn "Chat Space ID が spaces/ で始まっていません: ${_chat_val}"
+    warn "spaces/${_chat_val} に修正して Secret Manager を更新します"
+    echo -n "spaces/${_chat_val}" | gcloud secrets versions add "vuln-agent-chat-space-id" \
+      --data-file=- --project="$PROJECT_ID"
+    info "vuln-agent-chat-space-id を spaces/${_chat_val} に修正しました"
+  fi
+fi
 create_secret "vuln-agent-gemini-api-key"      "Gemini API Key (Live Gateway 用)"
 create_secret "vuln-agent-bq-table-id"         "BigQuery テーブル ID (project.dataset.table、任意)"
+
+# Chat app 用のサービスアカウント鍵を自動生成・登録
+if ! gcloud secrets describe "vuln-agent-chat-sa-key" --project="$PROJECT_ID" &>/dev/null; then
+  info "Chat app 用の SA鍵を生成・登録します..."
+  _sa_key_file=$(mktemp)
+  gcloud iam service-accounts keys create "$_sa_key_file" \
+    --iam-account="$SA_EMAIL" --project="$PROJECT_ID"
+  gcloud secrets create "vuln-agent-chat-sa-key" \
+    --data-file="$_sa_key_file" --project="$PROJECT_ID"
+  rm -f "$_sa_key_file"
+  info "vuln-agent-chat-sa-key を作成しました"
+  info "Google Cloud Console > Chat API > 構成 で、このSA (${SA_EMAIL}) をChat appに設定してください"
+else
+  info "vuln-agent-chat-sa-key は既存です"
+fi
 
 info "Secret Manager 設定完了"
 
@@ -507,7 +534,9 @@ echo "  ────────────────────────
 echo "  1. SBOM スプレッドシートをサービスアカウントに共有:"
 echo "     ${SA_EMAIL}"
 echo "  2. Google Chat アプリを GCP Console で設定 (Chat API > 構成)"
-echo "  3. Web UI を開いて Live Gateway に接続:"
+echo "  3. Chat アプリを通知先スペースに追加 (スペース設定 > アプリと統合 > アプリを追加)"
+echo "     ※ 未追加の場合 403 権限エラーが発生します"
+echo "  4. Web UI を開いて Live Gateway に接続:"
 echo "     ${WEB_URL}"
 if [[ -n "${GATEWAY_URL:-}" ]]; then
   echo "     Gateway URL: wss://$(echo "$GATEWAY_URL" | sed 's|https://||')/ws"
