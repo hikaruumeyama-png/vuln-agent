@@ -45,8 +45,12 @@ def _get_gmail_service():
         logger.info("Gmail service cache expired, re-initializing")
         _gmail_service = None
 
-    oauth_token = os.environ.get("GMAIL_OAUTH_TOKEN")
-    gmail_user = os.environ.get("GMAIL_USER_EMAIL")
+    oauth_token = (os.environ.get("GMAIL_OAUTH_TOKEN") or "").strip()
+    gmail_user = (
+        os.environ.get("GMAIL_USER_EMAIL")
+        or os.environ.get("GOOGLE_WORKSPACE_USER_EMAIL")
+        or ""
+    ).strip()
 
     credentials = None
     auth_method = "unknown"

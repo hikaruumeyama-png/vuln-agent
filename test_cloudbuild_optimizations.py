@@ -17,6 +17,7 @@ class CloudBuildOptimizationTests(unittest.TestCase):
         self.assertIn("_CHANGED_FILES:", self.content)
         self.assertIn('${_FORCE_FULL_DEPLOY}', self.content)
         self.assertNotIn('${_FORCE_FULL_DEPLOY,,}', self.content)
+        self.assertIn("--secret=vuln-agent-gmail-user-email", self.content)
 
     def test_has_detect_changes_step(self):
         self.assertIn("id: detect-changes", self.content)

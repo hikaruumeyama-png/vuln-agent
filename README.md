@@ -501,6 +501,7 @@ echo -n "projects/xxx/locations/xxx/reasoningEngines/xxx" | \
 | シークレット名 | 用途 | 必須 |
 |---------------|------|------|
 | `vuln-agent-gmail-oauth-token` | Gmail OAuth トークン (Base64) | はい |
+| `vuln-agent-gmail-user-email` | Gmail ユーザーEmail（Workspace/ドメイン委任時） | いいえ |
 | `vuln-agent-sidfm-sender` | SIDfm 送信元メール | はい |
 | `vuln-agent-sbom-data-backend` | SBOM データソース (`sheets` / `bigquery` / `auto`) | いいえ (デフォルト: sheets) |
 | `vuln-agent-sbom-spreadsheet-id` | SBOM スプレッドシート ID | Sheets 利用時は必須 |
