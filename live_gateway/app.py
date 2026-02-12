@@ -2,6 +2,7 @@ import asyncio
 import base64
 import binascii
 import json
+import logging
 import os
 import time
 from typing import Any
@@ -40,6 +41,8 @@ TOOL_DISPLAY_MAP: dict[str, dict[str, str]] = {
     "create_jira_ticket_request": {"label": "Jiraチケットを作成中",      "icon": "clipboard"},
     "create_approval_request":  {"label": "承認リクエストを作成中",       "icon": "check-circle"},
 }
+
+logger = logging.getLogger(__name__)
 
 
 def _tool_display_message(tool_name: str) -> str:
@@ -100,14 +103,31 @@ async def _query_agent(
         user_id="live_gateway",
         message=message,
     ):
-        if hasattr(event, "content"):
-            content = event.content
-            if not isinstance(content, dict):
-                continue
-            for part in content.get("parts", []):
+        logger.info("Agent event type: %s", type(event))
+
+        if isinstance(event, dict):
+            content = event.get("content")
+        else:
+            content = getattr(event, "content", None)
+
+        if not content:
+            continue
+
+        if isinstance(content, dict):
+            parts = content.get("parts", [])
+        else:
+            parts = getattr(content, "parts", None)
+
+        if not parts:
+            continue
+
+        for part in parts:
+            if isinstance(part, dict):
                 if "text" in part:
                     chunks.append(part["text"])
-                elif "function_call" in part:
+                    continue
+
+                if "function_call" in part:
                     fc = part["function_call"]
                     tool_name = fc.get("name", "unknown")
                     await _safe_send(websocket, {
@@ -117,7 +137,9 @@ async def _query_agent(
                         "icon": _tool_display_icon(tool_name),
                         "message": _tool_display_message(tool_name),
                     })
-                elif "function_response" in part:
+                    continue
+
+                if "function_response" in part:
                     fr = part["function_response"]
                     tool_name = fr.get("name", "unknown")
                     status = "error" if _is_error_response(
@@ -132,6 +154,11 @@ async def _query_agent(
                         "status": status,
                         "message": f"{label} - {suffix}",
                     })
+                    continue
+
+            txt = getattr(part, "text", None)
+            if txt:
+                chunks.append(txt)
 
     await _safe_send(websocket, {
         "type": "agent_activity",
