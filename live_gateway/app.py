@@ -7,7 +7,7 @@ import os
 import time
 from typing import Any
 
-from fastapi import FastAPI, WebSocket, WebSocketDisconnect
+from fastapi import FastAPI, Request, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 import vertexai
 from vertexai import Client
@@ -44,6 +44,14 @@ TOOL_DISPLAY_MAP: dict[str, dict[str, str]] = {
 
 logger = logging.getLogger(__name__)
 
+HEALTHZ_HEADER_ALLOWLIST = {
+    "host",
+    "user-agent",
+    "x-forwarded-for",
+    "x-forwarded-proto",
+    "x-cloud-trace-context",
+}
+
 
 def _tool_display_message(tool_name: str) -> str:
     return TOOL_DISPLAY_MAP.get(tool_name, {}).get("label", f"{tool_name} を実行中")
@@ -51,6 +59,14 @@ def _tool_display_message(tool_name: str) -> str:
 
 def _tool_display_icon(tool_name: str) -> str:
     return TOOL_DISPLAY_MAP.get(tool_name, {}).get("icon", "wrench")
+
+
+def _safe_healthz_headers(request: Request) -> dict[str, str]:
+    return {
+        key: value
+        for key, value in request.headers.items()
+        if key.lower() in HEALTHZ_HEADER_ALLOWLIST
+    }
 
 
 def _is_error_response(response_data: Any) -> bool:
@@ -175,7 +191,13 @@ async def _query_agent(
 
 
 @app.get("/healthz")
-def healthz():
+def healthz(request: Request):
+    logger.info("healthz called headers=%s", _safe_healthz_headers(request))
+    return {"status": "ok"}
+
+
+@app.get("/ping")
+def ping():
     return {"status": "ok"}
 
 
