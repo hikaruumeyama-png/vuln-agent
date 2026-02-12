@@ -18,6 +18,11 @@ from typing import Any
 
 from googleapiclient.discovery import build
 
+try:
+    from .secret_config import get_config_value
+except ImportError:
+    from secret_config import get_config_value
+
 logger = logging.getLogger(__name__)
 
 # Gmail APIサービスのキャッシュ
@@ -45,12 +50,16 @@ def _get_gmail_service():
         logger.info("Gmail service cache expired, re-initializing")
         _gmail_service = None
 
-    oauth_token = (os.environ.get("GMAIL_OAUTH_TOKEN") or "").strip()
-    gmail_user = (
-        os.environ.get("GMAIL_USER_EMAIL")
-        or os.environ.get("GOOGLE_WORKSPACE_USER_EMAIL")
-        or ""
-    ).strip()
+    oauth_token = get_config_value(
+        ["GMAIL_OAUTH_TOKEN"],
+        secret_name="vuln-agent-gmail-oauth-token",
+        default="",
+    )
+    gmail_user = get_config_value(
+        ["GMAIL_USER_EMAIL", "GOOGLE_WORKSPACE_USER_EMAIL"],
+        secret_name="vuln-agent-gmail-user-email",
+        default="",
+    )
 
     credentials = None
     auth_method = "unknown"
