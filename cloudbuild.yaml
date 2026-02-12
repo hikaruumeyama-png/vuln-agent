@@ -39,7 +39,8 @@ steps:
         DEPLOY_SCHEDULER=false
         DEPLOY_WEB=false
 
-        full_deploy="${_FORCE_FULL_DEPLOY,,}"
+        full_deploy_raw="${_FORCE_FULL_DEPLOY}"
+        full_deploy="$(printf '%s' "$$full_deploy_raw" | tr '[:upper:]' '[:lower:]')"
         changed_files_raw="${_CHANGED_FILES}"
 
         # 手動指定があれば _CHANGED_FILES を優先。未指定時は git diff で推定。
