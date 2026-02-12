@@ -129,6 +129,7 @@ steps:
         echo "[Step 1/5] Secret Manager から .env を生成します"
         cat > agent/.env <<EOF
         GMAIL_OAUTH_TOKEN=$(gcloud secrets versions access latest --secret=vuln-agent-gmail-oauth-token 2>/dev/null || echo '')
+        GMAIL_USER_EMAIL=$(gcloud secrets versions access latest --secret=vuln-agent-gmail-user-email 2>/dev/null || echo '')
         SIDFM_SENDER_EMAIL=$(gcloud secrets versions access latest --secret=vuln-agent-sidfm-sender 2>/dev/null || echo 'noreply@sidfm.com')
         SBOM_DATA_BACKEND=$(gcloud secrets versions access latest --secret=vuln-agent-sbom-data-backend 2>/dev/null || echo 'sheets')
         SBOM_SPREADSHEET_ID=$(gcloud secrets versions access latest --secret=vuln-agent-sbom-spreadsheet-id 2>/dev/null || echo '')

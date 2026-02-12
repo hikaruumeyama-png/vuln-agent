@@ -77,7 +77,13 @@ def _get_chat_service():
 def _resolve_space_id(space_id: str | None = None) -> str | None:
     """スペースIDを解決する。未設定時はNoneを返す。"""
     if not space_id:
-        space_id = os.environ.get("DEFAULT_CHAT_SPACE_ID", "")
+        space_id = (
+            os.environ.get("DEFAULT_CHAT_SPACE_ID")
+            or os.environ.get("CHAT_SPACE_ID")
+            or os.environ.get("GOOGLE_CHAT_SPACE_ID")
+            or ""
+        )
+    space_id = space_id.strip()
     if not space_id:
         return None
     if not space_id.startswith("spaces/"):
