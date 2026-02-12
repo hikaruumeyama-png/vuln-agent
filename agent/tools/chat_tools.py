@@ -13,6 +13,7 @@ from datetime import datetime, timedelta
 
 from google.oauth2 import service_account
 from googleapiclient.discovery import build
+from googleapiclient.errors import HttpError
 
 try:
     from .secret_config import get_config_value
@@ -82,6 +83,24 @@ def _get_chat_service():
     _chat_service = build("chat", "v1", credentials=credentials)
     _chat_service_timestamp = current_time
     return _chat_service
+
+
+def _format_http_error(error: HttpError, space_id: str | None = None) -> str:
+    """HttpErrorを日本語のアクション可能なメッセージに変換する。"""
+    status = error.resp.status if hasattr(error, "resp") else 0
+    if status == 403:
+        return (
+            f"403 権限エラー: Chat appがスペース ({space_id}) へのアクセス権を持っていません。"
+            " 以下を確認してください:"
+            " (1) Google Cloud Console > Chat API > 構成 でアプリが設定済みか"
+            " (2) 対象スペースにChat appがメンバーとして追加されているか"
+            " (3) サービスアカウントがChat appに紐づいているか"
+        )
+    if status == 404:
+        return f"404 エラー: スペース ({space_id}) が見つかりません。スペースIDを確認してください。"
+    if status == 401:
+        return "401 認証エラー: 認証情報が無効です。GOOGLE_APPLICATION_CREDENTIALS を確認してください。"
+    return str(error)
 
 
 def _resolve_space_id(space_id: str | None = None) -> str | None:
@@ -211,6 +230,10 @@ def send_vulnerability_alert(
 
         return result
 
+    except HttpError as http_err:
+        msg = _format_http_error(http_err, resolved_space if "resolved_space" in dir() else space_id)
+        logger.error(f"Chat API HttpError: space={space_id}, vuln={vulnerability_id}, error={msg}")
+        return {"status": "error", "message": msg, "vulnerability_id": vulnerability_id}
     except Exception as e:
         logger.error(f"Chat API 送信失敗: space={space_id}, vuln={vulnerability_id}, error={e}")
         return {"status": "error", "message": str(e), "vulnerability_id": vulnerability_id}
@@ -242,6 +265,10 @@ def send_simple_message(message: str, space_id: str | None = None) -> dict[str, 
         logger.info(f"Chat メッセージ送信成功: space={resolved_space}")
         return {"status": "sent", "message_id": response.get("name")}
 
+    except HttpError as http_err:
+        msg = _format_http_error(http_err, resolved_space if "resolved_space" in dir() else space_id)
+        logger.error(f"Chat API HttpError: space={space_id}, error={msg}")
+        return {"status": "error", "message": msg}
     except Exception as e:
         logger.error(f"Chat メッセージ送信失敗: space={space_id}, error={e}")
         return {"status": "error", "message": str(e)}
@@ -347,6 +374,10 @@ def check_chat_connection(space_id: str | None = None) -> dict[str, Any]:
             "member_count": space.get("membershipCount", 0),
         }
 
+    except HttpError as http_err:
+        msg = _format_http_error(http_err, resolved_space if "resolved_space" in dir() else space_id)
+        logger.error(f"Chat connection check HttpError: space={space_id}, error={msg}")
+        return {"status": "error", "message": msg}
     except Exception as e:
         logger.error(f"Chat connection check failed: space={space_id}, error={e}")
         return {
@@ -392,6 +423,10 @@ def list_space_members(space_id: str | None = None) -> dict[str, Any]:
             "count": len(member_list),
         }
 
+    except HttpError as http_err:
+        msg = _format_http_error(http_err, resolved_space if "resolved_space" in dir() else space_id)
+        logger.error(f"List members HttpError: space={space_id}, error={msg}")
+        return {"status": "error", "message": msg}
     except Exception as e:
         logger.error(f"Failed to list members: space={space_id}, error={e}")
         return {"status": "error", "message": str(e)}

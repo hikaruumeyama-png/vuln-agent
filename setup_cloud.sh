@@ -519,7 +519,9 @@ echo "  ────────────────────────
 echo "  1. SBOM スプレッドシートをサービスアカウントに共有:"
 echo "     ${SA_EMAIL}"
 echo "  2. Google Chat アプリを GCP Console で設定 (Chat API > 構成)"
-echo "  3. Web UI を開いて Live Gateway に接続:"
+echo "  3. Chat アプリを通知先スペースに追加 (スペース設定 > アプリと統合 > アプリを追加)"
+echo "     ※ 未追加の場合 403 権限エラーが発生します"
+echo "  4. Web UI を開いて Live Gateway に接続:"
 echo "     ${WEB_URL}"
 if [[ -n "${GATEWAY_URL:-}" ]]; then
   echo "     Gateway URL: wss://$(echo "$GATEWAY_URL" | sed 's|https://||')/ws"
