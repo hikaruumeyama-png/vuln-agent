@@ -103,7 +103,7 @@ async def _query_agent(
         user_id="live_gateway",
         message=message,
     ):
-        logger.info("Agent event type: %s", type(event))
+        logger.debug("Agent event type: %s", type(event))
 
         if isinstance(event, dict):
             content = event.get("content")
