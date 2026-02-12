@@ -15,6 +15,8 @@ class CloudBuildOptimizationTests(unittest.TestCase):
         self.assertIn("_ADK_BUILDER_IMAGE:", self.content)
         self.assertIn("_FORCE_FULL_DEPLOY:", self.content)
         self.assertIn("_CHANGED_FILES:", self.content)
+        self.assertIn('${_FORCE_FULL_DEPLOY}', self.content)
+        self.assertNotIn('${_FORCE_FULL_DEPLOY,,}', self.content)
 
     def test_has_detect_changes_step(self):
         self.assertIn("id: detect-changes", self.content)
