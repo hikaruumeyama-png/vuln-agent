@@ -1,4 +1,5 @@
 from pathlib import Path
+import re
 import unittest
 
 
@@ -25,6 +26,10 @@ class CloudBuildOptimizationTests(unittest.TestCase):
         self.assertIn("live_gateway/*)", self.content)
         self.assertIn("scheduler/*)", self.content)
         self.assertIn("web/*)", self.content)
+        self.assertIsNone(re.search(r"(?<!\$)\$\{BEFORE_SHA", self.content))
+        self.assertIsNone(re.search(r"(?<!\$)\$\{COMMIT_SHA", self.content))
+        self.assertIn("$${BEFORE_SHA:-}", self.content)
+        self.assertIn("$${COMMIT_SHA:-}", self.content)
 
     def test_agent_step_uses_adk_builder_and_skip_guard(self):
         self.assertIn('- name: "${_ADK_BUILDER_IMAGE}"', self.content)

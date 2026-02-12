@@ -44,10 +44,10 @@ steps:
 
         # 手動指定があれば _CHANGED_FILES を優先。未指定時は git diff で推定。
         if [ -z "$$changed_files_raw" ] && [ -d .git ] \
-          && [ -n "${BEFORE_SHA:-}" ] && [ -n "${COMMIT_SHA:-}" ]; then
+          && [ -n "$${BEFORE_SHA:-}" ] && [ -n "$${COMMIT_SHA:-}" ]; then
           zeros="0000000000000000000000000000000000000000"
-          if [ "${BEFORE_SHA}" != "$$zeros" ] && [ "${BEFORE_SHA}" != "${COMMIT_SHA}" ]; then
-            changed_files_raw="$(git diff --name-only "${BEFORE_SHA}" "${COMMIT_SHA}" || true)"
+          if [ "$$BEFORE_SHA" != "$$zeros" ] && [ "$$BEFORE_SHA" != "$$COMMIT_SHA" ]; then
+            changed_files_raw="$(git diff --name-only "$$BEFORE_SHA" "$$COMMIT_SHA" || true)"
           fi
         fi
 
