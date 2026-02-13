@@ -37,7 +37,7 @@ const PAUSE_TRIGGER_MS = 650;
 const MAX_RENDERED_MESSAGES = 200;
 const HEALTH_PING_INTERVAL_MS = 30000;
 const GATEWAY_URL_STORAGE_KEY = "vuln_agent_gateway_url";
-const GREETING_UNLOCK_TIMEOUT_MS = 7000;
+const GREETING_UNLOCK_TIMEOUT_MS = 12000;
 
 // ── State ───────────────────────────────────────────────
 let socket = null;
@@ -63,6 +63,7 @@ let audioCaptureNode = null;
 let currentActivityRequestId = null;
 let awaitingAgentGreeting = false;
 let greetingUnlockTimerId = null;
+let hasReceivedGreetingAudio = false;
 let overlayRafId = null;
 let orbEnergy = 0;
 
@@ -508,6 +509,7 @@ async function stopAudioCapture(sendLiveStop = false) {
   processor = null;
   audioCaptureNode = null;
   awaitingAgentGreeting = false;
+  hasReceivedGreetingAudio = false;
   clearGreetingUnlockTimer();
   setOverlayVisible(false);
   mediaStream = null;
@@ -753,6 +755,7 @@ connectButton.addEventListener("click", () => {
       if (payload.type === "agent_response") {
         hideThinking();
         setRequestInFlight(false);
+        markThinkingComplete(true);
         updateActivityHeader(payload.request_id || currentActivityRequestId, null, "Response ready");
         if (!isLiveSessionActive) {
           appendMessage(payload.text || "(no response)", "agent");
@@ -766,6 +769,9 @@ connectButton.addEventListener("click", () => {
       }
 
       if (payload.type === "live_audio") {
+        if (awaitingAgentGreeting) {
+          hasReceivedGreetingAudio = true;
+        }
         setMode("speaking");
         playAudio(payload.audio, payload.mime_type);
         return;
@@ -782,6 +788,7 @@ connectButton.addEventListener("click", () => {
         } else if (payload.status === "stopped") {
           isLiveSessionActive = false;
           awaitingAgentGreeting = false;
+          hasReceivedGreetingAudio = false;
           clearGreetingUnlockTimer();
           setOverlayVisible(false);
           resetLiveTextBubble();
@@ -817,6 +824,7 @@ connectButton.addEventListener("click", () => {
     hasSocketError = false;
     isLiveSessionActive = false;
     awaitingAgentGreeting = false;
+    hasReceivedGreetingAudio = false;
     clearGreetingUnlockTimer();
     setRequestInFlight(false);
     resetLiveTextBubble();
@@ -866,11 +874,14 @@ startAudioButton.addEventListener("click", async () => {
     await audioContext.resume();
     const source = audioContext.createMediaStreamSource(mediaStream);
     awaitingAgentGreeting = true;
+    hasReceivedGreetingAudio = false;
     setOverlayVisible(true);
     setVoiceSessionLabel("Agent Greeting...");
     clearGreetingUnlockTimer();
     greetingUnlockTimerId = window.setTimeout(() => {
-      unlockGreetingAndListening(false, true);
+      if (!hasReceivedGreetingAudio) {
+        unlockGreetingAndListening(false, true);
+      }
     }, GREETING_UNLOCK_TIMEOUT_MS);
     appendMessage("エージェントが先に話しかけます。応答準備をしてください。", "system");
     setMode("awaiting-greeting");
