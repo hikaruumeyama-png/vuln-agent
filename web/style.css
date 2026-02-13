@@ -483,6 +483,7 @@ body {
 /* ── Chat Input Form ─────────────────────────── */
 .chat-input-form {
   display: flex;
+  align-items: flex-end;
   gap: 10px;
   padding-top: 10px;
   border-top: 1px solid var(--border-primary);
@@ -490,19 +491,27 @@ body {
 
 .chat-input-form textarea {
   flex: 1;
+  width: 100%;
+  min-width: 0;
   padding: 12px 14px;
   border-radius: var(--radius-md);
   border: 1px solid var(--border-primary);
   background: var(--bg-input);
   color: var(--text-primary);
+  appearance: none;
+  -webkit-appearance: none;
   font-family: var(--font-family);
   font-size: var(--font-sm);
   line-height: 1.4;
-  min-height: 44px;
+  min-height: 46px;
   max-height: 180px;
-  resize: vertical;
+  resize: none;
   overflow-y: auto;
   transition: border-color var(--transition-fast);
+}
+
+.chat-input-form textarea::placeholder {
+  color: var(--text-muted);
 }
 
 .chat-input-form textarea:focus {

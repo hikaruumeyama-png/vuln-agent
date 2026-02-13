@@ -500,6 +500,16 @@ stopAudioButton.addEventListener("click", async () => {
 });
 
 // ── Chat Form ───────────────────────────────────────────
+function resizeChatInput() {
+  chatInput.style.height = "auto";
+  const maxHeight = 180;
+  const nextHeight = Math.min(chatInput.scrollHeight, maxHeight);
+  chatInput.style.height = `${nextHeight}px`;
+  chatInput.style.overflowY = chatInput.scrollHeight > maxHeight ? "auto" : "hidden";
+}
+
+chatInput.addEventListener("input", resizeChatInput);
+
 chatInput.addEventListener("keydown", (event) => {
   if (event.isComposing || event.keyCode === 229) return;
   if (event.key !== "Enter") return;
@@ -521,6 +531,7 @@ chatForm.addEventListener("submit", (event) => {
   appendMessage(message, "user");
   socket.send(JSON.stringify({ type: "user_text", text: message }));
   chatInput.value = "";
+  resizeChatInput();
   resetLiveTextBubble();
 });
 
@@ -566,4 +577,5 @@ function playAudio(base64Audio, mimeType) {
 // ── Initialize ──────────────────────────────────────────
 setStatus(false, "Disconnected");
 setMode("idle");
+resizeChatInput();
 renderIcons();
