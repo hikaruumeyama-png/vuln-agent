@@ -103,6 +103,8 @@ class ConnectionEnvWiringTests(unittest.TestCase):
         self.assertIn("pubsub.googleapis.com", self.setup_cloud_source)
         self.assertIn("vuln-agent-gmail-trigger", self.setup_cloud_source)
         self.assertIn("vuln-agent-gmail-watch-refresh", self.setup_cloud_source)
+        self.assertIn("vuln-agent-chat-webhook", self.setup_cloud_source)
+        self.assertIn("vuln-agent-chat-verification-token", self.setup_cloud_source)
 
 
 if __name__ == "__main__":

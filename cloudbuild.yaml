@@ -38,6 +38,7 @@ steps:
         DEPLOY_GATEWAY=false
         DEPLOY_SCHEDULER=false
         DEPLOY_GMAIL_TRIGGER=false
+        DEPLOY_CHAT_WEBHOOK=false
         DEPLOY_WEB=false
 
         full_deploy_raw="${_FORCE_FULL_DEPLOY}"
@@ -58,6 +59,7 @@ steps:
           DEPLOY_GATEWAY=true
           DEPLOY_SCHEDULER=true
           DEPLOY_GMAIL_TRIGGER=true
+          DEPLOY_CHAT_WEBHOOK=true
           DEPLOY_WEB=true
           echo "強制フルデプロイを有効化しました。"
         elif [ -z "$$changed_files_raw" ]; then
@@ -65,6 +67,7 @@ steps:
           DEPLOY_GATEWAY=true
           DEPLOY_SCHEDULER=true
           DEPLOY_GMAIL_TRIGGER=true
+          DEPLOY_CHAT_WEBHOOK=true
           DEPLOY_WEB=true
           echo "変更ファイルを判定できないため安全側で全デプロイを実行します。"
         else
@@ -84,6 +87,9 @@ steps:
               gmail_trigger/*)
                 DEPLOY_GMAIL_TRIGGER=true
                 ;;
+              chat_webhook/*)
+                DEPLOY_CHAT_WEBHOOK=true
+                ;;
               web/*)
                 DEPLOY_WEB=true
                 ;;
@@ -101,6 +107,7 @@ steps:
             DEPLOY_GATEWAY=true
             DEPLOY_SCHEDULER=true
             DEPLOY_GMAIL_TRIGGER=true
+            DEPLOY_CHAT_WEBHOOK=true
             DEPLOY_WEB=true
             echo "共通または未知パスの変更を検知したため全デプロイを実行します。"
           fi
@@ -111,6 +118,7 @@ steps:
         DEPLOY_GATEWAY=$$DEPLOY_GATEWAY
         DEPLOY_SCHEDULER=$$DEPLOY_SCHEDULER
         DEPLOY_GMAIL_TRIGGER=$$DEPLOY_GMAIL_TRIGGER
+        DEPLOY_CHAT_WEBHOOK=$$DEPLOY_CHAT_WEBHOOK
         DEPLOY_WEB=$$DEPLOY_WEB
         EOF
 
@@ -418,7 +426,50 @@ steps:
       - deploy-agent
 
   # =========================================
-  # Step 6: Web UI を Cloud Storage にデプロイ
+  # Step 6: Chat Webhook を Cloud Functions にデプロイ
+  # =========================================
+  - name: "gcr.io/google.com/cloudsdktool/cloud-sdk"
+    id: deploy-chat-webhook
+    entrypoint: bash
+    args:
+      - "-c"
+      - |
+        set -euo pipefail
+        if [ -f /workspace/.deploy_flags ]; then
+          source /workspace/.deploy_flags
+        fi
+        if [ "${DEPLOY_CHAT_WEBHOOK:-true}" != "true" ]; then
+          echo "[Step 6/7] Chat Webhook が対象外のためデプロイをスキップします"
+          exit 0
+        fi
+        echo "[Step 6/7] Chat Webhook デプロイ条件を確認します"
+        if ! gcloud secrets describe vuln-agent-resource-name >/dev/null 2>&1; then
+          echo "エラー: vuln-agent-resource-name シークレットが存在しません。"
+          echo "初回セットアップ (setup_cloud.sh) を先に実行してください。"
+          exit 1
+        fi
+        chat_verify_token="$(gcloud secrets versions access latest --secret=vuln-agent-chat-verification-token 2>/dev/null || echo '')"
+        echo "[Step 6/7] Chat Webhook を Cloud Functions にデプロイします"
+        gcloud functions deploy vuln-agent-chat-webhook \
+          --gen2 \
+          --runtime=python312 \
+          --region=${_REGION} \
+          --source=chat_webhook \
+          --entry-point=handle_chat_event \
+          --trigger-http \
+          --allow-unauthenticated \
+          --service-account=vuln-agent-sa@${PROJECT_ID}.iam.gserviceaccount.com \
+          --update-env-vars="GCP_PROJECT_ID=${PROJECT_ID},GCP_LOCATION=${_REGION},CHAT_WEBHOOK_VERIFICATION_TOKEN=$$chat_verify_token" \
+          --remove-env-vars="AGENT_RESOURCE_NAME" \
+          --set-secrets="AGENT_RESOURCE_NAME=vuln-agent-resource-name:latest" \
+          --memory=512MB \
+          --timeout=540s \
+          --quiet
+    waitFor:
+      - deploy-agent
+
+  # =========================================
+  # Step 7: Web UI を Cloud Storage にデプロイ
   # =========================================
   - name: "gcr.io/cloud-builders/gsutil"
     id: deploy-web-ui
@@ -431,10 +482,10 @@ steps:
           source /workspace/.deploy_flags
         fi
         if [ "${DEPLOY_WEB:-true}" != "true" ]; then
-          echo "[Step 6/6] Web UI が対象外のためデプロイをスキップします"
+          echo "[Step 7/7] Web UI が対象外のためデプロイをスキップします"
           exit 0
         fi
-        echo "[Step 6/6] Web UI を Cloud Storage にデプロイします"
+        echo "[Step 7/7] Web UI を Cloud Storage にデプロイします"
         BUCKET=gs://${PROJECT_ID}-vuln-agent-ui
         gsutil mb -p ${PROJECT_ID} -l ${_REGION} $$BUCKET 2>/dev/null || true
         gsutil web set -m index.html -e index.html $$BUCKET

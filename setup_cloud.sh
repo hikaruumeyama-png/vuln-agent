@@ -192,6 +192,7 @@ create_secret "vuln-agent-sbom-spreadsheet-id" "SBOM スプレッドシート ID
 create_secret "vuln-agent-sbom-sheet-name"     "SBOM シート名"                             "SBOM"
 create_secret "vuln-agent-owner-sheet-name"    "担当者マッピング シート名"                  "担当者マッピング"
 create_secret "vuln-agent-chat-space-id"       "Google Chat スペース ID (spaces/xxx形式)"
+create_secret "vuln-agent-chat-verification-token" "Google Chat Webhook 検証トークン（任意）"
 
 # Chat Space ID のフォーマットを検証
 if gcloud secrets describe "vuln-agent-chat-space-id" --project="$PROJECT_ID" &>/dev/null; then
@@ -417,15 +418,15 @@ fi
 rm -f agent/.env
 
 # ====================================================
-# 7. Live Gateway / Scheduler / Gmail Trigger のデプロイ
+# 7. Live Gateway / Scheduler / Gmail Trigger / Chat Webhook のデプロイ
 # ====================================================
-step "7/8: Live Gateway / Scheduler / Gmail Trigger をデプロイしています..."
+step "7/8: Live Gateway / Scheduler / Gmail Trigger / Chat Webhook をデプロイしています..."
 
 if [[ -n "$AGENT_RESOURCE_NAME" ]]; then
   info "Agent Engine の存在を確認しています..."
   if ! _wait_engine_ready "$AGENT_RESOURCE_NAME"; then
     err "Agent Resource Name が無効です（ReasoningEngine が存在しません）: ${AGENT_RESOURCE_NAME}"
-    err "Live Gateway / Scheduler / Gmail Trigger のデプロイを中止します。"
+    err "Live Gateway / Scheduler / Gmail Trigger / Chat Webhook のデプロイを中止します。"
     exit 1
   fi
 
@@ -611,8 +612,38 @@ if [[ -n "$AGENT_RESOURCE_NAME" ]]; then
   else
     warn "ID トークン取得に失敗したため Gmail watch 初期登録をスキップしました"
   fi
+
+  # --- Google Chat Webhook (mention conversation) ---
+  CHAT_WEBHOOK_FUNCTION="vuln-agent-chat-webhook"
+  info "Google Chat Webhook を Cloud Functions にデプロイ中..."
+  if ! gcloud functions deploy "$CHAT_WEBHOOK_FUNCTION" \
+    --gen2 \
+    --runtime=python312 \
+    --region="$REGION" \
+    --project="$PROJECT_ID" \
+    --source=chat_webhook \
+    --entry-point=handle_chat_event \
+    --trigger-http \
+    --allow-unauthenticated \
+    --service-account="$SA_EMAIL" \
+    --update-env-vars="GCP_PROJECT_ID=${PROJECT_ID},GCP_LOCATION=${REGION},CHAT_WEBHOOK_VERIFICATION_TOKEN=$(_sm_get vuln-agent-chat-verification-token)" \
+    --remove-env-vars="AGENT_RESOURCE_NAME" \
+    --set-secrets="AGENT_RESOURCE_NAME=vuln-agent-resource-name:latest" \
+    --memory=512MB \
+    --timeout=540s \
+    --quiet; then
+    err "Google Chat Webhook のデプロイに失敗しました"
+    exit 1
+  fi
+
+  CHAT_WEBHOOK_URL=$(gcloud functions describe "$CHAT_WEBHOOK_FUNCTION" \
+    --region="$REGION" --project="$PROJECT_ID" --format='value(serviceConfig.uri)')
+  info "Google Chat Webhook: ${CHAT_WEBHOOK_URL}"
+
+  info "Chat API > 構成 のアプリURLに以下を設定してください:"
+  info "  ${CHAT_WEBHOOK_URL}"
 else
-  warn "Agent Resource Name が不明のため、Live Gateway / Scheduler / Gmail Trigger のデプロイをスキップしました"
+  warn "Agent Resource Name が不明のため、Live Gateway / Scheduler / Gmail Trigger / Chat Webhook のデプロイをスキップしました"
 fi
 
 # ====================================================
@@ -642,6 +673,7 @@ echo "  Live Gateway   : ${GATEWAY_URL:-'(スキップ)'}"
 echo "  Scheduler      : ${FUNCTION_URL:-'(スキップ)'}"
 echo "  Gmail Trigger  : ${GMAIL_TRIGGER_FUNCTION:-'(スキップ)'}"
 echo "  Watch Refresh  : ${GMAIL_WATCH_REFRESH_URL:-'(スキップ)'}"
+echo "  Chat Webhook   : ${CHAT_WEBHOOK_URL:-'(スキップ)'}"
 echo "  Web UI         : ${WEB_URL}"
 echo ""
 echo "  次のステップ:"
