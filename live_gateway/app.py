@@ -309,16 +309,38 @@ async def websocket_endpoint(websocket: WebSocket):
         live_task = asyncio.create_task(_stream())
 
         async def _greeting():
-            tts_client = GeminiLiveClient()
-            async for response in tts_client.stream_text("こんにちは。要件を教えてください。"):
-                if response.text:
-                    await _safe_send(websocket, {"type": "live_text", "text": response.text})
-                if response.audio_bytes:
+            greeting_text = "こんにちは。要件を教えてください。"
+            sent_audio = False
+            sent_text = False
+            try:
+                tts_client = GeminiLiveClient()
+                async for response in tts_client.stream_text(greeting_text):
+                    if response.text:
+                        sent_text = True
+                        await _safe_send(websocket, {"type": "live_text", "text": response.text})
+                    if response.audio_bytes:
+                        sent_audio = True
+                        await _safe_send(websocket, {
+                            "type": "live_audio",
+                            "audio": base64.b64encode(response.audio_bytes).decode("utf-8"),
+                            "mime_type": response.mime_type or "audio/pcm",
+                        })
+                if not sent_text:
+                    await _safe_send(websocket, {"type": "live_text", "text": greeting_text})
+                if not sent_audio:
                     await _safe_send(websocket, {
-                        "type": "live_audio",
-                        "audio": base64.b64encode(response.audio_bytes).decode("utf-8"),
-                        "mime_type": response.mime_type or "audio/pcm",
+                        "type": "live_status",
+                        "status": "greeting_no_audio",
+                        "text": greeting_text,
                     })
+            except Exception as exc:
+                logger.exception("Greeting TTS failed: %s", exc)
+                await _safe_send(websocket, {"type": "live_text", "text": greeting_text})
+                await _safe_send(websocket, {
+                    "type": "live_status",
+                    "status": "greeting_error",
+                    "text": greeting_text,
+                })
 
         greeting_task = asyncio.create_task(_greeting())
 
