@@ -53,6 +53,19 @@ class HealthEndpointTests(unittest.TestCase):
         self.assertIn("request.headers.items()", source)
         self.assertIn("key.lower()", source)
 
+    def test_query_agent_emits_request_id_and_progress(self):
+        source = APP_FILE.read_text(encoding="utf-8")
+        self.assertIn('"request_id": request_id', source)
+        self.assertIn('"progress": {', source)
+        self.assertIn('"total_tool_calls": total_tool_calls', source)
+        self.assertIn('"completed_tool_calls": completed_tool_calls', source)
+
+    def test_error_detail_helper_exists(self):
+        source = APP_FILE.read_text(encoding="utf-8")
+        self.assertIn("def _extract_error_detail", source)
+        self.assertIn('for field in direct_fields', source)
+        self.assertIn('for container_key in ("error", "result", "response")', source)
+
 
 if __name__ == "__main__":
     unittest.main()

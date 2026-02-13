@@ -110,6 +110,7 @@ body {
 .header-right {
   display: flex;
   align-items: center;
+  gap: 12px;
 }
 
 /* ── Connection Badge ────────────────────────── */
@@ -140,6 +141,13 @@ body {
 .connection-label {
   color: var(--text-secondary);
   font-weight: 500;
+}
+
+.connection-metrics {
+  display: flex;
+  gap: 10px;
+  font-size: var(--font-xs);
+  color: var(--text-muted);
 }
 
 /* ── Connection Bar ──────────────────────────── */
@@ -318,6 +326,15 @@ body {
   margin-left: auto;
 }
 
+.activity-meta {
+  margin-left: auto;
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  font-size: var(--font-xs);
+  color: var(--text-muted);
+}
+
 /* ── Chat Panel ──────────────────────────────── */
 .chat-panel {
   display: flex;
@@ -483,6 +500,7 @@ body {
 /* ── Chat Input Form ─────────────────────────── */
 .chat-input-form {
   display: flex;
+  align-items: flex-end;
   gap: 10px;
   padding-top: 10px;
   border-top: 1px solid var(--border-primary);
@@ -490,24 +508,68 @@ body {
 
 .chat-input-form textarea {
   flex: 1;
+  width: 100%;
+  min-width: 0;
   padding: 12px 14px;
   border-radius: var(--radius-md);
   border: 1px solid var(--border-primary);
   background: var(--bg-input);
   color: var(--text-primary);
+  appearance: none;
+  -webkit-appearance: none;
   font-family: var(--font-family);
   font-size: var(--font-sm);
   line-height: 1.4;
-  min-height: 44px;
+  min-height: 46px;
   max-height: 180px;
-  resize: vertical;
+  resize: none;
   overflow-y: auto;
   transition: border-color var(--transition-fast);
+}
+
+.chat-input-form textarea::placeholder {
+  color: var(--text-muted);
 }
 
 .chat-input-form textarea:focus {
   outline: none;
   border-color: var(--border-accent);
+}
+
+/* ── Toast ───────────────────────────────────── */
+.toast-container {
+  position: fixed;
+  top: 16px;
+  right: 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  z-index: 1000;
+}
+
+.toast {
+  min-width: 260px;
+  max-width: min(420px, calc(100vw - 32px));
+  padding: 10px 12px;
+  border-radius: var(--radius-md);
+  border: 1px solid var(--border-primary);
+  background: var(--bg-surface);
+  color: var(--text-primary);
+  box-shadow: var(--shadow-md);
+  animation: slide-in-right var(--transition-base);
+  font-size: var(--font-sm);
+}
+
+.toast.toast-error {
+  border-color: rgba(239, 68, 68, 0.45);
+}
+
+.toast.toast-warning {
+  border-color: rgba(245, 158, 11, 0.45);
+}
+
+.toast.toast-success {
+  border-color: rgba(34, 197, 94, 0.45);
 }
 
 /* ── Activity Panel ──────────────────────────── */
@@ -653,6 +715,13 @@ body {
   margin-top: 2px;
 }
 
+.activity-detail {
+  margin-top: 4px;
+  font-size: var(--font-xs);
+  color: #fca5a5;
+  word-break: break-word;
+}
+
 .activity-status {
   display: flex;
   align-items: center;
@@ -737,14 +806,20 @@ body {
 
 /* ── Responsive ──────────────────────────────── */
 @media (max-width: 900px) {
+  .app-layout {
+    min-height: 100dvh;
+  }
+
   .main-content {
     grid-template-columns: 1fr;
     padding: 12px 12px 20px;
+    padding-bottom: calc(20px + env(safe-area-inset-bottom));
   }
 
   .chat-panel {
     margin-right: 0;
     margin-bottom: 12px;
+    max-height: calc(100dvh - 210px);
   }
 
   .connection-form {
@@ -757,6 +832,25 @@ body {
 
   .app-header {
     padding: 12px 16px;
+    align-items: flex-start;
+    gap: 8px;
+    flex-direction: column;
+  }
+
+  .header-right {
+    width: 100%;
+    justify-content: space-between;
+    gap: 8px;
+    flex-wrap: wrap;
+  }
+
+  .activity-meta {
+    order: 3;
+    width: 100%;
+    margin-left: 0;
+    justify-content: flex-start;
+    flex-wrap: wrap;
+    gap: 6px 10px;
   }
 
   .connection-bar {
@@ -764,10 +858,29 @@ body {
   }
 
   .messages-area {
-    max-height: 50vh;
+    max-height: none;
+    min-height: 200px;
   }
 
   .activity-feed {
     max-height: 40vh;
+  }
+
+  .chat-input-form {
+    position: sticky;
+    bottom: 0;
+    background: var(--bg-secondary);
+    padding-bottom: calc(8px + env(safe-area-inset-bottom));
+    z-index: 2;
+  }
+
+  .toast-container {
+    top: 12px;
+    right: 12px;
+    left: 12px;
+  }
+
+  .toast {
+    max-width: 100%;
   }
 }

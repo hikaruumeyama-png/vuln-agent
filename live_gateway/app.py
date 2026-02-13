@@ -5,6 +5,7 @@ import json
 import logging
 import os
 import time
+import uuid
 from typing import Any
 
 from fastapi import FastAPI, Request, WebSocket, WebSocketDisconnect
@@ -75,6 +76,28 @@ def _is_error_response(response_data: Any) -> bool:
     )
 
 
+def _extract_error_detail(response_data: Any) -> str | None:
+    if not isinstance(response_data, dict):
+        return None
+
+    direct_fields = ("message", "error", "detail", "reason")
+    for field in direct_fields:
+        value = response_data.get(field)
+        if isinstance(value, str) and value.strip():
+            return value.strip()
+
+    for container_key in ("error", "result", "response"):
+        container = response_data.get(container_key)
+        if not isinstance(container, dict):
+            continue
+        for field in direct_fields:
+            value = container.get(field)
+            if isinstance(value, str) and value.strip():
+                return value.strip()
+
+    return None
+
+
 async def _safe_send(websocket: WebSocket, data: dict[str, Any]) -> None:
     """Send JSON via WebSocket, silently ignoring disconnection errors."""
     try:
@@ -106,13 +129,21 @@ async def _query_agent(
 ) -> dict[str, Any]:
     app_client = client.agent_engines.get(name=AGENT_RESOURCE_NAME)
     chunks: list[str] = []
+    request_id = f"req-{uuid.uuid4().hex[:10]}"
+    total_tool_calls = 0
+    completed_tool_calls = 0
 
     await _safe_send(websocket, {
         "type": "agent_activity",
+        "request_id": request_id,
         "activity": "thinking",
         "tool": None,
         "icon": "brain",
         "message": "リクエストを分析中...",
+        "progress": {
+            "total_tool_calls": total_tool_calls,
+            "completed_tool_calls": completed_tool_calls,
+        },
     })
 
     async for event in app_client.async_stream_query(
@@ -146,29 +177,42 @@ async def _query_agent(
                 if "function_call" in part:
                     fc = part["function_call"]
                     tool_name = fc.get("name", "unknown")
+                    total_tool_calls += 1
                     await _safe_send(websocket, {
                         "type": "agent_activity",
+                        "request_id": request_id,
                         "activity": "tool_call",
                         "tool": tool_name,
                         "icon": _tool_display_icon(tool_name),
                         "message": _tool_display_message(tool_name),
+                        "progress": {
+                            "total_tool_calls": total_tool_calls,
+                            "completed_tool_calls": completed_tool_calls,
+                        },
                     })
                     continue
 
                 if "function_response" in part:
                     fr = part["function_response"]
                     tool_name = fr.get("name", "unknown")
-                    status = "error" if _is_error_response(
-                        fr.get("response", {}),
-                    ) else "success"
+                    response_data = fr.get("response", {})
+                    status = "error" if _is_error_response(response_data) else "success"
+                    completed_tool_calls += 1
                     label = _tool_display_message(tool_name)
                     suffix = "完了" if status == "success" else "失敗"
+                    detail = _extract_error_detail(response_data) if status == "error" else None
                     await _safe_send(websocket, {
                         "type": "agent_activity",
+                        "request_id": request_id,
                         "activity": "tool_result",
                         "tool": tool_name,
                         "status": status,
                         "message": f"{label} - {suffix}",
+                        "detail": detail,
+                        "progress": {
+                            "total_tool_calls": total_tool_calls,
+                            "completed_tool_calls": completed_tool_calls,
+                        },
                     })
                     continue
 
@@ -178,14 +222,20 @@ async def _query_agent(
 
     await _safe_send(websocket, {
         "type": "agent_activity",
+        "request_id": request_id,
         "activity": "done",
         "tool": None,
         "icon": "check-circle-2",
         "message": "分析完了",
+        "progress": {
+            "total_tool_calls": total_tool_calls,
+            "completed_tool_calls": completed_tool_calls,
+        },
     })
 
     return {
         "type": "agent_response",
+        "request_id": request_id,
         "text": "".join(chunks).strip(),
     }
 
