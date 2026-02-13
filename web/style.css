@@ -551,24 +551,24 @@ body {
   position: absolute;
   inset: 0;
   border-radius: 50%;
-  background: radial-gradient(circle at 35% 30%, #4fd1c5, #0f766e 65%, #0a2330 100%);
+  background: transparent;
+  border: 2px solid rgba(255, 255, 255, 0.92);
   box-shadow:
-    0 0 0 2px rgba(79, 209, 197, 0.35),
-    0 0 38px rgba(20, 184, 166, 0.4),
-    0 0 80px rgba(20, 184, 166, 0.25);
+    0 0 0 1px rgba(255, 255, 255, 0.18),
+    0 0 30px rgba(255, 255, 255, 0.22);
   transform-origin: center;
 }
 
 .voice-orb-large-core {
   position: absolute;
-  width: 84px;
-  height: 84px;
+  width: 10px;
+  height: 10px;
   left: 50%;
   top: 50%;
   transform: translate(-50%, -50%);
   border-radius: 50%;
-  background: radial-gradient(circle at 35% 35%, #ecfeff, #a5f3fc 60%, #67e8f9 100%);
-  box-shadow: 0 0 30px rgba(165, 243, 252, 0.6);
+  background: rgba(255, 255, 255, 0.9);
+  box-shadow: 0 0 8px rgba(255, 255, 255, 0.45);
 }
 
 .voice-session-label {
@@ -1006,7 +1006,7 @@ body {
   }
 
   .voice-orb-large-core {
-    width: 66px;
-    height: 66px;
+    width: 8px;
+    height: 8px;
   }
 }
