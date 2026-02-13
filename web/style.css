@@ -488,7 +488,7 @@ body {
   border-top: 1px solid var(--border-primary);
 }
 
-.chat-input-form input[type="text"] {
+.chat-input-form textarea {
   flex: 1;
   padding: 12px 14px;
   border-radius: var(--radius-md);
@@ -497,10 +497,15 @@ body {
   color: var(--text-primary);
   font-family: var(--font-family);
   font-size: var(--font-sm);
+  line-height: 1.4;
+  min-height: 44px;
+  max-height: 180px;
+  resize: vertical;
+  overflow-y: auto;
   transition: border-color var(--transition-fast);
 }
 
-.chat-input-form input[type="text"]:focus {
+.chat-input-form textarea:focus {
   outline: none;
   border-color: var(--border-accent);
 }

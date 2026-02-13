@@ -416,6 +416,13 @@ stopAudioButton.addEventListener("click", async () => {
 });
 
 // ── Chat Form ───────────────────────────────────────────
+chatInput.addEventListener("keydown", (event) => {
+  if (event.key !== "Enter") return;
+  if (event.shiftKey) return; // allow newline on Shift+Enter
+  event.preventDefault();
+  chatForm.requestSubmit();
+});
+
 chatForm.addEventListener("submit", (event) => {
   event.preventDefault();
   if (!socket || socket.readyState !== WebSocket.OPEN) {

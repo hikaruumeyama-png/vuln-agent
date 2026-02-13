@@ -82,12 +82,12 @@
 
           <!-- Chat input -->
           <form id="chat-form" class="chat-input-form">
-            <input
+            <textarea
               id="chat-input"
-              type="text"
-              placeholder="脆弱性について質問してください (例: CVE-2024-12345)"
+              placeholder="脆弱性について質問してください (Enterで送信 / Shift+Enterで改行)"
               required
-            />
+              rows="1"
+            ></textarea>
             <button type="submit" class="btn btn-send" title="Send">
               <i data-lucide="send"></i>
             </button>
