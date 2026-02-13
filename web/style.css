@@ -326,6 +326,15 @@ body {
   margin-left: auto;
 }
 
+.activity-meta {
+  margin-left: auto;
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  font-size: var(--font-xs);
+  color: var(--text-muted);
+}
+
 /* ── Chat Panel ──────────────────────────────── */
 .chat-panel {
   display: flex;
@@ -706,6 +715,13 @@ body {
   margin-top: 2px;
 }
 
+.activity-detail {
+  margin-top: 4px;
+  font-size: var(--font-xs);
+  color: #fca5a5;
+  word-break: break-word;
+}
+
 .activity-status {
   display: flex;
   align-items: center;
@@ -826,6 +842,15 @@ body {
     justify-content: space-between;
     gap: 8px;
     flex-wrap: wrap;
+  }
+
+  .activity-meta {
+    order: 3;
+    width: 100%;
+    margin-left: 0;
+    justify-content: flex-start;
+    flex-wrap: wrap;
+    gap: 6px 10px;
   }
 
   .connection-bar {

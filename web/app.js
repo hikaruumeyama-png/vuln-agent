@@ -21,6 +21,9 @@ const pingLatencyText = document.getElementById("ping-latency");
 const reconnectCountText = document.getElementById("reconnect-count");
 const toastContainer = document.getElementById("toast-container");
 const sendButton = chatForm.querySelector('button[type="submit"]');
+const activityRequestIdText = document.getElementById("activity-request-id");
+const activityProgressText = document.getElementById("activity-progress");
+const activityStepText = document.getElementById("activity-step");
 
 // ── Audio Detection Constants ───────────────────────────
 const RMS_SPEECH_THRESHOLD = 0.025;
@@ -52,6 +55,7 @@ let hasEverConnected = false;
 let manualDisconnectRequested = false;
 let isRequestInFlight = false;
 let audioCaptureNode = null;
+let currentActivityRequestId = null;
 
 // ── Utility Functions ───────────────────────────────────
 function escapeHtml(str) {
@@ -110,6 +114,27 @@ function updateHealthMetrics(latencyMs = null) {
   }
   if (reconnectCountText) {
     reconnectCountText.textContent = `Reconnects: ${reconnectCount}`;
+  }
+}
+
+function formatRequestLabel(requestId) {
+  if (!requestId) return "-";
+  return requestId.length > 14 ? requestId.slice(0, 14) : requestId;
+}
+
+function updateActivityHeader(requestId, progress, stepLabel) {
+  if (activityRequestIdText) {
+    activityRequestIdText.textContent = `Request: ${formatRequestLabel(requestId)}`;
+  }
+
+  const total = Number(progress?.total_tool_calls || 0);
+  const completed = Number(progress?.completed_tool_calls || 0);
+  if (activityProgressText) {
+    activityProgressText.textContent = `Progress: ${completed}/${total}`;
+  }
+
+  if (activityStepText) {
+    activityStepText.textContent = `Step: ${stepLabel || "Idle"}`;
   }
 }
 
@@ -276,28 +301,39 @@ function hideThinking() {
 
 // ── Agent Activity Feed ─────────────────────────────────
 function handleAgentActivity(payload) {
-  const { activity, message, icon, status } = payload;
+  const { activity, message, icon, status, detail, request_id: requestId, progress } = payload;
+
+  if (requestId && currentActivityRequestId && requestId !== currentActivityRequestId) {
+    clearActivityFeed();
+  }
+  if (requestId) {
+    currentActivityRequestId = requestId;
+  }
 
   if (activity === "thinking") {
     clearActivityFeed();
-    addActivityItem("thinking", icon || "brain", message, true);
+    updateActivityHeader(currentActivityRequestId, progress, "Thinking");
+    addActivityItem("thinking", icon || "brain", message, true, null);
     showThinking();
     return;
   }
 
   if (activity === "tool_call") {
-    addActivityItem("tool-call", icon || "wrench", message, true);
+    updateActivityHeader(currentActivityRequestId, progress, message || "Tool call");
+    addActivityItem("tool-call", icon || "wrench", message, true, null);
     return;
   }
 
   if (activity === "tool_result") {
-    markLastToolComplete(status === "success");
+    updateActivityHeader(currentActivityRequestId, progress, message || "Tool result");
+    markLastToolComplete(status === "success", detail);
     return;
   }
 
   if (activity === "done") {
     setRequestInFlight(false);
-    addActivityItem("done", icon || "check-circle-2", message, false);
+    updateActivityHeader(currentActivityRequestId, progress, "Completed");
+    addActivityItem("done", icon || "check-circle-2", message, false, null);
     return;
   }
 }
@@ -305,6 +341,8 @@ function handleAgentActivity(payload) {
 function clearActivityFeed() {
   activityFeed.innerHTML = "";
   activityCount = 0;
+  currentActivityRequestId = null;
+  updateActivityHeader(null, null, "Idle");
 }
 
 function resetActivityFeed() {
@@ -315,6 +353,8 @@ function resetActivityFeed() {
     </div>
   `;
   activityCount = 0;
+  currentActivityRequestId = null;
+  updateActivityHeader(null, null, "Idle");
   renderIcons(activityFeed);
 }
 
@@ -357,7 +397,7 @@ async function stopAudioCapture(sendLiveStop = false) {
   setMode("idle");
 }
 
-function addActivityItem(type, iconName, labelText, showSpinner) {
+function addActivityItem(type, iconName, labelText, showSpinner, detailText) {
   activityCount++;
 
   const emptyEl = activityFeed.querySelector(".activity-empty");
@@ -378,6 +418,7 @@ function addActivityItem(type, iconName, labelText, showSpinner) {
     <div class="activity-text">
       <div class="activity-label">${escapeHtml(labelText)}</div>
       <div class="activity-time">${time}</div>
+      ${detailText ? `<div class="activity-detail">${escapeHtml(detailText)}</div>` : ""}
     </div>
     ${
       showSpinner
@@ -391,7 +432,7 @@ function addActivityItem(type, iconName, labelText, showSpinner) {
   renderIcons(item);
 }
 
-function markLastToolComplete(success) {
+function markLastToolComplete(success, detailText) {
   const items = activityFeed.querySelectorAll(".activity-item.activity-tool-call");
   const lastItem = items[items.length - 1];
   if (!lastItem) return;
@@ -412,6 +453,16 @@ function markLastToolComplete(success) {
   if (iconEl) {
     iconEl.classList.remove("tool-call");
     iconEl.classList.add(success ? "success" : "error");
+  }
+
+  if (!success && detailText) {
+    const textBlock = lastItem.querySelector(".activity-text");
+    if (textBlock && !textBlock.querySelector(".activity-detail")) {
+      const detailEl = document.createElement("div");
+      detailEl.className = "activity-detail";
+      detailEl.textContent = detailText;
+      textBlock.appendChild(detailEl);
+    }
   }
 }
 
@@ -560,6 +611,7 @@ connectButton.addEventListener("click", () => {
       if (payload.type === "agent_response") {
         hideThinking();
         setRequestInFlight(false);
+        updateActivityHeader(payload.request_id || currentActivityRequestId, null, "Response ready");
         if (!isLiveSessionActive) {
           appendMessage(payload.text || "(no response)", "agent");
         }
@@ -595,6 +647,7 @@ connectButton.addEventListener("click", () => {
       if (payload.type === "error") {
         setRequestInFlight(false);
         showToast(payload.message || "Gateway error", "error");
+        updateActivityHeader(currentActivityRequestId, null, "Error");
         appendMessage(payload.message || "Error", "system");
         return;
       }
@@ -624,6 +677,7 @@ connectButton.addEventListener("click", () => {
     setStatus(false, "Disconnected");
     updateHealthMetrics(null);
     setMode("idle");
+    updateActivityHeader(currentActivityRequestId, null, "Disconnected");
     appendMessage(
       wasError ? "接続エラーで切断しました。" : manualDisconnectRequested ? "手動で切断しました。" : "切断しました。",
       "system",
@@ -802,6 +856,7 @@ if (savedGatewayUrl) {
 setStatus(false, "Disconnected");
 setMode("idle");
 updateHealthMetrics(null);
+updateActivityHeader(null, null, "Idle");
 resizeChatInput();
 window.addEventListener("beforeunload", () => {
   stopHealthPingLoop();
