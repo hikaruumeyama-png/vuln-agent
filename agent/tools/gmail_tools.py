@@ -162,8 +162,8 @@ def get_sidfm_emails(max_results: int = 10) -> dict[str, Any]:
     try:
         service = _get_gmail_service()
 
-        # SIDfmからの未読メールを検索
-        query = f"from:{sidfm_sender} is:unread"
+        # SIDfmからの未読メールを検索（送信者 or 件名タグ）
+        query = f'(from:{sidfm_sender} OR subject:"[SIDfm]") is:unread'
 
         results = service.users().messages().list(
             userId="me",
