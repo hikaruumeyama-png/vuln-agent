@@ -157,6 +157,7 @@ def get_sidfm_emails(max_results: int = 10) -> dict[str, Any]:
         ...     print(email["subject"])
     """
     sidfm_sender = os.environ.get("SIDFM_SENDER_EMAIL", "noreply@sidfm.com")
+    max_results = _normalize_max_results(max_results)
 
     try:
         service = _get_gmail_service()
@@ -210,6 +211,7 @@ def get_unread_emails(query: str = "is:unread", max_results: int = 10) -> dict[s
         >>> result = get_unread_emails("from:security@example.com is:unread", 10)
     """
     try:
+        max_results = _normalize_max_results(max_results)
         service = _get_gmail_service()
 
         results = service.users().messages().list(
@@ -250,6 +252,10 @@ def mark_email_as_read(email_id: str) -> dict[str, Any]:
     Returns:
         処理結果
     """
+    email_id = (email_id or "").strip()
+    if not email_id:
+        return {"status": "error", "message": "email_id は必須です"}
+
     try:
         service = _get_gmail_service()
 
@@ -350,8 +356,27 @@ def _extract_body(payload: dict) -> str:
 
 def _decode_body(encoded: str) -> str:
     """Gmailの本文データを安全にデコード"""
-    padding = "=" * (-len(encoded) % 4)
-    return base64.urlsafe_b64decode(encoded + padding).decode("utf-8", errors="replace")
+    if not encoded:
+        return ""
+    try:
+        padding = "=" * (-len(encoded) % 4)
+        return base64.urlsafe_b64decode(encoded + padding).decode("utf-8", errors="replace")
+    except Exception as e:
+        logger.warning(f"Failed to decode email body: {e}")
+        return ""
+
+
+def _normalize_max_results(max_results: Any) -> int:
+    """Gmail API向けに max_results を安全な範囲へ正規化する。"""
+    try:
+        value = int(max_results)
+    except (TypeError, ValueError):
+        return 10
+    if value < 1:
+        return 1
+    if value > 100:
+        return 100
+    return value
 
 
 def _parse_sidfm_content(body: str) -> list[dict[str, Any]]:
