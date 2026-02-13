@@ -69,6 +69,10 @@ let overlayRafId = null;
 let orbEnergy = 0;
 let greetingFallbackUtterance = null;
 let didAttemptGreetingSpeechFallback = false;
+let playbackQueue = [];
+let isPlaybackQueueDraining = false;
+let playbackIdleTimerId = null;
+let standalonePlaybackContext = null;
 
 // ── Utility Functions ───────────────────────────────────
 function escapeHtml(str) {
@@ -100,6 +104,13 @@ function showToast(message, kind = "info", timeoutMs = 4000) {
   window.setTimeout(() => {
     toast.remove();
   }, timeoutMs);
+}
+
+function extractJapaneseText(input) {
+  const raw = String(input || "");
+  const filtered = raw.replace(/[^\u3040-\u30FF\u3400-\u9FFF\u3000-\u303F\uFF00-\uFFEF0-9０-９A-Za-z\s。、，．・！？「」（）【】『』ー〜\-]/g, "");
+  const removedAsciiWords = filtered.replace(/[A-Za-z][A-Za-z0-9'":;,.!?()\-]*/g, "");
+  return removedAsciiWords.trim();
 }
 
 function pruneMessages() {
@@ -327,6 +338,41 @@ function clearGreetingUnlockTimer() {
   }
 }
 
+function clearPlaybackIdleTimer() {
+  if (playbackIdleTimerId != null) {
+    window.clearTimeout(playbackIdleTimerId);
+    playbackIdleTimerId = null;
+  }
+}
+
+function schedulePlaybackIdleCheck() {
+  clearPlaybackIdleTimer();
+  playbackIdleTimerId = window.setTimeout(() => {
+    const isPlaybackBusy =
+      currentPlaybackSource != null || isPlaybackQueueDraining || playbackQueue.length > 0;
+    if (isPlaybackBusy) return;
+    if (awaitingAgentGreeting) {
+      unlockGreetingAndListening(true);
+      return;
+    }
+    if (mode === "speaking") {
+      setMode("listening");
+    }
+  }, 450);
+}
+
+function stopAllPlayback() {
+  playbackQueue = [];
+  isPlaybackQueueDraining = false;
+  clearPlaybackIdleTimer();
+  if (currentPlaybackSource) {
+    try {
+      currentPlaybackSource.stop();
+    } catch {}
+    currentPlaybackSource = null;
+  }
+}
+
 function stopGreetingFallbackSpeech() {
   if (!window.speechSynthesis) return;
   if (greetingFallbackUtterance) {
@@ -373,6 +419,7 @@ function unlockGreetingAndListening(withNotice = true, timeoutFallback = false) 
   if (!awaitingAgentGreeting) return;
   awaitingAgentGreeting = false;
   clearGreetingUnlockTimer();
+  clearPlaybackIdleTimer();
   setMode("listening");
   setVoiceSessionLabel("Listening... 話しかけてください");
   if (withNotice) {
@@ -536,12 +583,7 @@ async function stopAudioCapture(sendLiveStop = false) {
     socket.send(JSON.stringify({ type: "live_stop" }));
   }
 
-  if (currentPlaybackSource) {
-    try {
-      currentPlaybackSource.stop();
-    } catch {}
-    currentPlaybackSource = null;
-  }
+  stopAllPlayback();
 
   if (processor) {
     processor.disconnect();
@@ -559,6 +601,9 @@ async function stopAudioCapture(sendLiveStop = false) {
   if (audioContext) {
     await audioContext.close();
   }
+  if (standalonePlaybackContext) {
+    await standalonePlaybackContext.close();
+  }
 
   processor = null;
   audioCaptureNode = null;
@@ -570,6 +615,7 @@ async function stopAudioCapture(sendLiveStop = false) {
   setOverlayVisible(false);
   mediaStream = null;
   audioContext = null;
+  standalonePlaybackContext = null;
   audioLevelBar.style.width = "0%";
   startAudioButton.disabled = !socket || socket.readyState !== WebSocket.OPEN;
   stopAudioButton.disabled = true;
@@ -720,17 +766,16 @@ registerProcessor("pcm-capture-processor", PcmCaptureProcessor);
       smoothedRms = RMS_SMOOTHING * rms + (1 - RMS_SMOOTHING) * smoothedRms;
       updateAudioLevel(smoothedRms);
       const now = Date.now();
-      if (smoothedRms > RMS_SPEECH_THRESHOLD) {
-        lastSpeechTimestamp = now;
-        if (mode !== "listening") setMode("listening");
-        if (currentPlaybackSource) {
-          currentPlaybackSource.stop();
-          currentPlaybackSource = null;
-          if (socket && socket.readyState === WebSocket.OPEN) {
-            socket.send(JSON.stringify({ type: "barge_in" }));
+        if (smoothedRms > RMS_SPEECH_THRESHOLD) {
+          lastSpeechTimestamp = now;
+          if (mode !== "listening") setMode("listening");
+          if (currentPlaybackSource) {
+            stopAllPlayback();
+            if (socket && socket.readyState === WebSocket.OPEN) {
+              socket.send(JSON.stringify({ type: "barge_in" }));
+            }
           }
         }
-      }
       if (
         smoothedRms < RMS_SILENCE_THRESHOLD &&
         lastSpeechTimestamp !== 0 &&
@@ -830,7 +875,9 @@ connectButton.addEventListener("click", () => {
       }
 
       if (payload.type === "live_text") {
-        appendLiveText(payload.text || "");
+        const japaneseText = extractJapaneseText(payload.text || "");
+        if (!japaneseText) return;
+        appendLiveText(japaneseText);
         return;
       }
 
@@ -862,6 +909,7 @@ connectButton.addEventListener("click", () => {
             unlockGreetingAndListening(false, true);
           }
         } else if (payload.status === "barge_in") {
+          stopAllPlayback();
           setMode("listening (barge-in)");
         } else if (payload.status === "stopped") {
           isLiveSessionActive = false;
@@ -869,6 +917,7 @@ connectButton.addEventListener("click", () => {
           hasReceivedGreetingAudio = false;
           didAttemptGreetingSpeechFallback = false;
           clearGreetingUnlockTimer();
+          clearPlaybackIdleTimer();
           stopGreetingFallbackSpeech();
           setOverlayVisible(false);
           resetLiveTextBubble();
@@ -906,6 +955,7 @@ connectButton.addEventListener("click", () => {
     awaitingAgentGreeting = false;
     hasReceivedGreetingAudio = false;
     clearGreetingUnlockTimer();
+    clearPlaybackIdleTimer();
     setRequestInFlight(false);
     resetLiveTextBubble();
     if (socket === ws) {
@@ -956,6 +1006,8 @@ startAudioButton.addEventListener("click", async () => {
     awaitingAgentGreeting = true;
     hasReceivedGreetingAudio = false;
     didAttemptGreetingSpeechFallback = false;
+    clearPlaybackIdleTimer();
+    playbackQueue = [];
     setOverlayVisible(true);
     setVoiceSessionLabel("Agent Greeting...");
     clearGreetingUnlockTimer();
@@ -992,8 +1044,7 @@ startAudioButton.addEventListener("click", async () => {
             setMode("listening");
           }
           if (currentPlaybackSource) {
-            currentPlaybackSource.stop();
-            currentPlaybackSource = null;
+            stopAllPlayback();
             if (socket && socket.readyState === WebSocket.OPEN) {
               socket.send(JSON.stringify({ type: "barge_in" }));
             }
@@ -1071,46 +1122,62 @@ chatForm.addEventListener("submit", (event) => {
 // ── Audio Playback ──────────────────────────────────────
 function playAudio(base64Audio, mimeType) {
   if (!base64Audio) return;
-  const audioBytes = Uint8Array.from(atob(base64Audio), (c) => c.charCodeAt(0));
-  const parsedRate = (() => {
-    if (typeof mimeType !== "string") return null;
-    const m = mimeType.match(/rate=(\d+)/i);
-    return m ? Number.parseInt(m[1], 10) : null;
-  })();
-  const sampleRate = parsedRate && Number.isFinite(parsedRate) ? parsedRate : 16000;
-  const ownsContext = !audioContext;
-  const context = audioContext || new AudioContext();
-  if (context.state === "suspended") {
-    void context.resume();
+  playbackQueue.push({ base64Audio, mimeType });
+  if (mode !== "speaking") {
+    setMode("speaking");
   }
-  const buffer = context.createBuffer(1, audioBytes.length / 2, sampleRate);
-  const channel = buffer.getChannelData(0);
-  for (let i = 0; i < channel.length; i++) {
-    const low = audioBytes[i * 2];
-    const high = audioBytes[i * 2 + 1];
-    let sample = (high << 8) | low;
-    if (sample >= 0x8000) sample = sample - 0x10000;
-    channel[i] = sample / 0x7fff;
-  }
-  pushOrbEnergyFromPcm(channel);
-  if (currentPlaybackSource) {
-    currentPlaybackSource.stop();
-  }
-  const source = context.createBufferSource();
-  source.buffer = buffer;
-  source.connect(context.destination);
-  source.start();
-  currentPlaybackSource = source;
-  source.onended = () => {
-    if (awaitingAgentGreeting) {
-      unlockGreetingAndListening(true);
-    } else if (mode === "speaking") {
-      setMode("listening");
+  void drainPlaybackQueue();
+}
+
+async function drainPlaybackQueue() {
+  if (isPlaybackQueueDraining) return;
+  isPlaybackQueueDraining = true;
+  try {
+    while (playbackQueue.length > 0) {
+      const next = playbackQueue.shift();
+      if (!next) continue;
+      const context = audioContext || standalonePlaybackContext || new AudioContext();
+      if (!audioContext && !standalonePlaybackContext) {
+        standalonePlaybackContext = context;
+      }
+      if (context.state === "suspended") {
+        await context.resume();
+      }
+      const audioBytes = Uint8Array.from(atob(next.base64Audio), (c) => c.charCodeAt(0));
+      const parsedRate = (() => {
+        if (typeof next.mimeType !== "string") return null;
+        const m = next.mimeType.match(/rate=(\d+)/i);
+        return m ? Number.parseInt(m[1], 10) : null;
+      })();
+      const sampleRate = parsedRate && Number.isFinite(parsedRate) ? parsedRate : 16000;
+      const buffer = context.createBuffer(1, audioBytes.length / 2, sampleRate);
+      const channel = buffer.getChannelData(0);
+      for (let i = 0; i < channel.length; i++) {
+        const low = audioBytes[i * 2];
+        const high = audioBytes[i * 2 + 1];
+        let sample = (high << 8) | low;
+        if (sample >= 0x8000) sample -= 0x10000;
+        channel[i] = sample / 0x7fff;
+      }
+      pushOrbEnergyFromPcm(channel);
+      await new Promise((resolve) => {
+        const source = context.createBufferSource();
+        currentPlaybackSource = source;
+        source.buffer = buffer;
+        source.connect(context.destination);
+        source.onended = () => {
+          if (currentPlaybackSource === source) {
+            currentPlaybackSource = null;
+          }
+          resolve();
+        };
+        source.start();
+      });
     }
-    if (ownsContext) {
-      void context.close();
-    }
-  };
+  } finally {
+    isPlaybackQueueDraining = false;
+    schedulePlaybackIdleCheck();
+  }
 }
 
 // ── Initialize ──────────────────────────────────────────
