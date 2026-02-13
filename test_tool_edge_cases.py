@@ -78,9 +78,11 @@ class _FakeMessageListCall:
 class _FakeMessagesResource:
     def __init__(self):
         self.last_max_results = None
+        self.last_query = None
 
     def list(self, userId, q, maxResults):
         self.last_max_results = maxResults
+        self.last_query = q
         return _FakeMessageListCall(maxResults)
 
 
@@ -138,6 +140,19 @@ class ToolEdgeCaseTests(unittest.TestCase):
 
         self.gmail_tools.get_unread_emails(max_results="abc")
         self.assertEqual(fake_service.users().messages().last_max_results, 10)
+
+    def test_gmail_get_sidfm_emails_uses_or_between_sender_and_subject(self):
+        fake_service = _FakeGmailService()
+        self.gmail_tools._get_gmail_service = lambda: fake_service
+        os.environ.pop("SIDFM_SENDER_EMAIL", None)
+
+        self.gmail_tools.get_sidfm_emails()
+
+        query = fake_service.users().messages().last_query
+        self.assertIn("from:noreply@sidfm.com", query)
+        self.assertIn('subject:"[SIDfm]"', query)
+        self.assertIn(" OR ", query)
+        self.assertIn("is:unread", query)
 
     def test_chat_resolve_space_id_uses_env_when_argument_is_blank(self):
         os.environ["DEFAULT_CHAT_SPACE_ID"] = "spaces/AAAA"
