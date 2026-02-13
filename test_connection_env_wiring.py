@@ -101,6 +101,7 @@ class ConnectionEnvWiringTests(unittest.TestCase):
         self.assertIn("vuln-agent-gmail-user-email", self.setup_cloud_source)
         self.assertIn("GMAIL_USER_EMAIL=$(_sm_get vuln-agent-gmail-user-email)", self.setup_cloud_source)
         self.assertIn("pubsub.googleapis.com", self.setup_cloud_source)
+        self.assertIn("eventarc.googleapis.com", self.setup_cloud_source)
         self.assertIn("vuln-agent-gmail-trigger", self.setup_cloud_source)
         self.assertIn("vuln-agent-gmail-watch-refresh", self.setup_cloud_source)
         self.assertIn("vuln-agent-chat-webhook", self.setup_cloud_source)
@@ -109,3 +110,5 @@ class ConnectionEnvWiringTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+

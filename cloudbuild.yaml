@@ -385,6 +385,10 @@ steps:
           echo "初回セットアップ (setup_cloud.sh) を先に実行してください。"
           exit 1
         fi
+        if ! gcloud services list --enabled --filter="NAME:eventarc.googleapis.com" --format="value(NAME)" | grep -q "eventarc.googleapis.com"; then
+          echo "Eventarc API が未有効のため有効化します"
+          gcloud services enable eventarc.googleapis.com --quiet
+        fi
         if ! gcloud pubsub topics describe vuln-agent-gmail-events >/dev/null 2>&1; then
           gcloud pubsub topics create vuln-agent-gmail-events >/dev/null
         fi
@@ -457,7 +461,6 @@ steps:
           --source=chat_webhook \
           --entry-point=handle_chat_event \
           --trigger-http \
-          --allow-unauthenticated \
           --service-account=vuln-agent-sa@${PROJECT_ID}.iam.gserviceaccount.com \
           --update-env-vars="GCP_PROJECT_ID=${PROJECT_ID},GCP_LOCATION=${_REGION},CHAT_WEBHOOK_VERIFICATION_TOKEN=$$chat_verify_token" \
           --remove-env-vars="AGENT_RESOURCE_NAME" \
@@ -497,3 +500,9 @@ steps:
 options:
   logging: CLOUD_LOGGING_ONLY
 timeout: 2400s
+
+
+
+
+
+

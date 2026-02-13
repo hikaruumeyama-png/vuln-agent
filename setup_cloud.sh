@@ -72,6 +72,7 @@ APIS=(
   bigquery.googleapis.com
   cloudbuild.googleapis.com
   cloudfunctions.googleapis.com
+  eventarc.googleapis.com
   cloudscheduler.googleapis.com
   run.googleapis.com
   secretmanager.googleapis.com
@@ -695,3 +696,4 @@ echo ""
 echo "  以降のコード変更は Cloud Build で自動デプロイできます:"
 echo "  gcloud builds submit --config cloudbuild.yaml"
 echo ""
+
