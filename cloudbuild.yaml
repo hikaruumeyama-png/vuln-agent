@@ -37,6 +37,7 @@ steps:
         DEPLOY_AGENT=false
         DEPLOY_GATEWAY=false
         DEPLOY_SCHEDULER=false
+        DEPLOY_GMAIL_TRIGGER=false
         DEPLOY_WEB=false
 
         full_deploy_raw="${_FORCE_FULL_DEPLOY}"
@@ -56,12 +57,14 @@ steps:
           DEPLOY_AGENT=true
           DEPLOY_GATEWAY=true
           DEPLOY_SCHEDULER=true
+          DEPLOY_GMAIL_TRIGGER=true
           DEPLOY_WEB=true
           echo "強制フルデプロイを有効化しました。"
         elif [ -z "$$changed_files_raw" ]; then
           DEPLOY_AGENT=true
           DEPLOY_GATEWAY=true
           DEPLOY_SCHEDULER=true
+          DEPLOY_GMAIL_TRIGGER=true
           DEPLOY_WEB=true
           echo "変更ファイルを判定できないため安全側で全デプロイを実行します。"
         else
@@ -77,6 +80,9 @@ steps:
                 ;;
               scheduler/*)
                 DEPLOY_SCHEDULER=true
+                ;;
+              gmail_trigger/*)
+                DEPLOY_GMAIL_TRIGGER=true
                 ;;
               web/*)
                 DEPLOY_WEB=true
@@ -94,6 +100,7 @@ steps:
             DEPLOY_AGENT=true
             DEPLOY_GATEWAY=true
             DEPLOY_SCHEDULER=true
+            DEPLOY_GMAIL_TRIGGER=true
             DEPLOY_WEB=true
             echo "共通または未知パスの変更を検知したため全デプロイを実行します。"
           fi
@@ -103,6 +110,7 @@ steps:
         DEPLOY_AGENT=$$DEPLOY_AGENT
         DEPLOY_GATEWAY=$$DEPLOY_GATEWAY
         DEPLOY_SCHEDULER=$$DEPLOY_SCHEDULER
+        DEPLOY_GMAIL_TRIGGER=$$DEPLOY_GMAIL_TRIGGER
         DEPLOY_WEB=$$DEPLOY_WEB
         EOF
 
@@ -316,10 +324,10 @@ steps:
           source /workspace/.deploy_flags
         fi
         if [ "${DEPLOY_SCHEDULER:-true}" != "true" ]; then
-          echo "[Step 4/5] Scheduler が対象外のためデプロイをスキップします"
+          echo "[Step 4/6] Scheduler が対象外のためデプロイをスキップします"
           exit 0
         fi
-        echo "[Step 4/5] Scheduler デプロイ条件を確認します"
+        echo "[Step 4/6] Scheduler デプロイ条件を確認します"
         # --set-secrets で参照するため Secret の存在のみ確認する。
         # Secret の値 (AGENT_RESOURCE_NAME) は Cloud Functions がランタイムで
         # 読み取るため、デプロイ時に Agent Engine の疎通確認は行わない。
@@ -328,7 +336,7 @@ steps:
           echo "初回セットアップ (setup_cloud.sh) を先に実行してください。"
           exit 1
         fi
-        echo "[Step 4/5] Scheduler を Cloud Functions にデプロイします"
+        echo "[Step 4/6] Scheduler を Cloud Functions にデプロイします"
         gcloud functions deploy vuln-agent-scheduler \
           --gen2 \
           --runtime=python312 \
@@ -347,7 +355,70 @@ steps:
       - deploy-agent
 
   # =========================================
-  # Step 5: Web UI を Cloud Storage にデプロイ
+  # Step 5: Gmail Trigger を Cloud Functions にデプロイ
+  # =========================================
+  - name: "gcr.io/google.com/cloudsdktool/cloud-sdk"
+    id: deploy-gmail-trigger
+    entrypoint: bash
+    args:
+      - "-c"
+      - |
+        set -euo pipefail
+        if [ -f /workspace/.deploy_flags ]; then
+          source /workspace/.deploy_flags
+        fi
+        if [ "${DEPLOY_GMAIL_TRIGGER:-true}" != "true" ]; then
+          echo "[Step 5/6] Gmail Trigger が対象外のためデプロイをスキップします"
+          exit 0
+        fi
+        echo "[Step 5/6] Gmail Trigger デプロイ条件を確認します"
+        if ! gcloud secrets describe vuln-agent-resource-name >/dev/null 2>&1; then
+          echo "エラー: vuln-agent-resource-name シークレットが存在しません。"
+          echo "初回セットアップ (setup_cloud.sh) を先に実行してください。"
+          exit 1
+        fi
+        if ! gcloud pubsub topics describe vuln-agent-gmail-events >/dev/null 2>&1; then
+          gcloud pubsub topics create vuln-agent-gmail-events >/dev/null
+        fi
+        gcloud pubsub topics add-iam-policy-binding vuln-agent-gmail-events \
+          --member="serviceAccount:gmail-api-push@system.gserviceaccount.com" \
+          --role="roles/pubsub.publisher" --quiet >/dev/null 2>&1 || true
+        echo "[Step 5/6] Gmail Push Trigger を Cloud Functions にデプロイします"
+        gcloud functions deploy vuln-agent-gmail-trigger \
+          --gen2 \
+          --runtime=python312 \
+          --region=${_REGION} \
+          --source=gmail_trigger \
+          --entry-point=handle_gmail_push \
+          --trigger-topic=vuln-agent-gmail-events \
+          --service-account=vuln-agent-sa@${PROJECT_ID}.iam.gserviceaccount.com \
+          --update-env-vars="GCP_PROJECT_ID=${PROJECT_ID},GCP_LOCATION=${_REGION},GMAIL_WATCH_TOPIC=projects/${PROJECT_ID}/topics/vuln-agent-gmail-events" \
+          --remove-env-vars="AGENT_RESOURCE_NAME,GMAIL_OAUTH_TOKEN,GMAIL_USER_EMAIL,SIDFM_SENDER_EMAIL" \
+          --set-secrets="AGENT_RESOURCE_NAME=vuln-agent-resource-name:latest" \
+          --memory=512MB \
+          --timeout=540s \
+          --quiet
+
+        echo "[Step 5/6] Gmail watch refresh Function をデプロイします"
+        gcloud functions deploy vuln-agent-gmail-watch-refresh \
+          --gen2 \
+          --runtime=python312 \
+          --region=${_REGION} \
+          --source=gmail_trigger \
+          --entry-point=refresh_gmail_watch \
+          --trigger-http \
+          --no-allow-unauthenticated \
+          --service-account=vuln-agent-sa@${PROJECT_ID}.iam.gserviceaccount.com \
+          --update-env-vars="GCP_PROJECT_ID=${PROJECT_ID},GCP_LOCATION=${_REGION},GMAIL_WATCH_TOPIC=projects/${PROJECT_ID}/topics/vuln-agent-gmail-events" \
+          --remove-env-vars="GMAIL_OAUTH_TOKEN,GMAIL_USER_EMAIL,SIDFM_SENDER_EMAIL" \
+          --memory=256MB \
+          --timeout=120s \
+          --quiet
+    waitFor:
+      - deploy-agent
+
+  # =========================================
+  # Step 6: Web UI を Cloud Storage にデプロイ
   # =========================================
   - name: "gcr.io/cloud-builders/gsutil"
     id: deploy-web-ui
@@ -360,10 +431,10 @@ steps:
           source /workspace/.deploy_flags
         fi
         if [ "${DEPLOY_WEB:-true}" != "true" ]; then
-          echo "[Step 5/5] Web UI が対象外のためデプロイをスキップします"
+          echo "[Step 6/6] Web UI が対象外のためデプロイをスキップします"
           exit 0
         fi
-        echo "[Step 5/5] Web UI を Cloud Storage にデプロイします"
+        echo "[Step 6/6] Web UI を Cloud Storage にデプロイします"
         BUCKET=gs://${PROJECT_ID}-vuln-agent-ui
         gsutil mb -p ${PROJECT_ID} -l ${_REGION} $$BUCKET 2>/dev/null || true
         gsutil web set -m index.html -e index.html $$BUCKET
