@@ -79,6 +79,23 @@ def _stub_google_modules_for_sheets() -> None:
     sys.modules["packaging"] = packaging
     sys.modules["packaging.version"] = packaging_version
 
+    secret_config = types.ModuleType("secret_config")
+
+    def get_config_value(env_names, secret_name=None, default=""):
+        for env_name in env_names:
+            value = (os.environ.get(env_name) or "").strip()
+            if value:
+                return value
+        if secret_name:
+            secret_env_key = f"TEST_SECRET_{secret_name.upper().replace('-', '_')}"
+            secret_value = (os.environ.get(secret_env_key) or "").strip()
+            if secret_value:
+                return secret_value
+        return default
+
+    secret_config.get_config_value = get_config_value
+    sys.modules["secret_config"] = secret_config
+
 
 def _stub_google_modules_for_history() -> None:
     google = types.ModuleType("google")
@@ -144,6 +161,13 @@ class BigQuerySheetsToolsTests(unittest.TestCase):
 
     def test_search_sbom_by_purl_surfaces_bigquery_error(self):
         os.environ["BQ_SBOM_TABLE_ID"] = "proj.ds.tbl"
+        _StubQueryClient.should_raise = True
+        result = self.sheets_tools.search_sbom_by_purl("pkg:maven")
+        self.assertIn("BigQueryからSBOM取得に失敗", result["message"])
+
+    def test_search_sbom_uses_secret_when_env_missing(self):
+        os.environ.pop("BQ_SBOM_TABLE_ID", None)
+        os.environ["TEST_SECRET_VULN_AGENT_BQ_SBOM_TABLE_ID"] = "proj.ds.tbl"
         _StubQueryClient.should_raise = True
         result = self.sheets_tools.search_sbom_by_purl("pkg:maven")
         self.assertIn("BigQueryからSBOM取得に失敗", result["message"])
