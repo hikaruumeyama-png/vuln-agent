@@ -7,6 +7,7 @@ SIDfm の脆弱性通知メールを取り込み、SBOM と突合して担当者
 - SBOM（BigQuery または Sheets）で影響システム検索
 - 担当者マッピングで通知先特定
 - Google Chat へカード通知
+- Google Chat メンション対話（Chatアプリ経由）
 - BigQuery へ対応履歴保存
 - Gmail 受信トリガー実行（Pub/Sub + Cloud Functions）
 - 定期スキャン（Cloud Scheduler + Cloud Functions）
@@ -15,6 +16,7 @@ SIDfm の脆弱性通知メールを取り込み、SBOM と突合して担当者
 - `agent/`: Agent Engine 本体（ツール実装含む）
 - `scheduler/`: 定期実行エントリーポイント
 - `gmail_trigger/`: Gmail Push 通知トリガー
+- `chat_webhook/`: Google Chat メンション受信Webhook
 - `live_gateway/`: リアルタイム対話ゲートウェイ（任意）
 - `web/`: Web UI（任意）
 - `setup_cloud.sh`: 初期セットアップ
@@ -52,7 +54,7 @@ echo -n "$OAUTH_TOKEN" | gcloud secrets create vuln-agent-gmail-oauth-token \
 bash setup_cloud.sh
 ```
 
-このスクリプトで API 有効化、必要 Secret 作成、BigQuery テーブル作成、Agent/Scheduler/Gmail Trigger などのデプロイまで実行します。
+このスクリプトで API 有効化、必要 Secret 作成、BigQuery テーブル作成、Agent/Scheduler/Gmail Trigger/Chat Webhook などのデプロイまで実行します。
 
 ## BigQuery 利用時の必須設定
 `SBOM_DATA_BACKEND=bigquery` の場合、以下 Secret が必要です。
@@ -109,6 +111,7 @@ gcloud logging read 'resource.type="aiplatform.googleapis.com/ReasoningEngine"' 
 gcloud run services logs read vuln-agent-live-gateway --region=asia-northeast1 --limit=20
 gcloud functions logs read vuln-agent-scheduler --region=asia-northeast1 --limit=20
 gcloud functions logs read vuln-agent-gmail-trigger --region=asia-northeast1 --limit=20
+gcloud functions logs read vuln-agent-chat-webhook --region=asia-northeast1 --limit=20
 ```
 
 ## ツール一覧（Agent）
@@ -131,6 +134,7 @@ gcloud functions logs read vuln-agent-gmail-trigger --region=asia-northeast1 --l
 詳細手順は `docs/` を参照してください。
 - `docs/SETUP_GMAIL.md`
 - `docs/SETUP_CHAT.md`
+- `docs/SETUP_CHAT_INTERACTIVE.md`
 - `docs/SETUP_A2A.md`
 - `docs/SETUP_SCHEDULER.md`
 - `docs/SETUP_GMAIL_TRIGGER.md`

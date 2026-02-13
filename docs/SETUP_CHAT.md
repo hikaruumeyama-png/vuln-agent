@@ -67,7 +67,7 @@ https://console.cloud.google.com/apis/api/chat.googleapis.com/hangouts-chat
 
 | 項目 | 設定 |
 |------|------|
-| **アプリのURL** | 空欄のまま（サービスアカウント認証を使用） |
+| **アプリのURL** | `setup_cloud.sh` が出力する `Chat Webhook URL` |
 
 ### 2.5 公開設定
 
