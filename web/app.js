@@ -15,6 +15,7 @@ const startAudioButton = document.getElementById("start-audio");
 const stopAudioButton = document.getElementById("stop-audio");
 const audioStatusText = document.getElementById("audio-status");
 const audioLevelBar = document.getElementById("audio-level-bar");
+const voiceOrb = document.getElementById("voice-orb");
 const activityFeed = document.getElementById("activity-feed");
 const clearActivityButton = document.getElementById("clear-activity");
 const pingLatencyText = document.getElementById("ping-latency");
@@ -33,6 +34,7 @@ const PAUSE_TRIGGER_MS = 650;
 const MAX_RENDERED_MESSAGES = 200;
 const HEALTH_PING_INTERVAL_MS = 30000;
 const GATEWAY_URL_STORAGE_KEY = "vuln_agent_gateway_url";
+const GREETING_UNLOCK_TIMEOUT_MS = 7000;
 
 // ── State ───────────────────────────────────────────────
 let socket = null;
@@ -56,6 +58,8 @@ let manualDisconnectRequested = false;
 let isRequestInFlight = false;
 let audioCaptureNode = null;
 let currentActivityRequestId = null;
+let awaitingAgentGreeting = false;
+let greetingUnlockTimerId = null;
 
 // ── Utility Functions ───────────────────────────────────
 function escapeHtml(str) {
@@ -203,13 +207,47 @@ function setStatus(online, message) {
 // ── Audio Mode ──────────────────────────────────────────
 function setMode(nextMode) {
   mode = nextMode;
-  audioStatusText.textContent = mode.charAt(0).toUpperCase() + mode.slice(1);
+  const labelMap = {
+    idle: "Idle",
+    listening: "Listening",
+    speaking: "Agent Speaking",
+    "awaiting-greeting": "Agent Greeting...",
+  };
+  audioStatusText.textContent = labelMap[mode] || (mode.charAt(0).toUpperCase() + mode.slice(1));
+
+  if (!voiceOrb) return;
+  voiceOrb.classList.remove("voice-orb-idle", "voice-orb-listening", "voice-orb-speaking");
+  if (mode === "speaking" || mode === "awaiting-greeting") {
+    voiceOrb.classList.add("voice-orb-speaking");
+  } else if (String(mode).startsWith("listening")) {
+    voiceOrb.classList.add("voice-orb-listening");
+  } else {
+    voiceOrb.classList.add("voice-orb-idle");
+  }
 }
 
 // ── Audio Level Visualization ───────────────────────────
 function updateAudioLevel(rmsValue) {
   const pct = Math.min(100, Math.max(0, rmsValue * 1000));
   audioLevelBar.style.width = pct + "%";
+}
+
+function clearGreetingUnlockTimer() {
+  if (greetingUnlockTimerId != null) {
+    window.clearTimeout(greetingUnlockTimerId);
+    greetingUnlockTimerId = null;
+  }
+}
+
+function unlockGreetingAndListening(withNotice = true) {
+  if (!awaitingAgentGreeting) return;
+  awaitingAgentGreeting = false;
+  clearGreetingUnlockTimer();
+  setMode("listening");
+  if (withNotice) {
+    showToast("エージェントの挨拶が完了しました。話しかけてください。", "info", 3000);
+    appendMessage("エージェント: 準備できました。どうぞ話しかけてください。", "system");
+  }
 }
 
 // ── Chat Messages ───────────────────────────────────────
@@ -389,6 +427,8 @@ async function stopAudioCapture(sendLiveStop = false) {
 
   processor = null;
   audioCaptureNode = null;
+  awaitingAgentGreeting = false;
+  clearGreetingUnlockTimer();
   mediaStream = null;
   audioContext = null;
   audioLevelBar.style.width = "0%";
@@ -480,6 +520,7 @@ function encodePcmToBase64(floatSamples) {
 }
 
 function sendAudioChunk(floatSamples, sampleRate) {
+  if (awaitingAgentGreeting) return;
   if (!socket || socket.readyState !== WebSocket.OPEN) return;
   socket.send(
     JSON.stringify({
@@ -633,11 +674,13 @@ connectButton.addEventListener("click", () => {
         if (payload.status === "started") {
           isLiveSessionActive = true;
           resetLiveTextBubble();
-          setMode("listening");
+          setMode(awaitingAgentGreeting ? "awaiting-greeting" : "listening");
         } else if (payload.status === "barge_in") {
           setMode("listening (barge-in)");
         } else if (payload.status === "stopped") {
           isLiveSessionActive = false;
+          awaitingAgentGreeting = false;
+          clearGreetingUnlockTimer();
           resetLiveTextBubble();
           setMode("idle");
         }
@@ -669,6 +712,8 @@ connectButton.addEventListener("click", () => {
     const wasError = hasSocketError;
     hasSocketError = false;
     isLiveSessionActive = false;
+    awaitingAgentGreeting = false;
+    clearGreetingUnlockTimer();
     setRequestInFlight(false);
     resetLiveTextBubble();
     if (socket === ws) {
@@ -714,6 +759,14 @@ startAudioButton.addEventListener("click", async () => {
     mediaStream = await navigator.mediaDevices.getUserMedia({ audio: true });
     audioContext = new AudioContext();
     const source = audioContext.createMediaStreamSource(mediaStream);
+    awaitingAgentGreeting = true;
+    clearGreetingUnlockTimer();
+    greetingUnlockTimerId = window.setTimeout(() => {
+      unlockGreetingAndListening(false);
+    }, GREETING_UNLOCK_TIMEOUT_MS);
+    appendMessage("エージェントが先に話しかけます。応答準備をしてください。", "system");
+    setMode("awaiting-greeting");
+
     const workletReady = await setupAudioCaptureNode(source, audioContext);
     if (!workletReady) {
       processor = audioContext.createScriptProcessor(4096, 1, 1);
@@ -757,7 +810,6 @@ startAudioButton.addEventListener("click", async () => {
     }
 
     socket.send(JSON.stringify({ type: "live_start" }));
-    setMode("listening");
     startAudioButton.disabled = true;
     stopAudioButton.disabled = false;
   } catch (err) {
@@ -839,7 +891,9 @@ function playAudio(base64Audio, mimeType) {
   source.start();
   currentPlaybackSource = source;
   source.onended = () => {
-    if (mode === "speaking") {
+    if (awaitingAgentGreeting) {
+      unlockGreetingAndListening(true);
+    } else if (mode === "speaking") {
       setMode("listening");
     }
     if (ownsContext) {
