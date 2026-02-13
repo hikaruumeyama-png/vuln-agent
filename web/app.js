@@ -35,6 +35,9 @@ let smoothedRms = 0;
 let mode = "idle";
 let thinkingBubble = null;
 let activityCount = 0;
+let isLiveSessionActive = false;
+let hasSocketError = false;
+let liveTextBubble = null;
 
 // ── Utility Functions ───────────────────────────────────
 function escapeHtml(str) {
@@ -107,6 +110,37 @@ function appendMessage(text, type) {
   renderIcons(bubble);
 }
 
+function appendLiveText(text) {
+  hideThinking();
+  if (!liveTextBubble) {
+    const bubble = document.createElement("div");
+    bubble.className = "message agent";
+    bubble.innerHTML = `
+      <div class="message-header">
+        <i data-lucide="bot"></i>
+        <span>Agent</span>
+      </div>
+      <div class="message-body live-text-body"></div>
+      <div class="message-meta">
+        <i data-lucide="clock"></i>
+        <span>${formatTime()}</span>
+      </div>
+    `;
+    messagesArea.appendChild(bubble);
+    renderIcons(bubble);
+    liveTextBubble = bubble;
+  }
+  const body = liveTextBubble.querySelector(".live-text-body");
+  if (body) {
+    body.textContent += text;
+  }
+  messagesArea.scrollTop = messagesArea.scrollHeight;
+}
+
+function resetLiveTextBubble() {
+  liveTextBubble = null;
+}
+
 // ── Thinking Bubble ─────────────────────────────────────
 function showThinking() {
   if (thinkingBubble) return;
@@ -174,6 +208,38 @@ function resetActivityFeed() {
   `;
   activityCount = 0;
   renderIcons(activityFeed);
+}
+
+async function stopAudioCapture(sendLiveStop = false) {
+  if (sendLiveStop && socket && socket.readyState === WebSocket.OPEN) {
+    socket.send(JSON.stringify({ type: "live_stop" }));
+  }
+
+  if (currentPlaybackSource) {
+    try {
+      currentPlaybackSource.stop();
+    } catch {}
+    currentPlaybackSource = null;
+  }
+
+  if (processor) {
+    processor.disconnect();
+    processor.onaudioprocess = null;
+  }
+  if (mediaStream) {
+    mediaStream.getTracks().forEach((track) => track.stop());
+  }
+  if (audioContext) {
+    await audioContext.close();
+  }
+
+  processor = null;
+  mediaStream = null;
+  audioContext = null;
+  audioLevelBar.style.width = "0%";
+  startAudioButton.disabled = !socket || socket.readyState !== WebSocket.OPEN;
+  stopAudioButton.disabled = true;
+  setMode("idle");
 }
 
 function addActivityItem(type, iconName, labelText, showSpinner) {
@@ -246,10 +312,16 @@ connectButton.addEventListener("click", () => {
     appendMessage("Gateway URL を入力してください。", "system");
     return;
   }
+  if (socket && (socket.readyState === WebSocket.OPEN || socket.readyState === WebSocket.CONNECTING)) {
+    socket.close();
+  }
 
   socket = new WebSocket(url);
 
   socket.addEventListener("open", () => {
+    hasSocketError = false;
+    isLiveSessionActive = false;
+    resetLiveTextBubble();
     setStatus(true, "Connected");
     appendMessage("接続しました。", "system");
   });
@@ -265,12 +337,14 @@ connectButton.addEventListener("click", () => {
 
       if (payload.type === "agent_response") {
         hideThinking();
-        appendMessage(payload.text || "(no response)", "agent");
+        if (!isLiveSessionActive) {
+          appendMessage(payload.text || "(no response)", "agent");
+        }
         return;
       }
 
       if (payload.type === "live_text") {
-        appendMessage(payload.text || "(no response)", "agent");
+        appendLiveText(payload.text || "");
         return;
       }
 
@@ -282,10 +356,14 @@ connectButton.addEventListener("click", () => {
 
       if (payload.type === "live_status") {
         if (payload.status === "started") {
+          isLiveSessionActive = true;
+          resetLiveTextBubble();
           setMode("listening");
         } else if (payload.status === "barge_in") {
           setMode("listening (barge-in)");
         } else if (payload.status === "stopped") {
+          isLiveSessionActive = false;
+          resetLiveTextBubble();
           setMode("idle");
         }
         return;
@@ -307,15 +385,20 @@ connectButton.addEventListener("click", () => {
   });
 
   socket.addEventListener("close", () => {
+    stopAudioCapture(false);
+    const wasError = hasSocketError;
+    hasSocketError = false;
+    isLiveSessionActive = false;
+    resetLiveTextBubble();
+    socket = null;
     setStatus(false, "Disconnected");
     setMode("idle");
-    appendMessage("切断しました。", "system");
+    appendMessage(wasError ? "接続エラーで切断しました。" : "切断しました。", "system");
   });
 
   socket.addEventListener("error", () => {
+    hasSocketError = true;
     setStatus(false, "Error");
-    setMode("idle");
-    appendMessage("接続に失敗しました。", "system");
   });
 });
 
@@ -355,7 +438,9 @@ startAudioButton.addEventListener("click", async () => {
         if (currentPlaybackSource) {
           currentPlaybackSource.stop();
           currentPlaybackSource = null;
-          socket.send(JSON.stringify({ type: "barge_in" }));
+          if (socket && socket.readyState === WebSocket.OPEN) {
+            socket.send(JSON.stringify({ type: "barge_in" }));
+          }
         }
       }
       if (
@@ -363,7 +448,9 @@ startAudioButton.addEventListener("click", async () => {
         lastSpeechTimestamp !== 0 &&
         now - lastSpeechTimestamp > PAUSE_TRIGGER_MS
       ) {
-        socket.send(JSON.stringify({ type: "speech_pause" }));
+        if (socket && socket.readyState === WebSocket.OPEN) {
+          socket.send(JSON.stringify({ type: "speech_pause" }));
+        }
         lastSpeechTimestamp = 0;
       }
 
@@ -377,13 +464,15 @@ startAudioButton.addEventListener("click", async () => {
         binary += String.fromCharCode(bytes[i]);
       }
       const base64 = btoa(binary);
-      socket.send(
-        JSON.stringify({
-          type: "audio_chunk",
-          audio: base64,
-          sample_rate: audioContext.sampleRate,
-        }),
-      );
+      if (socket && socket.readyState === WebSocket.OPEN) {
+        socket.send(
+          JSON.stringify({
+            type: "audio_chunk",
+            audio: base64,
+            sample_rate: audioContext.sampleRate,
+          }),
+        );
+      }
     };
 
     source.connect(processor);
@@ -398,21 +487,7 @@ startAudioButton.addEventListener("click", async () => {
 });
 
 stopAudioButton.addEventListener("click", async () => {
-  if (processor) processor.disconnect();
-  if (mediaStream) mediaStream.getTracks().forEach((track) => track.stop());
-  if (audioContext) audioContext.close();
-
-  processor = null;
-  mediaStream = null;
-  audioContext = null;
-
-  if (socket && socket.readyState === WebSocket.OPEN) {
-    socket.send(JSON.stringify({ type: "live_stop" }));
-  }
-  setMode("idle");
-  audioLevelBar.style.width = "0%";
-  startAudioButton.disabled = false;
-  stopAudioButton.disabled = true;
+  await stopAudioCapture(true);
 });
 
 // ── Chat Form ───────────────────────────────────────────
@@ -436,6 +511,7 @@ chatForm.addEventListener("submit", (event) => {
   appendMessage(message, "user");
   socket.send(JSON.stringify({ type: "user_text", text: message }));
   chatInput.value = "";
+  resetLiveTextBubble();
 });
 
 // ── Audio Playback ──────────────────────────────────────
