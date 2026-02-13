@@ -29,6 +29,10 @@ _sbom_cache_timestamp = None
 _owner_mapping_cache_timestamp = None
 _sbom_cache_backend = None
 _owner_mapping_cache_backend = None
+_sbom_last_error = ""
+_owner_mapping_last_error = ""
+_BQ_FULL_TABLE_ID_PATTERN = re.compile(r"^[A-Za-z0-9_\-:]+\.[A-Za-z0-9_]+\.[A-Za-z0-9_$]+$")
+_BQ_SHORT_TABLE_ID_PATTERN = re.compile(r"^[A-Za-z0-9_]+\.[A-Za-z0-9_$]+$")
 
 
 def _get_sbom_data_backend() -> str:
@@ -57,7 +61,14 @@ def _get_sbom_data_backend() -> str:
 
 def _get_bigquery_client() -> bigquery.Client:
     """BigQueryクライアントを構築"""
-    project = os.environ.get("GCP_PROJECT_ID") or None
+    project = (os.environ.get("GCP_PROJECT_ID") or os.environ.get("BQ_PROJECT_ID") or "").strip() or None
+    if not project:
+        try:
+            from google.auth import default
+            _, detected_project = default()
+            project = (detected_project or "").strip() or None
+        except Exception:
+            project = None
     return bigquery.Client(project=project)
 
 
@@ -179,9 +190,12 @@ def _load_sbom_from_sheets() -> list[dict]:
 
 def _load_sbom_from_bigquery() -> list[dict]:
     """SBOMをBigQueryからロード"""
-    table_id = os.environ.get("BQ_SBOM_TABLE_ID", "").strip()
+    global _sbom_last_error
+
+    table_id = _normalize_bigquery_table_id(os.environ.get("BQ_SBOM_TABLE_ID", ""), "BQ_SBOM_TABLE_ID")
     if not table_id:
-        logger.warning("BQ_SBOM_TABLE_ID not set")
+        _sbom_last_error = "BQ_SBOM_TABLE_ID が未設定、またはフォーマット不正です。"
+        logger.warning(_sbom_last_error)
         return []
 
     try:
@@ -207,9 +221,11 @@ def _load_sbom_from_bigquery() -> list[dict]:
             for row in rows
         ]
         logger.info("Loaded %s SBOM entries from BigQuery", len(sbom_entries))
+        _sbom_last_error = ""
         return sbom_entries
     except Exception as e:
         logger.error("Error loading SBOM from BigQuery: %s", e)
+        _sbom_last_error = f"BigQueryからSBOM取得に失敗: {e}"
         return []
 
 
@@ -290,9 +306,15 @@ def _load_owner_mapping_from_sheets() -> list[dict]:
 
 def _load_owner_mapping_from_bigquery() -> list[dict]:
     """担当者マッピングをBigQueryからロード"""
-    table_id = os.environ.get("BQ_OWNER_MAPPING_TABLE_ID", "").strip()
+    global _owner_mapping_last_error
+
+    table_id = _normalize_bigquery_table_id(
+        os.environ.get("BQ_OWNER_MAPPING_TABLE_ID", ""),
+        "BQ_OWNER_MAPPING_TABLE_ID",
+    )
     if not table_id:
-        logger.warning("BQ_OWNER_MAPPING_TABLE_ID not set")
+        _owner_mapping_last_error = "BQ_OWNER_MAPPING_TABLE_ID が未設定、またはフォーマット不正です。"
+        logger.warning(_owner_mapping_last_error)
         return []
 
     try:
@@ -318,9 +340,11 @@ def _load_owner_mapping_from_bigquery() -> list[dict]:
             for row in rows
         ]
         logger.info("Loaded %s owner mappings from BigQuery", len(mappings))
+        _owner_mapping_last_error = ""
         return mappings
     except Exception as e:
         logger.error("Error loading owner mapping from BigQuery: %s", e)
+        _owner_mapping_last_error = f"BigQueryから担当者マッピング取得に失敗: {e}"
         return []
 
 
@@ -390,6 +414,17 @@ def search_sbom_by_purl(purl_pattern: str) -> dict[str, Any]:
     Returns:
         マッチしたエントリと影響システム・担当者のリスト
     """
+    pattern = (purl_pattern or "").strip()
+    if not pattern:
+        return {
+            "status": "error",
+            "matched_entries": [],
+            "affected_systems": [],
+            "owners": [],
+            "total_count": 0,
+            "message": "purl_pattern は必須です",
+        }
+
     sbom = _load_sbom()
     
     if not sbom:
@@ -398,12 +433,12 @@ def search_sbom_by_purl(purl_pattern: str) -> dict[str, Any]:
             "affected_systems": [],
             "owners": [],
             "total_count": 0,
-            "message": "SBOMデータが見つかりません"
+            "message": _build_sbom_missing_message()
         }
     
     matched = []
     for entry in sbom:
-        if entry["purl"] and purl_pattern.lower() in entry["purl"].lower():
+        if entry["purl"] and pattern.lower() in entry["purl"].lower():
             # 担当者情報を付加
             owner_info = _find_owner_for_purl(entry["purl"])
             enriched_entry = {**entry, **owner_info}
@@ -418,7 +453,7 @@ def search_sbom_by_purl(purl_pattern: str) -> dict[str, Any]:
         "affected_systems": affected_systems,
         "owners": owners,
         "total_count": len(matched),
-        "search_criteria": {"purl_pattern": purl_pattern}
+        "search_criteria": {"purl_pattern": pattern}
     }
 
 
@@ -446,7 +481,7 @@ def search_sbom_by_product(
             "affected_systems": [],
             "owners": [],
             "total_count": 0,
-            "message": "SBOMデータが見つかりません"
+            "message": _build_sbom_missing_message()
         }
     
     matched = []
@@ -550,10 +585,14 @@ def get_owner_mapping() -> dict[str, Any]:
     """
     mappings = _load_owner_mapping()
     
-    return {
+    result = {
         "mappings": mappings,
-        "total_count": len(mappings)
+        "total_count": len(mappings),
+        "backend": _get_sbom_data_backend(),
     }
+    if not mappings and _get_sbom_data_backend() == "bigquery" and _owner_mapping_last_error:
+        result["message"] = _owner_mapping_last_error
+    return result
 
 
 def _matches_criteria(entry: dict, product_type: str, product_name: str, version_range: str) -> bool:
@@ -580,6 +619,26 @@ def _matches_criteria(entry: dict, product_type: str, product_name: str, version
             return False
     
     return True
+
+
+def _normalize_bigquery_table_id(raw_table_id: str, env_name: str) -> str:
+    """BigQueryテーブルIDを検証して返す。許容: project.dataset.table / dataset.table"""
+    table_id = (raw_table_id or "").strip().strip("`")
+    if not table_id:
+        return ""
+    if _BQ_FULL_TABLE_ID_PATTERN.match(table_id):
+        return table_id
+    if _BQ_SHORT_TABLE_ID_PATTERN.match(table_id):
+        return table_id
+    logger.error("%s format is invalid: %s", env_name, table_id)
+    return ""
+
+
+def _build_sbom_missing_message() -> str:
+    backend = _get_sbom_data_backend()
+    if backend == "bigquery" and _sbom_last_error:
+        return _sbom_last_error
+    return "SBOMデータが見つかりません"
 
 
 def _version_matches_range(version_str: str, range_spec: str) -> bool:

@@ -49,15 +49,33 @@ def log_vulnerability_history(
     Returns:
         保存結果
     """
-    table_id = os.environ.get("BQ_HISTORY_TABLE_ID")
+    table_id = (os.environ.get("BQ_HISTORY_TABLE_ID") or "").strip()
     if not table_id:
         return {
             "status": "skipped",
             "message": "BQ_HISTORY_TABLE_ID is not set.",
         }
 
+    vulnerability_id = (vulnerability_id or "").strip()
+    title = (title or "").strip()
+    severity = (severity or "").strip()
+    if not vulnerability_id or not title or not severity:
+        return {
+            "status": "error",
+            "message": "vulnerability_id, title, severity は必須です。",
+        }
+
+    affected_systems = _normalize_string_list(affected_systems)
+    owners = _normalize_string_list(owners or [])
+
     incident_id = incident_id or str(uuid.uuid4())
     occurred_at = occurred_at or datetime.now(timezone.utc).isoformat()
+    if not _is_valid_iso8601(occurred_at):
+        return {
+            "status": "error",
+            "message": "occurred_at は ISO8601 形式で指定してください。",
+            "incident_id": incident_id,
+        }
 
     row = {
         "incident_id": incident_id,
@@ -68,22 +86,48 @@ def log_vulnerability_history(
         "cvss_score": cvss_score,
         "description": description,
         "remediation": remediation,
-        "owners": json.dumps(owners or [], ensure_ascii=False),
+        "owners": json.dumps(owners, ensure_ascii=False),
         "status": status,
         "occurred_at": occurred_at,
         "source": source,
         "extra": json.dumps(extra, ensure_ascii=False) if extra else None,
     }
 
-    project = os.environ.get("GCP_PROJECT_ID") or None
-    client = bigquery.Client(project=project)
-    errors = client.insert_rows_json(table_id, [row])
-    if errors:
+    project = (os.environ.get("GCP_PROJECT_ID") or "").strip() or None
+    try:
+        client = bigquery.Client(project=project)
+        errors = client.insert_rows_json(table_id, [row])
+        if errors:
+            return {
+                "status": "error",
+                "message": "Failed to insert rows into BigQuery.",
+                "errors": errors,
+                "incident_id": incident_id,
+            }
+    except Exception as exc:
         return {
             "status": "error",
-            "message": "Failed to insert rows into BigQuery.",
-            "errors": errors,
+            "message": f"BigQuery insert failed: {exc}",
             "incident_id": incident_id,
         }
 
     return {"status": "saved", "incident_id": incident_id, "table_id": table_id}
+
+
+def _normalize_string_list(values: list[str] | tuple[str, ...] | None) -> list[str]:
+    if not values:
+        return []
+    normalized: list[str] = []
+    for value in values:
+        item = str(value).strip()
+        if item:
+            normalized.append(item)
+    return normalized
+
+
+def _is_valid_iso8601(value: str) -> bool:
+    try:
+        datetime.fromisoformat(value.replace("Z", "+00:00"))
+        return True
+    except Exception:
+        return False
