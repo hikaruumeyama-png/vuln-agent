@@ -110,6 +110,7 @@ body {
 .header-right {
   display: flex;
   align-items: center;
+  gap: 12px;
 }
 
 /* ── Connection Badge ────────────────────────── */
@@ -140,6 +141,13 @@ body {
 .connection-label {
   color: var(--text-secondary);
   font-weight: 500;
+}
+
+.connection-metrics {
+  display: flex;
+  gap: 10px;
+  font-size: var(--font-xs);
+  color: var(--text-muted);
 }
 
 /* ── Connection Bar ──────────────────────────── */
@@ -519,6 +527,42 @@ body {
   border-color: var(--border-accent);
 }
 
+/* ── Toast ───────────────────────────────────── */
+.toast-container {
+  position: fixed;
+  top: 16px;
+  right: 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  z-index: 1000;
+}
+
+.toast {
+  min-width: 260px;
+  max-width: min(420px, calc(100vw - 32px));
+  padding: 10px 12px;
+  border-radius: var(--radius-md);
+  border: 1px solid var(--border-primary);
+  background: var(--bg-surface);
+  color: var(--text-primary);
+  box-shadow: var(--shadow-md);
+  animation: slide-in-right var(--transition-base);
+  font-size: var(--font-sm);
+}
+
+.toast.toast-error {
+  border-color: rgba(239, 68, 68, 0.45);
+}
+
+.toast.toast-warning {
+  border-color: rgba(245, 158, 11, 0.45);
+}
+
+.toast.toast-success {
+  border-color: rgba(34, 197, 94, 0.45);
+}
+
 /* ── Activity Panel ──────────────────────────── */
 .activity-panel {
   display: flex;
@@ -746,14 +790,20 @@ body {
 
 /* ── Responsive ──────────────────────────────── */
 @media (max-width: 900px) {
+  .app-layout {
+    min-height: 100dvh;
+  }
+
   .main-content {
     grid-template-columns: 1fr;
     padding: 12px 12px 20px;
+    padding-bottom: calc(20px + env(safe-area-inset-bottom));
   }
 
   .chat-panel {
     margin-right: 0;
     margin-bottom: 12px;
+    max-height: calc(100dvh - 210px);
   }
 
   .connection-form {
@@ -766,6 +816,16 @@ body {
 
   .app-header {
     padding: 12px 16px;
+    align-items: flex-start;
+    gap: 8px;
+    flex-direction: column;
+  }
+
+  .header-right {
+    width: 100%;
+    justify-content: space-between;
+    gap: 8px;
+    flex-wrap: wrap;
   }
 
   .connection-bar {
@@ -773,10 +833,29 @@ body {
   }
 
   .messages-area {
-    max-height: 50vh;
+    max-height: none;
+    min-height: 200px;
   }
 
   .activity-feed {
     max-height: 40vh;
+  }
+
+  .chat-input-form {
+    position: sticky;
+    bottom: 0;
+    background: var(--bg-secondary);
+    padding-bottom: calc(8px + env(safe-area-inset-bottom));
+    z-index: 2;
+  }
+
+  .toast-container {
+    top: 12px;
+    right: 12px;
+    left: 12px;
+  }
+
+  .toast {
+    max-width: 100%;
   }
 }
