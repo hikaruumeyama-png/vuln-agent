@@ -20,6 +20,11 @@ from google.oauth2 import service_account
 from googleapiclient.discovery import build
 from packaging import version as pkg_version
 
+try:
+    from .secret_config import get_config_value
+except ImportError:
+    from secret_config import get_config_value
+
 logger = logging.getLogger(__name__)
 
 # キャッシュ
@@ -44,14 +49,26 @@ def _get_sbom_data_backend() -> str:
 
     auto の場合は BigQuery テーブル設定があれば bigquery、なければ sheets を利用。
     """
-    configured = os.environ.get("SBOM_DATA_BACKEND", "sheets").strip().lower()
+    configured = get_config_value(
+        ["SBOM_DATA_BACKEND"],
+        secret_name="vuln-agent-sbom-data-backend",
+        default="sheets",
+    ).strip().lower()
     if configured not in {"sheets", "bigquery", "auto"}:
         logger.warning("Invalid SBOM_DATA_BACKEND=%s, fallback to sheets", configured)
         return "sheets"
 
     if configured == "auto":
-        sbom_table_id = os.environ.get("BQ_SBOM_TABLE_ID", "").strip()
-        owner_table_id = os.environ.get("BQ_OWNER_MAPPING_TABLE_ID", "").strip()
+        sbom_table_id = get_config_value(
+            ["BQ_SBOM_TABLE_ID"],
+            secret_name="vuln-agent-bq-sbom-table-id",
+            default="",
+        ).strip()
+        owner_table_id = get_config_value(
+            ["BQ_OWNER_MAPPING_TABLE_ID"],
+            secret_name="vuln-agent-bq-owner-table-id",
+            default="",
+        ).strip()
         if sbom_table_id and owner_table_id:
             return "bigquery"
         return "sheets"
@@ -61,7 +78,10 @@ def _get_sbom_data_backend() -> str:
 
 def _get_bigquery_client() -> bigquery.Client:
     """BigQueryクライアントを構築"""
-    project = (os.environ.get("GCP_PROJECT_ID") or os.environ.get("BQ_PROJECT_ID") or "").strip() or None
+    project = get_config_value(
+        ["GCP_PROJECT_ID", "BQ_PROJECT_ID", "GOOGLE_CLOUD_PROJECT", "GCLOUD_PROJECT"],
+        default="",
+    ).strip() or None
     if not project:
         try:
             from google.auth import default
@@ -146,8 +166,16 @@ def _load_sbom(force_refresh: bool = False) -> list[dict]:
 
 def _load_sbom_from_sheets() -> list[dict]:
     """SBOMをGoogle Sheetsからロード"""
-    spreadsheet_id = os.environ.get("SBOM_SPREADSHEET_ID", "")
-    sheet_name = os.environ.get("SBOM_SHEET_NAME", "SBOM")
+    spreadsheet_id = get_config_value(
+        ["SBOM_SPREADSHEET_ID"],
+        secret_name="vuln-agent-sbom-spreadsheet-id",
+        default="",
+    )
+    sheet_name = get_config_value(
+        ["SBOM_SHEET_NAME"],
+        secret_name="vuln-agent-sbom-sheet-name",
+        default="SBOM",
+    )
 
     if not spreadsheet_id:
         logger.warning("SBOM_SPREADSHEET_ID not set")
@@ -192,7 +220,14 @@ def _load_sbom_from_bigquery() -> list[dict]:
     """SBOMをBigQueryからロード"""
     global _sbom_last_error
 
-    table_id = _normalize_bigquery_table_id(os.environ.get("BQ_SBOM_TABLE_ID", ""), "BQ_SBOM_TABLE_ID")
+    table_id = _normalize_bigquery_table_id(
+        get_config_value(
+            ["BQ_SBOM_TABLE_ID"],
+            secret_name="vuln-agent-bq-sbom-table-id",
+            default="",
+        ),
+        "BQ_SBOM_TABLE_ID",
+    )
     if not table_id:
         _sbom_last_error = "BQ_SBOM_TABLE_ID が未設定、またはフォーマット不正です。"
         logger.warning(_sbom_last_error)
@@ -264,8 +299,16 @@ def _load_owner_mapping(force_refresh: bool = False) -> list[dict]:
 
 def _load_owner_mapping_from_sheets() -> list[dict]:
     """担当者マッピングをGoogle Sheetsからロード"""
-    spreadsheet_id = os.environ.get("SBOM_SPREADSHEET_ID", "")
-    owner_sheet_name = os.environ.get("OWNER_SHEET_NAME", "担当者マッピング")
+    spreadsheet_id = get_config_value(
+        ["SBOM_SPREADSHEET_ID"],
+        secret_name="vuln-agent-sbom-spreadsheet-id",
+        default="",
+    )
+    owner_sheet_name = get_config_value(
+        ["OWNER_SHEET_NAME"],
+        secret_name="vuln-agent-owner-sheet-name",
+        default="担当者マッピング",
+    )
 
     if not spreadsheet_id:
         logger.warning("SBOM_SPREADSHEET_ID not set")
@@ -309,7 +352,11 @@ def _load_owner_mapping_from_bigquery() -> list[dict]:
     global _owner_mapping_last_error
 
     table_id = _normalize_bigquery_table_id(
-        os.environ.get("BQ_OWNER_MAPPING_TABLE_ID", ""),
+        get_config_value(
+            ["BQ_OWNER_MAPPING_TABLE_ID"],
+            secret_name="vuln-agent-bq-owner-table-id",
+            default="",
+        ),
         "BQ_OWNER_MAPPING_TABLE_ID",
     )
     if not table_id:
