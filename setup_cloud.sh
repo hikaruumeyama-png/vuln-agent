@@ -66,6 +66,7 @@ step "1/8: API を有効化しています..."
 APIS=(
   aiplatform.googleapis.com
   gmail.googleapis.com
+  pubsub.googleapis.com
   sheets.googleapis.com
   chat.googleapis.com
   bigquery.googleapis.com
@@ -416,15 +417,15 @@ fi
 rm -f agent/.env
 
 # ====================================================
-# 7. Live Gateway / Scheduler のデプロイ
+# 7. Live Gateway / Scheduler / Gmail Trigger のデプロイ
 # ====================================================
-step "7/8: Live Gateway と Scheduler をデプロイしています..."
+step "7/8: Live Gateway / Scheduler / Gmail Trigger をデプロイしています..."
 
 if [[ -n "$AGENT_RESOURCE_NAME" ]]; then
   info "Agent Engine の存在を確認しています..."
   if ! _wait_engine_ready "$AGENT_RESOURCE_NAME"; then
     err "Agent Resource Name が無効です（ReasoningEngine が存在しません）: ${AGENT_RESOURCE_NAME}"
-    err "Live Gateway / Scheduler のデプロイを中止します。"
+    err "Live Gateway / Scheduler / Gmail Trigger のデプロイを中止します。"
     exit 1
   fi
 
@@ -498,8 +499,120 @@ if [[ -n "$AGENT_RESOURCE_NAME" ]]; then
     err "Cloud Scheduler ジョブの作成に失敗しました"
     exit 1
   fi
+
+  # --- Gmail Push Trigger (Pub/Sub + Cloud Functions) ---
+  GMAIL_TOPIC="vuln-agent-gmail-events"
+  GMAIL_TRIGGER_FUNCTION="vuln-agent-gmail-trigger"
+  GMAIL_WATCH_REFRESH_FUNCTION="vuln-agent-gmail-watch-refresh"
+  GMAIL_WATCH_RENEW_JOB="vuln-agent-gmail-watch-renew"
+  GMAIL_WATCH_TOPIC_FULL="projects/${PROJECT_ID}/topics/${GMAIL_TOPIC}"
+
+  if gcloud pubsub topics describe "$GMAIL_TOPIC" --project="$PROJECT_ID" &>/dev/null; then
+    info "Pub/Sub topic 既存: ${GMAIL_TOPIC}"
+  elif gcloud pubsub topics create "$GMAIL_TOPIC" --project="$PROJECT_ID"; then
+    info "Pub/Sub topic 作成: ${GMAIL_TOPIC}"
+  else
+    err "Pub/Sub topic の作成に失敗しました: ${GMAIL_TOPIC}"
+    exit 1
+  fi
+
+  gcloud pubsub topics add-iam-policy-binding "$GMAIL_TOPIC" \
+    --project="$PROJECT_ID" \
+    --member="serviceAccount:gmail-api-push@system.gserviceaccount.com" \
+    --role="roles/pubsub.publisher" \
+    --quiet >/dev/null 2>&1 || true
+
+  info "Gmail Push Trigger を Cloud Functions にデプロイ中..."
+  if ! gcloud functions deploy "$GMAIL_TRIGGER_FUNCTION" \
+    --gen2 \
+    --runtime=python312 \
+    --region="$REGION" \
+    --project="$PROJECT_ID" \
+    --source=gmail_trigger \
+    --entry-point=handle_gmail_push \
+    --trigger-topic="$GMAIL_TOPIC" \
+    --service-account="$SA_EMAIL" \
+    --update-env-vars="GCP_PROJECT_ID=${PROJECT_ID},GCP_LOCATION=${REGION},GMAIL_WATCH_TOPIC=${GMAIL_WATCH_TOPIC_FULL}" \
+    --remove-env-vars="AGENT_RESOURCE_NAME,GMAIL_OAUTH_TOKEN,GMAIL_USER_EMAIL,SIDFM_SENDER_EMAIL" \
+    --set-secrets="AGENT_RESOURCE_NAME=vuln-agent-resource-name:latest" \
+    --memory=512MB \
+    --timeout=540s \
+    --quiet; then
+    err "Gmail Push Trigger のデプロイに失敗しました"
+    exit 1
+  fi
+
+  info "Gmail watch 更新 Function をデプロイ中..."
+  if ! gcloud functions deploy "$GMAIL_WATCH_REFRESH_FUNCTION" \
+    --gen2 \
+    --runtime=python312 \
+    --region="$REGION" \
+    --project="$PROJECT_ID" \
+    --source=gmail_trigger \
+    --entry-point=refresh_gmail_watch \
+    --trigger-http \
+    --no-allow-unauthenticated \
+    --service-account="$SA_EMAIL" \
+    --update-env-vars="GCP_PROJECT_ID=${PROJECT_ID},GCP_LOCATION=${REGION},GMAIL_WATCH_TOPIC=${GMAIL_WATCH_TOPIC_FULL}" \
+    --remove-env-vars="GMAIL_OAUTH_TOKEN,GMAIL_USER_EMAIL,SIDFM_SENDER_EMAIL" \
+    --memory=256MB \
+    --timeout=120s \
+    --quiet; then
+    err "Gmail watch 更新 Function のデプロイに失敗しました"
+    exit 1
+  fi
+
+  GMAIL_WATCH_REFRESH_URL=$(gcloud functions describe "$GMAIL_WATCH_REFRESH_FUNCTION" \
+    --region="$REGION" --project="$PROJECT_ID" --format='value(serviceConfig.uri)')
+  info "Gmail watch refresh Function: ${GMAIL_WATCH_REFRESH_URL}"
+
+  gcloud functions add-invoker-policy-binding "$GMAIL_WATCH_REFRESH_FUNCTION" \
+    --region="$REGION" \
+    --project="$PROJECT_ID" \
+    --member="serviceAccount:${SA_EMAIL}" >/dev/null 2>&1 || true
+
+  if gcloud scheduler jobs describe "$GMAIL_WATCH_RENEW_JOB" --location="$REGION" --project="$PROJECT_ID" &>/dev/null; then
+    if ! gcloud scheduler jobs update http "$GMAIL_WATCH_RENEW_JOB" \
+      --location="$REGION" \
+      --project="$PROJECT_ID" \
+      --schedule="0 */6 * * *" \
+      --time-zone="Asia/Tokyo" \
+      --uri="$GMAIL_WATCH_REFRESH_URL" \
+      --http-method=POST \
+      --oidc-service-account-email="$SA_EMAIL" \
+      --oidc-token-audience="$GMAIL_WATCH_REFRESH_URL"; then
+      err "Gmail watch 更新 Scheduler ジョブの更新に失敗しました"
+      exit 1
+    fi
+    info "Gmail watch 更新 Scheduler ジョブを更新しました (6時間毎)"
+  elif gcloud scheduler jobs create http "$GMAIL_WATCH_RENEW_JOB" \
+      --location="$REGION" \
+      --project="$PROJECT_ID" \
+      --schedule="0 */6 * * *" \
+      --time-zone="Asia/Tokyo" \
+      --uri="$GMAIL_WATCH_REFRESH_URL" \
+      --http-method=POST \
+      --oidc-service-account-email="$SA_EMAIL" \
+      --oidc-token-audience="$GMAIL_WATCH_REFRESH_URL"; then
+    info "Gmail watch 更新 Scheduler ジョブを作成しました (6時間毎)"
+  else
+    err "Gmail watch 更新 Scheduler ジョブの作成に失敗しました"
+    exit 1
+  fi
+
+  # 初回セットアップ時に watch を即時登録
+  ID_TOKEN=$(gcloud auth print-identity-token --audiences="$GMAIL_WATCH_REFRESH_URL" 2>/dev/null || true)
+  if [[ -n "$ID_TOKEN" ]]; then
+    if curl -sSf -X POST -H "Authorization: Bearer ${ID_TOKEN}" "$GMAIL_WATCH_REFRESH_URL" >/dev/null; then
+      info "Gmail watch を初期登録しました"
+    else
+      warn "Gmail watch 初期登録に失敗しました。手動実行: gcloud scheduler jobs run ${GMAIL_WATCH_RENEW_JOB} --location=${REGION}"
+    fi
+  else
+    warn "ID トークン取得に失敗したため Gmail watch 初期登録をスキップしました"
+  fi
 else
-  warn "Agent Resource Name が不明のため、Live Gateway / Scheduler のデプロイをスキップしました"
+  warn "Agent Resource Name が不明のため、Live Gateway / Scheduler / Gmail Trigger のデプロイをスキップしました"
 fi
 
 # ====================================================
@@ -527,6 +640,8 @@ echo "  ────────────────────────
 echo "  Agent Engine   : ${AGENT_RESOURCE_NAME:-'(手動確認が必要)'}"
 echo "  Live Gateway   : ${GATEWAY_URL:-'(スキップ)'}"
 echo "  Scheduler      : ${FUNCTION_URL:-'(スキップ)'}"
+echo "  Gmail Trigger  : ${GMAIL_TRIGGER_FUNCTION:-'(スキップ)'}"
+echo "  Watch Refresh  : ${GMAIL_WATCH_REFRESH_URL:-'(スキップ)'}"
 echo "  Web UI         : ${WEB_URL}"
 echo ""
 echo "  次のステップ:"
