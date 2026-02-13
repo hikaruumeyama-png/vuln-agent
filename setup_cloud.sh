@@ -72,6 +72,7 @@ APIS=(
   bigquery.googleapis.com
   cloudbuild.googleapis.com
   cloudfunctions.googleapis.com
+  eventarc.googleapis.com
   cloudscheduler.googleapis.com
   run.googleapis.com
   secretmanager.googleapis.com
