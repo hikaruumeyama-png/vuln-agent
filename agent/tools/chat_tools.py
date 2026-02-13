@@ -158,13 +158,17 @@ def _format_http_error(error: HttpError, space_id: str | None = None) -> str:
 
 def _resolve_space_id(space_id: str | None = None) -> str | None:
     """スペースIDを解決・正規化する。未設定時はNoneを返す。"""
-    if not space_id:
+    provided_space = str(space_id).strip() if space_id is not None else ""
+    if not provided_space:
         space_id = get_config_value(
             ["DEFAULT_CHAT_SPACE_ID", "CHAT_SPACE_ID", "GOOGLE_CHAT_SPACE_ID"],
             secret_name="vuln-agent-chat-space-id",
             default="",
         )
-    space_id = space_id.strip()
+    else:
+        space_id = provided_space
+
+    space_id = str(space_id).strip()
     if not space_id:
         logger.warning("Chat space ID が未設定です。DEFAULT_CHAT_SPACE_ID 環境変数を設定してください。")
         return None

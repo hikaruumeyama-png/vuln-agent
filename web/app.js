@@ -38,6 +38,7 @@ let activityCount = 0;
 let isLiveSessionActive = false;
 let hasSocketError = false;
 let liveTextBubble = null;
+let socketGeneration = 0;
 
 // ── Utility Functions ───────────────────────────────────
 function escapeHtml(str) {
@@ -312,13 +313,16 @@ connectButton.addEventListener("click", () => {
     appendMessage("Gateway URL を入力してください。", "system");
     return;
   }
+  const myGeneration = ++socketGeneration;
   if (socket && (socket.readyState === WebSocket.OPEN || socket.readyState === WebSocket.CONNECTING)) {
     socket.close();
   }
 
-  socket = new WebSocket(url);
+  const ws = new WebSocket(url);
+  socket = ws;
 
-  socket.addEventListener("open", () => {
+  ws.addEventListener("open", () => {
+    if (socket !== ws || myGeneration !== socketGeneration) return;
     hasSocketError = false;
     isLiveSessionActive = false;
     resetLiveTextBubble();
@@ -326,7 +330,8 @@ connectButton.addEventListener("click", () => {
     appendMessage("接続しました。", "system");
   });
 
-  socket.addEventListener("message", (event) => {
+  ws.addEventListener("message", (event) => {
+    if (socket !== ws || myGeneration !== socketGeneration) return;
     try {
       const payload = JSON.parse(event.data);
 
@@ -384,19 +389,23 @@ connectButton.addEventListener("click", () => {
     }
   });
 
-  socket.addEventListener("close", () => {
-    stopAudioCapture(false);
+  ws.addEventListener("close", () => {
+    if (myGeneration !== socketGeneration) return;
+    void stopAudioCapture(false);
     const wasError = hasSocketError;
     hasSocketError = false;
     isLiveSessionActive = false;
     resetLiveTextBubble();
-    socket = null;
+    if (socket === ws) {
+      socket = null;
+    }
     setStatus(false, "Disconnected");
     setMode("idle");
     appendMessage(wasError ? "接続エラーで切断しました。" : "切断しました。", "system");
   });
 
-  socket.addEventListener("error", () => {
+  ws.addEventListener("error", () => {
+    if (socket !== ws || myGeneration !== socketGeneration) return;
     hasSocketError = true;
     setStatus(false, "Error");
   });
@@ -492,6 +501,7 @@ stopAudioButton.addEventListener("click", async () => {
 
 // ── Chat Form ───────────────────────────────────────────
 chatInput.addEventListener("keydown", (event) => {
+  if (event.isComposing || event.keyCode === 229) return;
   if (event.key !== "Enter") return;
   if (event.shiftKey) return; // allow newline on Shift+Enter
   event.preventDefault();
@@ -518,7 +528,13 @@ chatForm.addEventListener("submit", (event) => {
 function playAudio(base64Audio, mimeType) {
   if (!base64Audio) return;
   const audioBytes = Uint8Array.from(atob(base64Audio), (c) => c.charCodeAt(0));
-  const sampleRate = 16000;
+  const parsedRate = (() => {
+    if (typeof mimeType !== "string") return null;
+    const m = mimeType.match(/rate=(\d+)/i);
+    return m ? Number.parseInt(m[1], 10) : null;
+  })();
+  const sampleRate = parsedRate && Number.isFinite(parsedRate) ? parsedRate : 16000;
+  const ownsContext = !audioContext;
   const context = audioContext || new AudioContext();
   const buffer = context.createBuffer(1, audioBytes.length / 2, sampleRate);
   const channel = buffer.getChannelData(0);
@@ -540,6 +556,9 @@ function playAudio(base64Audio, mimeType) {
   source.onended = () => {
     if (mode === "speaking") {
       setMode("listening");
+    }
+    if (ownsContext) {
+      void context.close();
     }
   };
 }
