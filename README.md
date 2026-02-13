@@ -410,6 +410,27 @@ gcloud builds triggers create github \
 
 デプロイ後の日常運用で使うコマンドです。すべて Cloud Shell で実行できます。
 
+### Live Gateway を一時公開/非公開に切り替える（1コマンド）
+
+リアルタイム対話のテスト時だけ `allUsers` 公開し、終了後に閉じる運用用スクリプトです。
+
+```bash
+# 公開ON
+bash scripts/gateway-open.sh
+
+# 公開OFF
+bash scripts/gateway-close.sh
+
+# 現在のIAM確認
+bash scripts/gateway-access.sh status
+```
+
+必要に応じて環境変数でサービス名/リージョンを上書きできます。
+
+```bash
+SERVICE_NAME=vuln-agent-live-gateway REGION=asia-northeast1 bash scripts/gateway-open.sh
+```
+
 ### git pull 後に自動デプロイする（Cloud Shell 推奨）
 
 Cloud Shell で `git pull` したタイミングで、対象ファイル変更があれば
