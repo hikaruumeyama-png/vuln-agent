@@ -527,7 +527,7 @@ body {
   background: rgba(4, 8, 20, 0.5);
   backdrop-filter: blur(4px);
   z-index: 900;
-  pointer-events: none;
+  pointer-events: auto;
 }
 
 .voice-session-overlay.active {
@@ -547,28 +547,21 @@ body {
   height: 240px;
 }
 
-.voice-orb-large-shape {
+.voice-orb-large-svg {
   position: absolute;
   inset: 0;
-  border-radius: 50%;
-  background: transparent;
-  border: 2px solid rgba(255, 255, 255, 0.92);
-  box-shadow:
-    0 0 0 1px rgba(255, 255, 255, 0.18),
-    0 0 30px rgba(255, 255, 255, 0.22);
-  transform-origin: center;
+  width: 100%;
+  height: 100%;
+  overflow: visible;
 }
 
-.voice-orb-large-core {
-  position: absolute;
-  width: 10px;
-  height: 10px;
-  left: 50%;
-  top: 50%;
-  transform: translate(-50%, -50%);
-  border-radius: 50%;
-  background: rgba(255, 255, 255, 0.9);
-  box-shadow: 0 0 8px rgba(255, 255, 255, 0.45);
+.voice-orb-large-path {
+  fill: none;
+  stroke: rgba(255, 255, 255, 0.95);
+  stroke-width: 2.4;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  filter: drop-shadow(0 0 10px rgba(255, 255, 255, 0.24));
 }
 
 .voice-session-label {
@@ -576,6 +569,10 @@ body {
   font-weight: 600;
   color: var(--text-primary);
   text-shadow: 0 1px 8px rgba(0, 0, 0, 0.45);
+}
+
+.voice-session-close {
+  pointer-events: auto;
 }
 
 .audio-level-container {
@@ -1003,10 +1000,5 @@ body {
   .voice-orb-large {
     width: 180px;
     height: 180px;
-  }
-
-  .voice-orb-large-core {
-    width: 8px;
-    height: 8px;
   }
 }

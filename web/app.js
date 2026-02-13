@@ -18,7 +18,8 @@ const audioLevelBar = document.getElementById("audio-level-bar");
 const voiceOrb = document.getElementById("voice-orb");
 const voiceSessionOverlay = document.getElementById("voice-session-overlay");
 const voiceSessionLabel = document.getElementById("voice-session-label");
-const voiceOrbLargeShape = document.getElementById("voice-orb-large-shape");
+const voiceOrbLargePath = document.getElementById("voice-orb-large-path");
+const voiceSessionCloseButton = document.getElementById("voice-session-close");
 const activityFeed = document.getElementById("activity-feed");
 const clearActivityButton = document.getElementById("clear-activity");
 const pingLatencyText = document.getElementById("ping-latency");
@@ -37,7 +38,7 @@ const PAUSE_TRIGGER_MS = 650;
 const MAX_RENDERED_MESSAGES = 200;
 const HEALTH_PING_INTERVAL_MS = 30000;
 const GATEWAY_URL_STORAGE_KEY = "vuln_agent_gateway_url";
-const GREETING_UNLOCK_TIMEOUT_MS = 12000;
+const GREETING_UNLOCK_TIMEOUT_MS = 20000;
 
 // ── State ───────────────────────────────────────────────
 let socket = null;
@@ -256,17 +257,22 @@ function setVoiceSessionLabel(text) {
 function buildJaggedOrbClipPath(energy, t) {
   const points = 72;
   const angleStep = (Math.PI * 2) / points;
-  const amplitude = 2 + Math.min(1, energy) * 15;
-  let polygon = "";
+  const baseRadius = 88;
+  const amplitude = 1 + Math.min(1, energy) * 8;
+  let path = "";
   for (let i = 0; i < points; i++) {
     const angle = i * angleStep;
     const ripple = Math.sin(angle * 7 + t * 0.01) + Math.sin(angle * 11 - t * 0.013);
-    const radius = 50 + amplitude * ripple;
-    const x = 50 + radius * Math.cos(angle);
-    const y = 50 + radius * Math.sin(angle);
-    polygon += `${x.toFixed(2)}% ${y.toFixed(2)}%${i === points - 1 ? "" : ", "}`;
+    const radius = baseRadius + amplitude * ripple;
+    const x = radius * Math.cos(angle);
+    const y = radius * Math.sin(angle);
+    if (i === 0) {
+      path += `M ${x.toFixed(2)} ${y.toFixed(2)} `;
+    } else {
+      path += `L ${x.toFixed(2)} ${y.toFixed(2)} `;
+    }
   }
-  return `polygon(${polygon})`;
+  return `${path}Z`;
 }
 
 function animateVoiceOverlay(timestamp) {
@@ -275,11 +281,10 @@ function animateVoiceOverlay(timestamp) {
     return;
   }
   orbEnergy = Math.max(0, orbEnergy * 0.93);
-  if (voiceOrbLargeShape) {
+  if (voiceOrbLargePath) {
     const energy = Math.min(1, orbEnergy);
-    const scale = 1 + energy * 0.08;
-    voiceOrbLargeShape.style.transform = `scale(${scale.toFixed(3)})`;
-    voiceOrbLargeShape.style.clipPath = buildJaggedOrbClipPath(energy, timestamp);
+    voiceOrbLargePath.setAttribute("d", buildJaggedOrbClipPath(energy, timestamp));
+    voiceOrbLargePath.style.strokeWidth = (2 + energy * 1.2).toFixed(2);
   }
   overlayRafId = window.requestAnimationFrame(animateVoiceOverlay);
 }
@@ -324,8 +329,7 @@ function unlockGreetingAndListening(withNotice = true, timeoutFallback = false) 
     showToast("エージェントの挨拶が完了しました。話しかけてください。", "info", 3000);
     appendMessage("エージェント: 準備できました。どうぞ話しかけてください。", "system");
   } else if (timeoutFallback) {
-    showToast("挨拶音声が受信できなかったため会話待機に切り替えました。", "warning", 3500);
-    appendMessage("挨拶音声を受信できなかったため、会話待機に切り替えました。", "system");
+    appendMessage("挨拶音声はスキップして会話待機に切り替えました。", "system");
   }
 }
 
@@ -702,6 +706,16 @@ clearActivityButton.addEventListener("click", () => {
   resetActivityFeed();
 });
 
+voiceSessionCloseButton.addEventListener("click", async () => {
+  await stopAudioCapture(true);
+});
+
+window.addEventListener("keydown", async (event) => {
+  if (event.key !== "Escape") return;
+  if (!voiceSessionOverlay?.classList.contains("active")) return;
+  await stopAudioCapture(true);
+});
+
 // ── WebSocket Connection ────────────────────────────────
 gatewayInput.addEventListener("change", () => {
   const value = gatewayInput.value.trim();
@@ -764,6 +778,9 @@ connectButton.addEventListener("click", () => {
       }
 
       if (payload.type === "live_text") {
+        if (awaitingAgentGreeting) {
+          hasReceivedGreetingAudio = true;
+        }
         appendLiveText(payload.text || "");
         return;
       }
