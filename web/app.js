@@ -67,6 +67,8 @@ let greetingUnlockTimerId = null;
 let hasReceivedGreetingAudio = false;
 let overlayRafId = null;
 let orbEnergy = 0;
+let greetingFallbackUtterance = null;
+let didAttemptGreetingSpeechFallback = false;
 
 // ── Utility Functions ───────────────────────────────────
 function escapeHtml(str) {
@@ -254,23 +256,29 @@ function setVoiceSessionLabel(text) {
   }
 }
 
-function buildJaggedOrbClipPath(energy, t) {
+function buildJaggedOrbPath(energy, t) {
   const points = 72;
   const angleStep = (Math.PI * 2) / points;
   const baseRadius = 88;
-  const amplitude = 1 + Math.min(1, energy) * 8;
-  let path = "";
+  const amplitude = 0.4 + Math.min(1, energy) * 4.2;
+  const shapePoints = [];
   for (let i = 0; i < points; i++) {
     const angle = i * angleStep;
-    const ripple = Math.sin(angle * 7 + t * 0.01) + Math.sin(angle * 11 - t * 0.013);
+    const ripple = Math.sin(angle * 5 + t * 0.005) + Math.sin(angle * 7 - t * 0.006);
     const radius = baseRadius + amplitude * ripple;
     const x = radius * Math.cos(angle);
     const y = radius * Math.sin(angle);
-    if (i === 0) {
-      path += `M ${x.toFixed(2)} ${y.toFixed(2)} `;
-    } else {
-      path += `L ${x.toFixed(2)} ${y.toFixed(2)} `;
-    }
+    shapePoints.push({ x, y });
+  }
+  if (shapePoints.length < 2) return "";
+  const midpoint = (a, b) => ({ x: (a.x + b.x) / 2, y: (a.y + b.y) / 2 });
+  const firstMid = midpoint(shapePoints[0], shapePoints[1]);
+  let path = `M ${firstMid.x.toFixed(2)} ${firstMid.y.toFixed(2)} `;
+  for (let i = 1; i <= shapePoints.length; i++) {
+    const current = shapePoints[i % shapePoints.length];
+    const next = shapePoints[(i + 1) % shapePoints.length];
+    const mid = midpoint(current, next);
+    path += `Q ${current.x.toFixed(2)} ${current.y.toFixed(2)} ${mid.x.toFixed(2)} ${mid.y.toFixed(2)} `;
   }
   return `${path}Z`;
 }
@@ -283,7 +291,7 @@ function animateVoiceOverlay(timestamp) {
   orbEnergy = Math.max(0, orbEnergy * 0.93);
   if (voiceOrbLargePath) {
     const energy = Math.min(1, orbEnergy);
-    voiceOrbLargePath.setAttribute("d", buildJaggedOrbClipPath(energy, timestamp));
+    voiceOrbLargePath.setAttribute("d", buildJaggedOrbPath(energy, timestamp));
     voiceOrbLargePath.style.strokeWidth = (2 + energy * 1.2).toFixed(2);
   }
   overlayRafId = window.requestAnimationFrame(animateVoiceOverlay);
@@ -317,6 +325,48 @@ function clearGreetingUnlockTimer() {
     window.clearTimeout(greetingUnlockTimerId);
     greetingUnlockTimerId = null;
   }
+}
+
+function stopGreetingFallbackSpeech() {
+  if (!window.speechSynthesis) return;
+  if (greetingFallbackUtterance) {
+    window.speechSynthesis.cancel();
+    greetingFallbackUtterance = null;
+  }
+}
+
+function playGreetingFallbackSpeech(text) {
+  if (!awaitingAgentGreeting) return false;
+  if (!window.speechSynthesis || typeof SpeechSynthesisUtterance === "undefined") {
+    return false;
+  }
+  const utteranceText = String(text || "").trim();
+  if (!utteranceText) return false;
+  if (greetingFallbackUtterance) return true;
+  didAttemptGreetingSpeechFallback = true;
+  const utterance = new SpeechSynthesisUtterance(utteranceText);
+  utterance.lang = "ja-JP";
+  utterance.rate = 1.02;
+  utterance.onstart = () => {
+    hasReceivedGreetingAudio = true;
+    setMode("speaking");
+    setVoiceSessionLabel("Agent Speaking...");
+  };
+  utterance.onend = () => {
+    greetingFallbackUtterance = null;
+    if (awaitingAgentGreeting) {
+      unlockGreetingAndListening(true);
+    }
+  };
+  utterance.onerror = () => {
+    greetingFallbackUtterance = null;
+    if (awaitingAgentGreeting) {
+      unlockGreetingAndListening(false, true);
+    }
+  };
+  greetingFallbackUtterance = utterance;
+  window.speechSynthesis.speak(utterance);
+  return true;
 }
 
 function unlockGreetingAndListening(withNotice = true, timeoutFallback = false) {
@@ -514,7 +564,9 @@ async function stopAudioCapture(sendLiveStop = false) {
   audioCaptureNode = null;
   awaitingAgentGreeting = false;
   hasReceivedGreetingAudio = false;
+  didAttemptGreetingSpeechFallback = false;
   clearGreetingUnlockTimer();
+  stopGreetingFallbackSpeech();
   setOverlayVisible(false);
   mediaStream = null;
   audioContext = null;
@@ -778,9 +830,6 @@ connectButton.addEventListener("click", () => {
       }
 
       if (payload.type === "live_text") {
-        if (awaitingAgentGreeting) {
-          hasReceivedGreetingAudio = true;
-        }
         appendLiveText(payload.text || "");
         return;
       }
@@ -789,6 +838,7 @@ connectButton.addEventListener("click", () => {
         if (awaitingAgentGreeting) {
           hasReceivedGreetingAudio = true;
         }
+        stopGreetingFallbackSpeech();
         setMode("speaking");
         playAudio(payload.audio, payload.mime_type);
         return;
@@ -800,13 +850,26 @@ connectButton.addEventListener("click", () => {
           setOverlayVisible(true);
           resetLiveTextBubble();
           setMode(awaitingAgentGreeting ? "awaiting-greeting" : "listening");
+        } else if (
+          awaitingAgentGreeting &&
+          (payload.status === "greeting_no_audio" || payload.status === "greeting_error")
+        ) {
+          const fallbackText =
+            typeof payload.text === "string" && payload.text.trim()
+              ? payload.text.trim()
+              : "こんにちは。要件を教えてください。";
+          if (!playGreetingFallbackSpeech(fallbackText) && !hasReceivedGreetingAudio) {
+            unlockGreetingAndListening(false, true);
+          }
         } else if (payload.status === "barge_in") {
           setMode("listening (barge-in)");
         } else if (payload.status === "stopped") {
           isLiveSessionActive = false;
           awaitingAgentGreeting = false;
           hasReceivedGreetingAudio = false;
+          didAttemptGreetingSpeechFallback = false;
           clearGreetingUnlockTimer();
+          stopGreetingFallbackSpeech();
           setOverlayVisible(false);
           resetLiveTextBubble();
           setMode("idle");
@@ -892,11 +955,19 @@ startAudioButton.addEventListener("click", async () => {
     const source = audioContext.createMediaStreamSource(mediaStream);
     awaitingAgentGreeting = true;
     hasReceivedGreetingAudio = false;
+    didAttemptGreetingSpeechFallback = false;
     setOverlayVisible(true);
     setVoiceSessionLabel("Agent Greeting...");
     clearGreetingUnlockTimer();
     greetingUnlockTimerId = window.setTimeout(() => {
       if (!hasReceivedGreetingAudio) {
+        if (!didAttemptGreetingSpeechFallback) {
+          const started = playGreetingFallbackSpeech("こんにちは。要件を教えてください。");
+          if (!started) {
+            unlockGreetingAndListening(false, true);
+          }
+          return;
+        }
         unlockGreetingAndListening(false, true);
       }
     }, GREETING_UNLOCK_TIMEOUT_MS);

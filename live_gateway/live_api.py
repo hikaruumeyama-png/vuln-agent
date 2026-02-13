@@ -9,7 +9,7 @@ from google import genai
 from google.genai import types
 
 
-DEFAULT_MODEL = "gemini-2.0-flash-live-001"
+DEFAULT_MODEL = "gemini-2.5-flash-native-audio-preview-12-2025"
 
 
 @dataclass
@@ -28,11 +28,14 @@ class GeminiLiveClient:
         self._client = genai.Client(api_key=self.api_key)
 
     async def stream_text(self, message: str) -> AsyncGenerator[LiveResponse, None]:
-        config = types.LiveConnectConfig(response_modalities=["AUDIO", "TEXT"])
+        config = types.LiveConnectConfig(response_modalities=["AUDIO"])
         async with self._client.aio.live.connect(model=self.model, config=config) as session:
-            await session.send(input=types.LiveClientContent(parts=[types.Part.from_text(message)]))
+            await session.send_client_content(
+                turns={"role": "user", "parts": [{"text": message}]},
+                turn_complete=True,
+            )
             async for response in session.receive():
-                for part in response.parts or []:
+                for part in _iter_response_parts(response):
                     if part.text:
                         yield LiveResponse(text=part.text)
                     if part.inline_data and part.inline_data.data:
@@ -50,7 +53,9 @@ class GeminiLiveClient:
                 role="system",
                 parts=[
                     types.Part.from_text(
+                        text=(
                         "あなたは日本語音声の書き起こし専用です。話者の発話を日本語で簡潔に文字起こししてください。"
+                        )
                     )
                 ],
             ),
@@ -62,21 +67,17 @@ class GeminiLiveClient:
                     chunk, sample_rate = await audio_queue.get()
                     if chunk is None:
                         break
-                    await session.send(
-                        input=types.LiveClientContent(
-                            parts=[
-                                types.Part.from_inline_data(
-                                    data=chunk,
-                                    mime_type=f"audio/pcm;rate={sample_rate}",
-                                )
-                            ]
+                    await session.send_realtime_input(
+                        audio=types.Blob(
+                            data=chunk,
+                            mime_type=f"audio/pcm;rate={sample_rate}",
                         )
                     )
 
             sender_task = asyncio.create_task(_sender())
             try:
                 async for response in session.receive():
-                    for part in response.parts or []:
+                    for part in _iter_response_parts(response):
                         if part.text:
                             yield LiveResponse(text=part.text)
             finally:
@@ -87,3 +88,22 @@ class GeminiLiveClient:
     @staticmethod
     def decode_audio_base64(payload: str) -> bytes:
         return base64.b64decode(payload, validate=True)
+
+
+def _iter_response_parts(response: object):
+    parts = getattr(response, "parts", None)
+    if parts:
+        for part in parts:
+            yield part
+        return
+    server_content = getattr(response, "server_content", None)
+    if not server_content:
+        return
+    model_turn = getattr(server_content, "model_turn", None)
+    if not model_turn:
+        return
+    turn_parts = getattr(model_turn, "parts", None)
+    if not turn_parts:
+        return
+    for part in turn_parts:
+        yield part
