@@ -128,10 +128,15 @@
     <div class="voice-session-overlay" id="voice-session-overlay" aria-live="polite">
       <div class="voice-session-content">
         <div class="voice-orb-large" id="voice-orb-large">
-          <div class="voice-orb-large-shape" id="voice-orb-large-shape"></div>
-          <div class="voice-orb-large-core"></div>
+          <svg class="voice-orb-large-svg" viewBox="-120 -120 240 240" aria-hidden="true">
+            <path id="voice-orb-large-path" class="voice-orb-large-path"></path>
+          </svg>
         </div>
         <div class="voice-session-label" id="voice-session-label">Agent Greeting...</div>
+        <button id="voice-session-close" class="btn btn-outline voice-session-close" type="button">
+          <i data-lucide="x-circle"></i>
+          <span>対話を終了</span>
+        </button>
       </div>
     </div>
     <div id="toast-container" class="toast-container" aria-live="polite" aria-atomic="true"></div>
