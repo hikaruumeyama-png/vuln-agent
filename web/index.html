@@ -30,6 +30,10 @@
             <span class="connection-dot" id="status-indicator"></span>
             <span class="connection-label" id="status-text">Disconnected</span>
           </div>
+          <div class="connection-metrics">
+            <span id="ping-latency">Ping: -- ms</span>
+            <span id="reconnect-count">Reconnects: 0</span>
+          </div>
         </div>
       </header>
 
@@ -112,6 +116,7 @@
         </section>
       </div>
     </div>
+    <div id="toast-container" class="toast-container" aria-live="polite" aria-atomic="true"></div>
 
     <script src="https://unpkg.com/lucide@0.460.0/dist/umd/lucide.min.js"></script>
     <script src="app.js"></script>
