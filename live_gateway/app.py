@@ -301,7 +301,6 @@ async def websocket_endpoint(websocket: WebSocket):
             async for response in live_client.stream_transcription(audio_queue):
                 if response.text:
                     transcript_parts.append(response.text)
-                    await _safe_send(websocket, {"type": "live_text", "text": response.text})
                     now = time.monotonic()
                     if response_task is None and now - last_response_at > 2.0:
                         response_task = asyncio.create_task(_trigger_agent_response())
@@ -311,13 +310,10 @@ async def websocket_endpoint(websocket: WebSocket):
         async def _greeting():
             greeting_text = "こんにちは。要件を教えてください。"
             sent_audio = False
-            sent_text = False
+            await _safe_send(websocket, {"type": "live_text", "text": greeting_text})
             try:
                 tts_client = GeminiLiveClient()
                 async for response in tts_client.stream_text(greeting_text):
-                    if response.text:
-                        sent_text = True
-                        await _safe_send(websocket, {"type": "live_text", "text": response.text})
                     if response.audio_bytes:
                         sent_audio = True
                         await _safe_send(websocket, {
@@ -325,8 +321,6 @@ async def websocket_endpoint(websocket: WebSocket):
                             "audio": base64.b64encode(response.audio_bytes).decode("utf-8"),
                             "mime_type": response.mime_type or "audio/pcm",
                         })
-                if not sent_text:
-                    await _safe_send(websocket, {"type": "live_text", "text": greeting_text})
                 if not sent_audio:
                     await _safe_send(websocket, {
                         "type": "live_status",
@@ -369,10 +363,11 @@ async def websocket_endpoint(websocket: WebSocket):
             last_response_index = len(transcript_parts)
             agent_response = await _query_agent(client, transcript, websocket)
             await _safe_send(websocket, agent_response)
+            response_text = agent_response.get("text", "")
+            if response_text:
+                await _safe_send(websocket, {"type": "live_text", "text": response_text})
             tts_client = GeminiLiveClient()
-            async for response in tts_client.stream_text(agent_response.get("text", "")):
-                if response.text:
-                    await _safe_send(websocket, {"type": "live_text", "text": response.text})
+            async for response in tts_client.stream_text(response_text):
                 if response.audio_bytes:
                     await _safe_send(websocket, {
                         "type": "live_audio",

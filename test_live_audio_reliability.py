@@ -13,6 +13,8 @@ class LiveAudioReliabilityTests(unittest.TestCase):
         self.assertIn('"status": "greeting_no_audio"', source)
         self.assertIn('"status": "greeting_error"', source)
         self.assertIn("Greeting TTS failed", source)
+        self.assertIn('"text": response_text', source)
+        self.assertNotIn('"text": response.text', source)
 
     def test_frontend_handles_greeting_fallback_speech(self):
         source = WEB_APP.read_text(encoding="utf-8")
@@ -20,6 +22,9 @@ class LiveAudioReliabilityTests(unittest.TestCase):
         self.assertIn("window.speechSynthesis.speak", source)
         self.assertIn('payload.status === "greeting_no_audio"', source)
         self.assertIn('payload.status === "greeting_error"', source)
+        self.assertIn("function extractJapaneseText", source)
+        self.assertIn("function drainPlaybackQueue", source)
+        self.assertIn("playbackQueue.push", source)
 
     def test_live_api_uses_current_native_audio_model(self):
         source = LIVE_GATEWAY_API.read_text(encoding="utf-8")
