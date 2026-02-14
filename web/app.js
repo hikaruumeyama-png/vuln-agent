@@ -73,6 +73,7 @@ let playbackQueue = [];
 let isPlaybackQueueDraining = false;
 let playbackIdleTimerId = null;
 let standalonePlaybackContext = null;
+let suppressLiveAudioUntilMs = 0;
 
 // ── Utility Functions ───────────────────────────────────
 function escapeHtml(str) {
@@ -365,12 +366,17 @@ function stopAllPlayback() {
   playbackQueue = [];
   isPlaybackQueueDraining = false;
   clearPlaybackIdleTimer();
+  stopGreetingFallbackSpeech();
   if (currentPlaybackSource) {
     try {
       currentPlaybackSource.stop();
     } catch {}
     currentPlaybackSource = null;
   }
+}
+
+function suppressIncomingLiveAudio(ms = 1200) {
+  suppressLiveAudioUntilMs = Math.max(suppressLiveAudioUntilMs, Date.now() + ms);
 }
 
 function stopGreetingFallbackSpeech() {
@@ -608,6 +614,7 @@ async function stopAudioCapture(sendLiveStop = false) {
   processor = null;
   audioCaptureNode = null;
   awaitingAgentGreeting = false;
+  suppressLiveAudioUntilMs = 0;
   hasReceivedGreetingAudio = false;
   didAttemptGreetingSpeechFallback = false;
   clearGreetingUnlockTimer();
@@ -770,6 +777,7 @@ registerProcessor("pcm-capture-processor", PcmCaptureProcessor);
           lastSpeechTimestamp = now;
           if (mode !== "listening") setMode("listening");
           if (currentPlaybackSource) {
+            suppressIncomingLiveAudio();
             stopAllPlayback();
             if (socket && socket.readyState === WebSocket.OPEN) {
               socket.send(JSON.stringify({ type: "barge_in" }));
@@ -882,6 +890,9 @@ connectButton.addEventListener("click", () => {
       }
 
       if (payload.type === "live_audio") {
+        if (Date.now() < suppressLiveAudioUntilMs) {
+          return;
+        }
         if (awaitingAgentGreeting) {
           hasReceivedGreetingAudio = true;
         }
@@ -909,6 +920,7 @@ connectButton.addEventListener("click", () => {
             unlockGreetingAndListening(false, true);
           }
         } else if (payload.status === "barge_in") {
+          suppressIncomingLiveAudio();
           stopAllPlayback();
           setMode("listening (barge-in)");
         } else if (payload.status === "stopped") {
@@ -1004,6 +1016,7 @@ startAudioButton.addEventListener("click", async () => {
     await audioContext.resume();
     const source = audioContext.createMediaStreamSource(mediaStream);
     awaitingAgentGreeting = true;
+    suppressLiveAudioUntilMs = 0;
     hasReceivedGreetingAudio = false;
     didAttemptGreetingSpeechFallback = false;
     clearPlaybackIdleTimer();
@@ -1044,6 +1057,7 @@ startAudioButton.addEventListener("click", async () => {
             setMode("listening");
           }
           if (currentPlaybackSource) {
+            suppressIncomingLiveAudio();
             stopAllPlayback();
             if (socket && socket.readyState === WebSocket.OPEN) {
               socket.send(JSON.stringify({ type: "barge_in" }));
