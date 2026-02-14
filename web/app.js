@@ -228,9 +228,13 @@ function setStatus(online, message) {
 // ── Audio Mode ──────────────────────────────────────────
 function setMode(nextMode) {
   mode = nextMode;
+  const isListening = String(mode).startsWith("listening");
+  document.body.classList.toggle("mode-listening", isListening);
+  voiceSessionOverlay?.classList.toggle("listening-active", isListening);
+
   const labelMap = {
     idle: "Idle",
-    listening: "Listening",
+    listening: "Listening (Mic ON)",
     speaking: "Agent Speaking",
     "awaiting-greeting": "Agent Greeting...",
   };
