@@ -630,7 +630,7 @@ if [[ -n "$AGENT_RESOURCE_NAME" ]]; then
     --update-env-vars="GCP_PROJECT_ID=${PROJECT_ID},GCP_LOCATION=${REGION},CHAT_WEBHOOK_VERIFICATION_TOKEN=$(_sm_get vuln-agent-chat-verification-token)" \
     --remove-env-vars="AGENT_RESOURCE_NAME" \
     --set-secrets="AGENT_RESOURCE_NAME=vuln-agent-resource-name:latest" \
-    --memory=512MB \
+    --memory=1024MB \
     --timeout=540s \
     --quiet; then
     err "Google Chat Webhook のデプロイに失敗しました"
@@ -696,3 +696,5 @@ echo ""
 echo "  以降のコード変更は Cloud Build で自動デプロイできます:"
 echo "  gcloud builds submit --config cloudbuild.yaml"
 echo ""
+
+

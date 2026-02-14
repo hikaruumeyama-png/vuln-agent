@@ -100,16 +100,66 @@ def _run_agent_query(prompt: str, user_id: str) -> str:
 
     chunks: list[str] = []
 
+    def _harvest_text(obj: Any) -> None:
+        if obj is None:
+            return
+        if isinstance(obj, str):
+            if obj.strip():
+                chunks.append(obj.strip())
+            return
+        if isinstance(obj, dict):
+            if isinstance(obj.get("text"), str) and obj["text"].strip():
+                chunks.append(obj["text"].strip())
+            for value in obj.values():
+                _harvest_text(value)
+            return
+        if isinstance(obj, (list, tuple, set)):
+            for item in obj:
+                _harvest_text(item)
+            return
+        if hasattr(obj, "text"):
+            value = getattr(obj, "text", "")
+            if isinstance(value, str) and value.strip():
+                chunks.append(value.strip())
+        if hasattr(obj, "model_dump"):
+            try:
+                _harvest_text(obj.model_dump())
+            except Exception:
+                pass
+        elif hasattr(obj, "__dict__"):
+            _harvest_text(vars(obj))
+
+    def _collect_text_from_event(stream_event: Any) -> None:
+        direct_text = getattr(stream_event, "text", "")
+        if isinstance(direct_text, str) and direct_text.strip():
+            chunks.append(direct_text.strip())
+
+        content = getattr(stream_event, "content", None)
+        parts = []
+        if isinstance(content, dict):
+            parts = content.get("parts", []) or []
+        elif content is not None:
+            parts = getattr(content, "parts", []) or []
+
+        for part in parts:
+            text = ""
+            if isinstance(part, dict):
+                text = part.get("text", "")
+            else:
+                text = getattr(part, "text", "")
+            if isinstance(text, str) and text.strip():
+                chunks.append(text.strip())
+            else:
+                _harvest_text(part)
+
+        _harvest_text(stream_event)
+
     async def execute_query():
         async for event in app.async_stream_query(
             user_id=user_id or "google-chat-user",
             message=prompt,
         ):
-            if hasattr(event, "content"):
-                for part in event.content.get("parts", []):
-                    text = part.get("text")
-                    if text:
-                        chunks.append(text)
+            _collect_text_from_event(event)
 
     loop = asyncio.new_event_loop()
     try:
@@ -117,7 +167,36 @@ def _run_agent_query(prompt: str, user_id: str) -> str:
     finally:
         loop.close()
 
-    result = "\n".join(chunks).strip()
+    def _is_noise_line(line: str) -> bool:
+        if not line:
+            return True
+        if line in {"model", "TEXT", "STOP", "ON_DEMAND", "sent", "user"}:
+            return True
+        if line.startswith("spaces/"):
+            return True
+        if re.fullmatch(r"[A-Za-z0-9._:/=\-]{24,}", line):
+            return True
+        if re.fullmatch(r"[A-Za-z0-9._\-]{16,}", line):
+            return True
+        return False
+
+    def _normalize_chunks(raw_chunks: list[str]) -> str:
+        seen = set()
+        candidates: list[str] = []
+        for raw in raw_chunks:
+            for line in raw.splitlines():
+                text = line.strip()
+                if not text or text in seen or _is_noise_line(text):
+                    continue
+                seen.add(text)
+                candidates.append(text)
+        if not candidates:
+            return ""
+        preferred = [x for x in candidates if re.search(r"[^\x00-\x7F]", x) or " " in x or "。" in x]
+        selected = preferred if preferred else candidates
+        return "\n".join(selected[:6]).strip()
+
+    result = _normalize_chunks(chunks)
     if not result:
         return "回答を生成できませんでした。もう一度お試しください。"
     return result[:3500]
