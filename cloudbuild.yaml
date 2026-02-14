@@ -264,7 +264,6 @@ steps:
           --source=chat_webhook \
           --entry-point=handle_chat_event \
           --trigger-http \
-          --allow-unauthenticated \
           --service-account=vuln-agent-sa@${PROJECT_ID}.iam.gserviceaccount.com \
           --update-env-vars="GCP_PROJECT_ID=${PROJECT_ID},GCP_LOCATION=${_REGION},CHAT_WEBHOOK_VERIFICATION_TOKEN=$$chat_verify_token" \
           --remove-env-vars="AGENT_RESOURCE_NAME" \
@@ -300,3 +299,10 @@ steps:
 options:
   logging: CLOUD_LOGGING_ONLY
 timeout: 2400s
+
+
+
+
+
+
+

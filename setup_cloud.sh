@@ -534,3 +534,5 @@ echo ""
 echo "  以降のコード変更は Cloud Build で自動デプロイできます:"
 echo "  gcloud builds submit --config cloudbuild.yaml"
 echo ""
+
+
