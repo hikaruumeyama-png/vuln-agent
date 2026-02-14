@@ -76,7 +76,7 @@ if [[ -z "$CHANGED_FILES" ]]; then
   exit 0
 fi
 
-if ! echo "$CHANGED_FILES" | grep -Eq '^(agent/|scheduler/|live_gateway/|web/|cloudbuild.yaml|setup_cloud.sh|setup_git_auto_deploy.sh|deploy.sh|requirements.txt)'; then
+if ! echo "$CHANGED_FILES" | grep -Eq '^(agent/|chat_webhook/|live_gateway/|web/|cloudbuild.yaml|setup_cloud.sh|setup_git_auto_deploy.sh|deploy.sh|requirements.txt)'; then
   log "インフラ/アプリ変更なし。デプロイ不要"
   exit 0
 fi
