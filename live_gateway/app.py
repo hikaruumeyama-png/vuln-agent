@@ -278,12 +278,13 @@ async def websocket_endpoint(websocket: WebSocket):
     live_task: asyncio.Task | None = None
     greeting_task: asyncio.Task | None = None
     response_task: asyncio.Task | None = None
+    tts_task: asyncio.Task | None = None
     transcript_parts: list[str] = []
     last_response_index = 0
     last_response_at = 0.0
 
     async def _start_live_session():
-        nonlocal audio_queue, live_client, live_task, greeting_task, response_task, last_response_at, last_response_index
+        nonlocal audio_queue, live_client, live_task, greeting_task, response_task, tts_task, last_response_at, last_response_index
         if live_task is not None and not live_task.done():
             return
 
@@ -294,6 +295,7 @@ async def websocket_endpoint(websocket: WebSocket):
         live_client = GeminiLiveClient()
         last_response_at = 0.0
         last_response_index = 0
+        tts_task = None
         transcript_parts.clear()
 
         async def _stream():
@@ -307,20 +309,52 @@ async def websocket_endpoint(websocket: WebSocket):
 
         live_task = asyncio.create_task(_stream())
 
-        async def _greeting():
-            greeting_text = "こんにちは。要件を教えてください。"
-            sent_audio = False
-            await _safe_send(websocket, {"type": "live_text", "text": greeting_text})
-            try:
+        async def _speak_text(text: str) -> bool:
+            nonlocal tts_task
+            has_audio = False
+
+            async def _run():
+                nonlocal has_audio
                 tts_client = GeminiLiveClient()
-                async for response in tts_client.stream_text(greeting_text):
+                async for response in tts_client.stream_text(text):
                     if response.audio_bytes:
-                        sent_audio = True
+                        has_audio = True
                         await _safe_send(websocket, {
                             "type": "live_audio",
                             "audio": base64.b64encode(response.audio_bytes).decode("utf-8"),
                             "mime_type": response.mime_type or "audio/pcm",
                         })
+
+            current_task = asyncio.create_task(_run())
+            tts_task = current_task
+            try:
+                await current_task
+            finally:
+                if tts_task is current_task:
+                    tts_task = None
+            return has_audio
+
+        async def _greeting():
+            greeting_text = "こんにちは。要件を教えてください。"
+            try:
+                greeting_response = await _query_agent(
+                    client,
+                    (
+                        "音声対話が開始されました。"
+                        "脆弱性管理エージェントとして最初の挨拶を60文字以内で返してください。"
+                    ),
+                    websocket,
+                )
+                generated_text = greeting_response.get("text", "").strip()
+                if generated_text:
+                    greeting_text = generated_text
+            except Exception as exc:
+                logger.exception("Greeting generation failed: %s", exc)
+
+            sent_audio = False
+            await _safe_send(websocket, {"type": "live_text", "text": greeting_text})
+            try:
+                sent_audio = await _speak_text(greeting_text)
                 if not sent_audio:
                     await _safe_send(websocket, {
                         "type": "live_status",
@@ -339,11 +373,13 @@ async def websocket_endpoint(websocket: WebSocket):
         greeting_task = asyncio.create_task(_greeting())
 
     async def _stop_live_session():
-        nonlocal live_task, live_client, greeting_task, response_task
+        nonlocal live_task, live_client, greeting_task, response_task, tts_task
         if live_task is not None:
             await audio_queue.put((None, 0))
 
-        tasks_to_cancel = [t for t in (live_task, greeting_task, response_task) if t is not None]
+        tasks_to_cancel = [
+            t for t in (live_task, greeting_task, response_task, tts_task) if t is not None
+        ]
         for task in tasks_to_cancel:
             task.cancel()
         if tasks_to_cancel:
@@ -352,10 +388,11 @@ async def websocket_endpoint(websocket: WebSocket):
         live_task = None
         greeting_task = None
         response_task = None
+        tts_task = None
         live_client = None
 
     async def _trigger_agent_response():
-        nonlocal response_task, last_response_at, last_response_index
+        nonlocal response_task, tts_task, last_response_at, last_response_index
         try:
             transcript = " ".join(transcript_parts[last_response_index:]).strip()
             if not transcript:
@@ -366,14 +403,24 @@ async def websocket_endpoint(websocket: WebSocket):
             response_text = agent_response.get("text", "")
             if response_text:
                 await _safe_send(websocket, {"type": "live_text", "text": response_text})
-            tts_client = GeminiLiveClient()
-            async for response in tts_client.stream_text(response_text):
-                if response.audio_bytes:
-                    await _safe_send(websocket, {
-                        "type": "live_audio",
-                        "audio": base64.b64encode(response.audio_bytes).decode("utf-8"),
-                        "mime_type": response.mime_type or "audio/pcm",
-                    })
+            if response_text:
+                async def _run_tts():
+                    tts_client = GeminiLiveClient()
+                    async for response in tts_client.stream_text(response_text):
+                        if response.audio_bytes:
+                            await _safe_send(websocket, {
+                                "type": "live_audio",
+                                "audio": base64.b64encode(response.audio_bytes).decode("utf-8"),
+                                "mime_type": response.mime_type or "audio/pcm",
+                            })
+
+                current_task = asyncio.create_task(_run_tts())
+                tts_task = current_task
+                try:
+                    await current_task
+                finally:
+                    if tts_task is current_task:
+                        tts_task = None
             last_response_at = time.monotonic()
         finally:
             response_task = None
@@ -490,8 +537,12 @@ async def websocket_endpoint(websocket: WebSocket):
                 continue
 
             if payload.get("type") == "barge_in":
+                if greeting_task:
+                    greeting_task.cancel()
                 if response_task:
                     response_task.cancel()
+                if tts_task:
+                    tts_task.cancel()
                 await websocket.send_text(
                     json.dumps({"type": "live_status", "status": "barge_in"})
                 )

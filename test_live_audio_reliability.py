@@ -13,6 +13,9 @@ class LiveAudioReliabilityTests(unittest.TestCase):
         self.assertIn('"status": "greeting_no_audio"', source)
         self.assertIn('"status": "greeting_error"', source)
         self.assertIn("Greeting TTS failed", source)
+        self.assertIn("if payload.get(\"type\") == \"barge_in\":", source)
+        self.assertIn("if tts_task:", source)
+        self.assertIn("tts_task.cancel()", source)
         self.assertIn('"text": response_text', source)
         self.assertNotIn('"text": response.text', source)
 
@@ -22,6 +25,8 @@ class LiveAudioReliabilityTests(unittest.TestCase):
         self.assertIn("window.speechSynthesis.speak", source)
         self.assertIn('payload.status === "greeting_no_audio"', source)
         self.assertIn('payload.status === "greeting_error"', source)
+        self.assertIn("function suppressIncomingLiveAudio", source)
+        self.assertIn("if (Date.now() < suppressLiveAudioUntilMs)", source)
         self.assertIn("function extractJapaneseText", source)
         self.assertIn("function drainPlaybackQueue", source)
         self.assertIn("playbackQueue.push", source)
