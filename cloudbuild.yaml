@@ -465,7 +465,7 @@ steps:
           --update-env-vars="GCP_PROJECT_ID=${PROJECT_ID},GCP_LOCATION=${_REGION},CHAT_WEBHOOK_VERIFICATION_TOKEN=$$chat_verify_token" \
           --remove-env-vars="AGENT_RESOURCE_NAME" \
           --set-secrets="AGENT_RESOURCE_NAME=vuln-agent-resource-name:latest" \
-          --memory=512MB \
+          --memory=1024MB \
           --timeout=540s \
           --quiet
     waitFor:
@@ -500,6 +500,7 @@ steps:
 options:
   logging: CLOUD_LOGGING_ONLY
 timeout: 2400s
+
 
 
 
