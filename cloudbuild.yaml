@@ -1,16 +1,5 @@
 # ====================================================
 # Cloud Build CI/CD パイプライン
-#
-# 初回セットアップ後のコード変更を自動デプロイします。
-#
-# 実行:
-#   gcloud builds submit --config cloudbuild.yaml
-#
-# トリガー登録 (push 時に自動実行):
-#   gcloud builds triggers create github \
-#     --repo-name=vuln-agent --repo-owner=YOUR_ORG \
-#     --branch-pattern="^main$" \
-#     --build-config=cloudbuild.yaml
 # ====================================================
 
 substitutions:
@@ -22,9 +11,6 @@ substitutions:
   _CHANGED_FILES: ""
 
 steps:
-  # =========================================
-  # Step 0: 変更内容からデプロイ対象を判定
-  # =========================================
   - name: "gcr.io/google.com/cloudsdktool/cloud-sdk"
     id: detect-changes
     entrypoint: bash
@@ -36,8 +22,6 @@ steps:
         flags_file="/workspace/.deploy_flags"
         DEPLOY_AGENT=false
         DEPLOY_GATEWAY=false
-        DEPLOY_SCHEDULER=false
-        DEPLOY_GMAIL_TRIGGER=false
         DEPLOY_CHAT_WEBHOOK=false
         DEPLOY_WEB=false
 
@@ -45,7 +29,6 @@ steps:
         full_deploy="$(printf '%s' "$$full_deploy_raw" | tr '[:upper:]' '[:lower:]')"
         changed_files_raw="${_CHANGED_FILES}"
 
-        # 手動指定があれば _CHANGED_FILES を優先。未指定時は git diff で推定。
         if [ -z "$$changed_files_raw" ] && [ -d .git ] \
           && [ -n "$${BEFORE_SHA:-}" ] && [ -n "$${COMMIT_SHA:-}" ]; then
           zeros="0000000000000000000000000000000000000000"
@@ -57,19 +40,13 @@ steps:
         if [ "$$full_deploy" = "true" ]; then
           DEPLOY_AGENT=true
           DEPLOY_GATEWAY=true
-          DEPLOY_SCHEDULER=true
-          DEPLOY_GMAIL_TRIGGER=true
           DEPLOY_CHAT_WEBHOOK=true
           DEPLOY_WEB=true
-          echo "強制フルデプロイを有効化しました。"
         elif [ -z "$$changed_files_raw" ]; then
           DEPLOY_AGENT=true
           DEPLOY_GATEWAY=true
-          DEPLOY_SCHEDULER=true
-          DEPLOY_GMAIL_TRIGGER=true
           DEPLOY_CHAT_WEBHOOK=true
           DEPLOY_WEB=true
-          echo "変更ファイルを判定できないため安全側で全デプロイを実行します。"
         else
           unknown_path_detected=false
           while IFS= read -r path; do
@@ -80,12 +57,6 @@ steps:
                 ;;
               live_gateway/*)
                 DEPLOY_GATEWAY=true
-                ;;
-              scheduler/*)
-                DEPLOY_SCHEDULER=true
-                ;;
-              gmail_trigger/*)
-                DEPLOY_GMAIL_TRIGGER=true
                 ;;
               chat_webhook/*)
                 DEPLOY_CHAT_WEBHOOK=true
@@ -101,23 +72,17 @@ steps:
             esac
           done <<< "$(printf '%s' "$$changed_files_raw" | tr ', ' '\n\n')"
 
-          # 影響範囲を特定できない変更は安全側で全デプロイ。
           if [ "$$unknown_path_detected" = "true" ]; then
             DEPLOY_AGENT=true
             DEPLOY_GATEWAY=true
-            DEPLOY_SCHEDULER=true
-            DEPLOY_GMAIL_TRIGGER=true
             DEPLOY_CHAT_WEBHOOK=true
             DEPLOY_WEB=true
-            echo "共通または未知パスの変更を検知したため全デプロイを実行します。"
           fi
         fi
 
         cat > "$$flags_file" <<EOF
         DEPLOY_AGENT=$$DEPLOY_AGENT
         DEPLOY_GATEWAY=$$DEPLOY_GATEWAY
-        DEPLOY_SCHEDULER=$$DEPLOY_SCHEDULER
-        DEPLOY_GMAIL_TRIGGER=$$DEPLOY_GMAIL_TRIGGER
         DEPLOY_CHAT_WEBHOOK=$$DEPLOY_CHAT_WEBHOOK
         DEPLOY_WEB=$$DEPLOY_WEB
         EOF
@@ -125,9 +90,6 @@ steps:
         echo "デプロイ判定結果:"
         cat "$$flags_file"
 
-  # =========================================
-  # Step 1: Secret Manager から .env を生成
-  # =========================================
   - name: "gcr.io/google.com/cloudsdktool/cloud-sdk"
     id: build-env
     entrypoint: bash
@@ -158,13 +120,9 @@ steps:
         GCP_PROJECT_ID=${PROJECT_ID}
         GCP_LOCATION=${_REGION}
         EOF
-        echo ".env ファイル生成完了 ($(wc -l < agent/.env) 行)"
     waitFor:
       - detect-changes
 
-  # =========================================
-  # Step 2: Agent Engine をデプロイ
-  # =========================================
   - name: "${_ADK_BUILDER_IMAGE}"
     id: deploy-agent
     entrypoint: bash
@@ -180,35 +138,27 @@ steps:
           exit 0
         fi
 
-        echo "[Step 2/5] Agent Engine のデプロイ準備を開始します"
         adk_bin=""
         if command -v adk >/dev/null 2>&1; then
           adk_bin="$(command -v adk)"
-          echo "プリインストール済み ADK を利用します: $$adk_bin"
         elif [ -x /workspace/.venv-adk/bin/adk ]; then
           adk_bin="/workspace/.venv-adk/bin/adk"
-          echo "既存 venv の ADK を利用します: $$adk_bin"
         else
-          echo "google-adk が見つからないため venv にインストールします"
           if python3 -m venv /workspace/.venv-adk 2>/tmp/venv_err.log; then
             /workspace/.venv-adk/bin/python -m pip install -q --upgrade pip
             /workspace/.venv-adk/bin/python -m pip install -q google-adk
             adk_bin="/workspace/.venv-adk/bin/adk"
           else
-            echo "venv 作成に失敗したため user site インストールにフォールバックします"
-            cat /tmp/venv_err.log || true
             python3 -m pip install -q --user --break-system-packages google-adk
             adk_bin="$(python3 -m site --user-base)/bin/adk"
           fi
         fi
+
         if [ ! -x "$$adk_bin" ]; then
           echo "adk CLI が見つかりません: $$adk_bin"
-          /workspace/.venv-adk/bin/python -m pip show google-adk 2>/dev/null || true
-          python3 -m pip show google-adk 2>/dev/null || true
           exit 127
         fi
-        "$$adk_bin" --version || true
-        echo "[Step 2/5] Agent Engine をデプロイします"
+
         cd agent
         "$$adk_bin" deploy agent_engine \
           --project=${PROJECT_ID} \
@@ -218,66 +168,41 @@ steps:
 
         token="$(gcloud auth print-access-token)"
         api_base="https://${_REGION}-aiplatform.googleapis.com/v1"
-        verify_engine_exists() {
-          local engine_name="$1"
-          [ -z "$engine_name" ] && return 1
-          local status
-          status="$(curl -s -o /dev/null -w "%{http_code}" -H "Authorization: Bearer $$token" \
-            "$$api_base/$$engine_name")"
-          [ "$$status" = "200" ]
-        }
         engines_json="$(curl -sSf -H "Authorization: Bearer $$token" \
           "$$api_base/projects/${PROJECT_ID}/locations/${_REGION}/reasoningEngines")"
 
         latest_engine="$(printf '%s' "$$engines_json" | python3 -c 'import json,sys; display_name=sys.argv[1]; engines=json.load(sys.stdin).get("reasoningEngines", []); filtered=[e for e in engines if e.get("displayName")==display_name and e.get("name")]; filtered.sort(key=lambda e: e.get("createTime", ""), reverse=True); print(filtered[0]["name"] if filtered else "")' "${_AGENT_NAME}")"
+
         if [ -z "$$latest_engine" ]; then
-          echo "エラー: 最新の Agent Engine を特定できませんでした。Secret を更新できません。"
+          echo "エラー: 最新の Agent Engine を特定できませんでした"
           exit 1
-        elif ! verify_engine_exists "$$latest_engine"; then
-          echo "エラー: デプロイした Agent Engine の疎通確認に失敗しました: $$latest_engine"
-          exit 1
-        else
-          if ! gcloud secrets describe vuln-agent-resource-name >/dev/null 2>&1; then
-            echo "vuln-agent-resource-name が存在しないため作成します。"
-            printf 'bootstrap' | gcloud secrets create vuln-agent-resource-name --data-file=- >/dev/null
-          fi
-          printf '%s' "$$latest_engine" | gcloud secrets versions add vuln-agent-resource-name --data-file=- >/dev/null
-          echo "vuln-agent-resource-name を更新しました: $$latest_engine"
         fi
 
-        echo "[Step 2/5] 古い Agent Engine リソースを整理します"
+        if ! gcloud secrets describe vuln-agent-resource-name >/dev/null 2>&1; then
+          printf 'bootstrap' | gcloud secrets create vuln-agent-resource-name --data-file=- >/dev/null
+        fi
+        printf '%s' "$$latest_engine" | gcloud secrets versions add vuln-agent-resource-name --data-file=- >/dev/null
+
         retention_count="${_AGENT_ENGINE_RETENTION}"
         if ! [[ "$$retention_count" =~ ^[0-9]+$$ ]] || [ "$$retention_count" -lt 1 ]; then
-          echo "_AGENT_ENGINE_RETENTION の値が不正なため 1 を使用します: $$retention_count"
           retention_count="1"
         fi
 
         delete_targets="$(printf '%s' "$$engines_json" | python3 -c 'import json,sys; retention=int(sys.argv[1]); display_name=sys.argv[2]; engines=json.load(sys.stdin).get("reasoningEngines", []); filtered=[e for e in engines if e.get("displayName")==display_name and e.get("name")]; filtered.sort(key=lambda e: e.get("createTime", ""), reverse=True); print("\n".join(e["name"] for e in filtered[retention:]))' "$$retention_count" "${_AGENT_NAME}")"
-
-        preserved_engine="$(gcloud secrets versions access latest \
-          --secret=vuln-agent-resource-name 2>/dev/null || echo '')"
+        preserved_engine="$(gcloud secrets versions access latest --secret=vuln-agent-resource-name 2>/dev/null || echo '')"
         if [ -n "$$preserved_engine" ]; then
           delete_targets="$(printf '%s\n' "$$delete_targets" | awk -v preserve="$$preserved_engine" '$0 != preserve')"
-          echo "保持対象の Agent Engine を削除対象から除外しました: $$preserved_engine"
         fi
 
-        if [ -z "$$delete_targets" ]; then
-          echo "削除対象の Agent Engine はありません。"
-        else
+        if [ -n "$$delete_targets" ]; then
           while IFS= read -r engine_name; do
             [ -z "$$engine_name" ] && continue
-            echo "削除: $$engine_name"
-            curl -sSf -X DELETE -H "Authorization: Bearer $$token" \
-              "$$api_base/$$engine_name" >/dev/null || \
-              echo "警告: 削除に失敗しました: $$engine_name"
+            curl -sSf -X DELETE -H "Authorization: Bearer $$token" "$$api_base/$$engine_name" >/dev/null || true
           done <<< "$$delete_targets"
         fi
     waitFor:
       - build-env
 
-  # =========================================
-  # Step 3: Live Gateway を Cloud Run にデプロイ
-  # =========================================
   - name: "gcr.io/google.com/cloudsdktool/cloud-sdk"
     id: deploy-live-gateway
     entrypoint: bash
@@ -292,19 +217,14 @@ steps:
           echo "[Step 3/5] Live Gateway が対象外のためデプロイをスキップします"
           exit 0
         fi
-        echo "[Step 3/5] Live Gateway デプロイ条件を確認します"
-        # --set-secrets で参照するため Secret の存在のみ確認する。
-        # Secret の値 (AGENT_RESOURCE_NAME) は Cloud Run がランタイムで
-        # 読み取るため、デプロイ時に値の取得は不要。
         if ! gcloud secrets describe vuln-agent-resource-name >/dev/null 2>&1; then
-          echo "警告: vuln-agent-resource-name シークレットが存在しないため Live Gateway のデプロイをスキップします"
+          echo "警告: vuln-agent-resource-name が存在しないためスキップ"
           exit 0
         fi
         if ! gcloud secrets describe vuln-agent-gemini-api-key >/dev/null 2>&1; then
-          echo "警告: vuln-agent-gemini-api-key シークレットが存在しないため Live Gateway のデプロイをスキップします"
+          echo "警告: vuln-agent-gemini-api-key が存在しないためスキップ"
           exit 0
         fi
-        echo "[Step 3/5] Live Gateway を Cloud Run にデプロイします"
         gcloud run deploy vuln-agent-live-gateway \
           --source=live_gateway \
           --region=${_REGION} \
@@ -318,120 +238,6 @@ steps:
     waitFor:
       - deploy-agent
 
-  # =========================================
-  # Step 4: Scheduler を Cloud Functions にデプロイ
-  # =========================================
-  - name: "gcr.io/google.com/cloudsdktool/cloud-sdk"
-    id: deploy-scheduler
-    entrypoint: bash
-    args:
-      - "-c"
-      - |
-        set -euo pipefail
-        if [ -f /workspace/.deploy_flags ]; then
-          source /workspace/.deploy_flags
-        fi
-        if [ "${DEPLOY_SCHEDULER:-true}" != "true" ]; then
-          echo "[Step 4/6] Scheduler が対象外のためデプロイをスキップします"
-          exit 0
-        fi
-        echo "[Step 4/6] Scheduler デプロイ条件を確認します"
-        # --set-secrets で参照するため Secret の存在のみ確認する。
-        # Secret の値 (AGENT_RESOURCE_NAME) は Cloud Functions がランタイムで
-        # 読み取るため、デプロイ時に Agent Engine の疎通確認は行わない。
-        if ! gcloud secrets describe vuln-agent-resource-name >/dev/null 2>&1; then
-          echo "エラー: vuln-agent-resource-name シークレットが存在しません。"
-          echo "初回セットアップ (setup_cloud.sh) を先に実行してください。"
-          exit 1
-        fi
-        echo "[Step 4/6] Scheduler を Cloud Functions にデプロイします"
-        gcloud functions deploy vuln-agent-scheduler \
-          --gen2 \
-          --runtime=python312 \
-          --region=${_REGION} \
-          --source=scheduler \
-          --entry-point=run_vulnerability_scan \
-          --trigger-http \
-          --service-account=vuln-agent-sa@${PROJECT_ID}.iam.gserviceaccount.com \
-          --update-env-vars="GCP_PROJECT_ID=${PROJECT_ID},GCP_LOCATION=${_REGION}" \
-          --remove-env-vars="AGENT_RESOURCE_NAME" \
-          --set-secrets="AGENT_RESOURCE_NAME=vuln-agent-resource-name:latest" \
-          --memory=512MB \
-          --timeout=540s \
-          --quiet
-    waitFor:
-      - deploy-agent
-
-  # =========================================
-  # Step 5: Gmail Trigger を Cloud Functions にデプロイ
-  # =========================================
-  - name: "gcr.io/google.com/cloudsdktool/cloud-sdk"
-    id: deploy-gmail-trigger
-    entrypoint: bash
-    args:
-      - "-c"
-      - |
-        set -euo pipefail
-        if [ -f /workspace/.deploy_flags ]; then
-          source /workspace/.deploy_flags
-        fi
-        if [ "${DEPLOY_GMAIL_TRIGGER:-true}" != "true" ]; then
-          echo "[Step 5/6] Gmail Trigger が対象外のためデプロイをスキップします"
-          exit 0
-        fi
-        echo "[Step 5/6] Gmail Trigger デプロイ条件を確認します"
-        if ! gcloud secrets describe vuln-agent-resource-name >/dev/null 2>&1; then
-          echo "エラー: vuln-agent-resource-name シークレットが存在しません。"
-          echo "初回セットアップ (setup_cloud.sh) を先に実行してください。"
-          exit 1
-        fi
-        if ! gcloud services list --enabled --filter="NAME:eventarc.googleapis.com" --format="value(NAME)" | grep -q "eventarc.googleapis.com"; then
-          echo "Eventarc API が未有効のため有効化します"
-          gcloud services enable eventarc.googleapis.com --quiet
-        fi
-        if ! gcloud pubsub topics describe vuln-agent-gmail-events >/dev/null 2>&1; then
-          gcloud pubsub topics create vuln-agent-gmail-events >/dev/null
-        fi
-        gcloud pubsub topics add-iam-policy-binding vuln-agent-gmail-events \
-          --member="serviceAccount:gmail-api-push@system.gserviceaccount.com" \
-          --role="roles/pubsub.publisher" --quiet >/dev/null 2>&1 || true
-        echo "[Step 5/6] Gmail Push Trigger を Cloud Functions にデプロイします"
-        gcloud functions deploy vuln-agent-gmail-trigger \
-          --gen2 \
-          --runtime=python312 \
-          --region=${_REGION} \
-          --source=gmail_trigger \
-          --entry-point=handle_gmail_push \
-          --trigger-topic=vuln-agent-gmail-events \
-          --service-account=vuln-agent-sa@${PROJECT_ID}.iam.gserviceaccount.com \
-          --update-env-vars="GCP_PROJECT_ID=${PROJECT_ID},GCP_LOCATION=${_REGION},GMAIL_WATCH_TOPIC=projects/${PROJECT_ID}/topics/vuln-agent-gmail-events" \
-          --remove-env-vars="AGENT_RESOURCE_NAME,GMAIL_OAUTH_TOKEN,GMAIL_USER_EMAIL,SIDFM_SENDER_EMAIL" \
-          --set-secrets="AGENT_RESOURCE_NAME=vuln-agent-resource-name:latest" \
-          --memory=512MB \
-          --timeout=540s \
-          --quiet
-
-        echo "[Step 5/6] Gmail watch refresh Function をデプロイします"
-        gcloud functions deploy vuln-agent-gmail-watch-refresh \
-          --gen2 \
-          --runtime=python312 \
-          --region=${_REGION} \
-          --source=gmail_trigger \
-          --entry-point=refresh_gmail_watch \
-          --trigger-http \
-          --no-allow-unauthenticated \
-          --service-account=vuln-agent-sa@${PROJECT_ID}.iam.gserviceaccount.com \
-          --update-env-vars="GCP_PROJECT_ID=${PROJECT_ID},GCP_LOCATION=${_REGION},GMAIL_WATCH_TOPIC=projects/${PROJECT_ID}/topics/vuln-agent-gmail-events" \
-          --remove-env-vars="GMAIL_OAUTH_TOKEN,GMAIL_USER_EMAIL,SIDFM_SENDER_EMAIL" \
-          --memory=256MB \
-          --timeout=120s \
-          --quiet
-    waitFor:
-      - deploy-agent
-
-  # =========================================
-  # Step 6: Chat Webhook を Cloud Functions にデプロイ
-  # =========================================
   - name: "gcr.io/google.com/cloudsdktool/cloud-sdk"
     id: deploy-chat-webhook
     entrypoint: bash
@@ -443,17 +249,14 @@ steps:
           source /workspace/.deploy_flags
         fi
         if [ "${DEPLOY_CHAT_WEBHOOK:-true}" != "true" ]; then
-          echo "[Step 6/7] Chat Webhook が対象外のためデプロイをスキップします"
+          echo "[Step 4/5] Chat Webhook が対象外のためデプロイをスキップします"
           exit 0
         fi
-        echo "[Step 6/7] Chat Webhook デプロイ条件を確認します"
         if ! gcloud secrets describe vuln-agent-resource-name >/dev/null 2>&1; then
-          echo "エラー: vuln-agent-resource-name シークレットが存在しません。"
-          echo "初回セットアップ (setup_cloud.sh) を先に実行してください。"
+          echo "エラー: vuln-agent-resource-name が存在しません"
           exit 1
         fi
         chat_verify_token="$(gcloud secrets versions access latest --secret=vuln-agent-chat-verification-token 2>/dev/null || echo '')"
-        echo "[Step 6/7] Chat Webhook を Cloud Functions にデプロイします"
         gcloud functions deploy vuln-agent-chat-webhook \
           --gen2 \
           --runtime=python312 \
@@ -471,9 +274,6 @@ steps:
     waitFor:
       - deploy-agent
 
-  # =========================================
-  # Step 7: Web UI を Cloud Storage にデプロイ
-  # =========================================
   - name: "gcr.io/cloud-builders/gsutil"
     id: deploy-web-ui
     entrypoint: bash
@@ -485,10 +285,9 @@ steps:
           source /workspace/.deploy_flags
         fi
         if [ "${DEPLOY_WEB:-true}" != "true" ]; then
-          echo "[Step 7/7] Web UI が対象外のためデプロイをスキップします"
+          echo "[Step 5/5] Web UI が対象外のためデプロイをスキップします"
           exit 0
         fi
-        echo "[Step 7/7] Web UI を Cloud Storage にデプロイします"
         BUCKET=gs://${PROJECT_ID}-vuln-agent-ui
         gsutil mb -p ${PROJECT_ID} -l ${_REGION} $$BUCKET 2>/dev/null || true
         gsutil web set -m index.html -e index.html $$BUCKET

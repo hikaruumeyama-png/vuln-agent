@@ -6,14 +6,14 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 SIDfmの脆弱性通知メールを自動解析し、SBOMと突合して担当者へ通知する **Vertex AI Agent Engine** 向けAIエージェント。
 
-Gmail / Google Sheets(またはBigQuery) / Google Chat を使った運用を前提とし、定期スキャン・音声/チャットUI連携にも対応。
+Gmail / Google Sheets(またはBigQuery) / Google Chat を使った運用を前提とし、Google Chat連携・音声/チャットUI連携にも対応。
 
 ## 技術スタック
 
 - **言語**: Python 3.12
 - **AIフレームワーク**: Google ADK (Agent Development Kit) + Vertex AI Agent Engine
 - **モデル**: gemini-2.5-flash
-- **インフラ**: Google Cloud (Cloud Run, Cloud Functions, Cloud Scheduler, BigQuery, Secret Manager, Cloud Storage)
+- **インフラ**: Google Cloud (Cloud Run, Cloud Functions, BigQuery, Secret Manager, Cloud Storage)
 - **CI/CD**: Cloud Build (`cloudbuild.yaml`)
 - **Web UI**: 静的HTML/JS/CSS (Vanilla JS + Lucide Icons)
 - **リアルタイム音声**: Gemini Multimodal Live API + FastAPI WebSocket
@@ -32,8 +32,8 @@ agent/                  # メインエージェント (ADK)
     ├── history_tools.py    # BigQuery対応履歴記録
     └── a2a_tools.py        # Agent-to-Agent連携
 
-scheduler/              # Cloud Functions 定期実行
-├── main.py               # エントリーポイント (run_vulnerability_scan)
+chat_webhook/           # Cloud Functions Google Chat Webhook
+├── main.py               # エントリーポイント (handle_chat_event)
 └── requirements.txt
 
 live_gateway/           # Cloud Run WebSocket + Gemini Live API
