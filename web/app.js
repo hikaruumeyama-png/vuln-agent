@@ -35,6 +35,9 @@ const RMS_SPEECH_THRESHOLD = 0.025;
 const RMS_SILENCE_THRESHOLD = 0.012;
 const RMS_SMOOTHING = 0.2;
 const PAUSE_TRIGGER_MS = 650;
+const BARGE_IN_RMS_THRESHOLD = 0.045;
+const BARGE_IN_MIN_HOLD_MS = 180;
+const BARGE_IN_COOLDOWN_MS = 900;
 const MAX_RENDERED_MESSAGES = 200;
 const HEALTH_PING_INTERVAL_MS = 30000;
 const GATEWAY_URL_STORAGE_KEY = "vuln_agent_gateway_url";
@@ -74,6 +77,8 @@ let isPlaybackQueueDraining = false;
 let playbackIdleTimerId = null;
 let standalonePlaybackContext = null;
 let suppressLiveAudioUntilMs = 0;
+let bargeInVoiceSince = 0;
+let lastBargeInAt = 0;
 
 // ── Utility Functions ───────────────────────────────────
 function escapeHtml(str) {
@@ -383,6 +388,30 @@ function suppressIncomingLiveAudio(ms = 1200) {
   suppressLiveAudioUntilMs = Math.max(suppressLiveAudioUntilMs, Date.now() + ms);
 }
 
+function shouldTriggerBargeIn(nowMs) {
+  if (awaitingAgentGreeting) {
+    bargeInVoiceSince = 0;
+    return false;
+  }
+  if (nowMs - lastBargeInAt < BARGE_IN_COOLDOWN_MS) {
+    return false;
+  }
+  if (smoothedRms <= BARGE_IN_RMS_THRESHOLD) {
+    bargeInVoiceSince = 0;
+    return false;
+  }
+  if (bargeInVoiceSince === 0) {
+    bargeInVoiceSince = nowMs;
+    return false;
+  }
+  if (nowMs - bargeInVoiceSince < BARGE_IN_MIN_HOLD_MS) {
+    return false;
+  }
+  bargeInVoiceSince = 0;
+  lastBargeInAt = nowMs;
+  return true;
+}
+
 function stopGreetingFallbackSpeech() {
   if (!window.speechSynthesis) return;
   if (greetingFallbackUtterance) {
@@ -619,6 +648,8 @@ async function stopAudioCapture(sendLiveStop = false) {
   audioCaptureNode = null;
   awaitingAgentGreeting = false;
   suppressLiveAudioUntilMs = 0;
+  bargeInVoiceSince = 0;
+  lastBargeInAt = 0;
   hasReceivedGreetingAudio = false;
   didAttemptGreetingSpeechFallback = false;
   clearGreetingUnlockTimer();
@@ -777,17 +808,19 @@ registerProcessor("pcm-capture-processor", PcmCaptureProcessor);
       smoothedRms = RMS_SMOOTHING * rms + (1 - RMS_SMOOTHING) * smoothedRms;
       updateAudioLevel(smoothedRms);
       const now = Date.now();
-        if (smoothedRms > RMS_SPEECH_THRESHOLD) {
-          lastSpeechTimestamp = now;
-          if (mode !== "listening") setMode("listening");
-          if (currentPlaybackSource) {
-            suppressIncomingLiveAudio();
-            stopAllPlayback();
-            if (socket && socket.readyState === WebSocket.OPEN) {
-              socket.send(JSON.stringify({ type: "barge_in" }));
-            }
+      if (smoothedRms > RMS_SPEECH_THRESHOLD) {
+        lastSpeechTimestamp = now;
+        if (!currentPlaybackSource && mode !== "listening") setMode("listening");
+        if (currentPlaybackSource && shouldTriggerBargeIn(now)) {
+          suppressIncomingLiveAudio();
+          stopAllPlayback();
+          if (socket && socket.readyState === WebSocket.OPEN) {
+            socket.send(JSON.stringify({ type: "barge_in" }));
           }
         }
+      } else {
+        bargeInVoiceSince = 0;
+      }
       if (
         smoothedRms < RMS_SILENCE_THRESHOLD &&
         lastSpeechTimestamp !== 0 &&
@@ -924,6 +957,7 @@ connectButton.addEventListener("click", () => {
             unlockGreetingAndListening(false, true);
           }
         } else if (payload.status === "barge_in") {
+          bargeInVoiceSince = 0;
           suppressIncomingLiveAudio();
           stopAllPlayback();
           setMode("listening (barge-in)");
@@ -1015,12 +1049,20 @@ startAudioButton.addEventListener("click", async () => {
   }
 
   try {
-    mediaStream = await navigator.mediaDevices.getUserMedia({ audio: true });
+    mediaStream = await navigator.mediaDevices.getUserMedia({
+      audio: {
+        echoCancellation: true,
+        noiseSuppression: true,
+        autoGainControl: true,
+      },
+    });
     audioContext = new AudioContext();
     await audioContext.resume();
     const source = audioContext.createMediaStreamSource(mediaStream);
     awaitingAgentGreeting = true;
     suppressLiveAudioUntilMs = 0;
+    bargeInVoiceSince = 0;
+    lastBargeInAt = 0;
     hasReceivedGreetingAudio = false;
     didAttemptGreetingSpeechFallback = false;
     clearPlaybackIdleTimer();
@@ -1057,16 +1099,18 @@ startAudioButton.addEventListener("click", async () => {
         const now = Date.now();
         if (smoothedRms > RMS_SPEECH_THRESHOLD) {
           lastSpeechTimestamp = now;
-          if (mode !== "listening") {
+          if (!currentPlaybackSource && mode !== "listening") {
             setMode("listening");
           }
-          if (currentPlaybackSource) {
+          if (currentPlaybackSource && shouldTriggerBargeIn(now)) {
             suppressIncomingLiveAudio();
             stopAllPlayback();
             if (socket && socket.readyState === WebSocket.OPEN) {
               socket.send(JSON.stringify({ type: "barge_in" }));
             }
           }
+        } else {
+          bargeInVoiceSince = 0;
         }
         if (
           smoothedRms < RMS_SILENCE_THRESHOLD &&
