@@ -4,6 +4,7 @@ from pathlib import Path
 import sys
 import types
 import unittest
+from datetime import date
 
 
 ROOT = Path(__file__).resolve().parent
@@ -231,6 +232,35 @@ class ChatToolsTests(unittest.TestCase):
         """Verify the text body uses <email> format not <users/email>."""
         self.assertIn('f"<{email}>"', self.chat_tools_source)
         self.assertNotIn('f"<users/{email}>"', self.chat_tools_source)
+
+    def test_deadline_rule_public_cvss8(self):
+        deadline = self.chat_tools._calculate_deadline(
+            severity="高",
+            cvss_score=8.2,
+            resource_type="public",
+            now=date(2026, 2, 15),  # Sunday
+        )
+        self.assertEqual(deadline, "2026/2/27")
+
+    def test_deadline_rule_internal_cvss8(self):
+        deadline = self.chat_tools._calculate_deadline(
+            severity="高",
+            cvss_score=8.5,
+            resource_type="internal",
+            now=date(2026, 2, 15),
+        )
+        self.assertEqual(deadline, "2026/5/15")
+
+    def test_deadline_rule_public_cvss9_with_exploit(self):
+        deadline = self.chat_tools._calculate_deadline(
+            severity="緊急",
+            cvss_score=9.1,
+            resource_type="public",
+            exploit_confirmed=True,
+            exploit_code_public=True,
+            now=date(2026, 2, 15),
+        )
+        self.assertEqual(deadline, "2026/2/20")
 
 
 if __name__ == "__main__":
