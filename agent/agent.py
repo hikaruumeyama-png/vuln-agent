@@ -35,6 +35,8 @@ from .tools import (
     run_bigquery_readonly_query,
     web_search,
     fetch_web_content,
+    get_nvd_cve_details,
+    search_osv_vulnerabilities,
 )
 from .tools.secret_config import get_config_value
 
@@ -123,8 +125,22 @@ AGENT_INSTRUCTION = """あなたは脆弱性管理を専門とするセキュリ
 
 1. 最新性が重要な問い（価格、脆弱性動向、リリース、ニュース）は `web_search` で根拠を取得
 2. 必要に応じて `fetch_web_content` で一次情報本文を確認
-3. 回答では「事実」「推定」を分けて記述し、根拠URLを明示
-4. 根拠不足時は断定せず、追加確認のための質問を先に行う
+3. CVE詳細は `get_nvd_cve_details`、パッケージ脆弱性は `search_osv_vulnerabilities` を優先利用
+4. 回答では「事実」「推定」を分けて記述し、根拠URLを明示
+5. 根拠不足時は断定せず、追加確認のための質問を先に行う
+
+## 出力フォーマット（必須）
+
+すべての通常回答は、以下の4セクションをこの順で必ず含める。
+1. `結論`
+2. `根拠`
+3. `不確実性`
+4. `次アクション`
+
+追加ルール:
+- `根拠` には参照したツール名とURL/データソースを明記する
+- 根拠がない場合は `根拠` に「確認中」と明記する
+- `不確実性` には残る前提条件を最低1つ書く
 
 ## 注意事項
 
@@ -177,6 +193,9 @@ def create_vulnerability_agent() -> Agent:
         # Web Tools
         FunctionTool(web_search),
         FunctionTool(fetch_web_content),
+        # Vulnerability Intel Tools
+        FunctionTool(get_nvd_cve_details),
+        FunctionTool(search_osv_vulnerabilities),
     ]
 
     model_name = get_config_value(

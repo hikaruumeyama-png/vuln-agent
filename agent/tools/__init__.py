@@ -38,6 +38,10 @@ from .web_tools import (
     web_search,
     fetch_web_content,
 )
+from .vuln_intel_tools import (
+    get_nvd_cve_details,
+    search_osv_vulnerabilities,
+)
 
 __all__ = [
     # Gmail
@@ -71,4 +75,7 @@ __all__ = [
     # Web
     "web_search",
     "fetch_web_content",
+    # Vulnerability Intel
+    "get_nvd_cve_details",
+    "search_osv_vulnerabilities",
 ]
