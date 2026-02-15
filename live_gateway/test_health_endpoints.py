@@ -66,6 +66,20 @@ class HealthEndpointTests(unittest.TestCase):
         self.assertIn('for field in direct_fields', source)
         self.assertIn('for container_key in ("error", "result", "response")', source)
 
+    def test_cors_configuration_supports_cookie_auth(self):
+        source = APP_FILE.read_text(encoding="utf-8")
+        self.assertIn("def _resolve_cors_origins", source)
+        self.assertIn("CORS_ALLOW_ORIGINS", source)
+        self.assertIn('if OIDC_ENABLED and "*" in origins', source)
+        self.assertIn("allow_origins=_resolve_cors_origins()", source)
+        self.assertIn("allow_credentials=OIDC_ENABLED", source)
+
+    def test_cookie_samesite_is_dynamic(self):
+        source = APP_FILE.read_text(encoding="utf-8")
+        self.assertIn("def _cookie_samesite_value", source)
+        self.assertIn('return "none" if _cookie_secure_flag(request) else "lax"', source)
+        self.assertIn("samesite=_cookie_samesite_value(request)", source)
+
 
 if __name__ == "__main__":
     unittest.main()
