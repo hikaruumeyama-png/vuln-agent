@@ -29,6 +29,10 @@ from .tools import (
     list_registered_agents,
     create_jira_ticket_request,
     create_approval_request,
+    get_runtime_capabilities,
+    inspect_bigquery_capabilities,
+    list_bigquery_tables,
+    run_bigquery_readonly_query,
 )
 
 # エージェントの指示（システムプロンプト）
@@ -104,6 +108,14 @@ AGENT_INSTRUCTION = """あなたは脆弱性管理を専門とするセキュリ
 2. `create_jira_ticket_request` または `create_approval_request` でリクエストを構築
 3. `call_remote_agent` でエージェントを呼び出し
 
+## 権限内での自律実行ポリシー
+
+1. まず `get_runtime_capabilities` で利用可能な機能を確認
+2. BigQueryは `inspect_bigquery_capabilities` で可否を診断してから実行
+3. テーブル一覧が必要なら `list_bigquery_tables` を実行
+4. 柔軟な参照は `run_bigquery_readonly_query` を使い、read-only SQLのみ実行
+5. 権限不足が出たら代替手段（既存SBOM検索など）に即時フォールバック
+
 ## 注意事項
 
 - 同じ脆弱性を二重に通知しないよう、メールは処理後に既読にする
@@ -146,6 +158,12 @@ def create_vulnerability_agent() -> Agent:
         FunctionTool(list_registered_agents),
         FunctionTool(create_jira_ticket_request),
         FunctionTool(create_approval_request),
+
+        # Capability Tools
+        FunctionTool(get_runtime_capabilities),
+        FunctionTool(inspect_bigquery_capabilities),
+        FunctionTool(list_bigquery_tables),
+        FunctionTool(run_bigquery_readonly_query),
     ]
     
     # エージェント作成
