@@ -9,7 +9,7 @@ import re
 import time
 import logging
 from typing import Any
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, date
 
 from google.oauth2 import service_account
 from googleapiclient.discovery import build
@@ -191,6 +191,10 @@ def send_vulnerability_alert(
     owners: list[str] | None = None,
     space_id: str | None = None,
     record_history: bool = True,
+    resource_type: str = "public",
+    exploit_confirmed: bool = False,
+    exploit_code_public: bool = False,
+    vulnerability_links: dict[str, str] | list[dict[str, str]] | None = None,
 ) -> dict[str, Any]:
     """
     脆弱性アラートをGoogle Chatスペースに送信します。
@@ -206,6 +210,10 @@ def send_vulnerability_alert(
         owners: 担当者メールアドレス（オプション）
         space_id: 送信先スペースID（省略時はデフォルト）
         record_history: 履歴を記録するか（デフォルト: True）
+        resource_type: 公開リソース/内部リソース（default: public）
+        exploit_confirmed: 悪用実績ありか
+        exploit_code_public: エクスプロイトコード公開済みか
+        vulnerability_links: 脆弱性情報リンク（機器/アプリ名→URL）
 
     Returns:
         送信結果
@@ -227,8 +235,14 @@ def send_vulnerability_alert(
         if resolved_space is None:
             return {"status": "error", "message": "Chat space ID が未設定または不正です。DEFAULT_CHAT_SPACE_ID を確認してください。"}
 
-        # 対応期限
-        deadline = _calculate_deadline(severity)
+        # 対応期限（CVSS/リソース種別ルール優先）
+        deadline = _calculate_deadline(
+            severity=severity,
+            cvss_score=cvss_score,
+            resource_type=resource_type,
+            exploit_confirmed=exploit_confirmed,
+            exploit_code_public=exploit_code_public,
+        )
 
         # カードメッセージを構築
         card = _build_card(
@@ -236,11 +250,19 @@ def send_vulnerability_alert(
             affected_systems, description, remediation, deadline, owners
         )
 
-        # テキスト本文（メンション付き）
-        text = f"🚨 新しい脆弱性が検出されました: {vulnerability_id}"
+        # テキスト本文（指定フォーマット）
+        text = _build_structured_alert_text(
+            affected_systems=affected_systems,
+            vulnerability_id=vulnerability_id,
+            title=title,
+            cvss_score=cvss_score,
+            vulnerability_links=vulnerability_links,
+            deadline=deadline,
+            remediation=remediation,
+        )
         if owners:
             mentions = [f"<{email}>" for email in owners]
-            text = f"📢 {', '.join(mentions)} 対応をお願いします。\n\n" + text
+            text = f"📢 {', '.join(mentions)} 対応をお願いします。\n\n{text}"
 
         # 送信
         message_body = {"text": text, "cardsV2": [card]}
@@ -397,10 +419,158 @@ def _build_card(
     }
 
 
-def _calculate_deadline(severity: str) -> str:
-    """対応期限を計算"""
+def _calculate_deadline(
+    severity: str,
+    cvss_score: float | None = None,
+    resource_type: str = "public",
+    exploit_confirmed: bool = False,
+    exploit_code_public: bool = False,
+    now: date | None = None,
+) -> str:
+    """
+    対応期限を計算する。
+
+    優先ルール:
+    1) CVSS 9.0以上 + 公開リソース + 悪用実績あり + エクスプロイトコード公開: 5営業日以内
+    2) CVSS 8.0以上 + 公開リソース: 10営業日以内
+    3) CVSS 8.0以上 + 内部リソース: 3か月以内
+    4) それ以外: 重大度マッピング
+    """
+    base = now or date.today()
+    normalized_resource = (resource_type or "").strip().lower()
+    is_internal = normalized_resource in {"internal", "private", "inside", "内部", "内部リソース"}
+    is_public = not is_internal
+
+    if cvss_score is not None:
+        try:
+            score = float(cvss_score)
+        except Exception:
+            score = None
+    else:
+        score = None
+
+    if score is not None and score >= 9.0 and is_public and exploit_confirmed and exploit_code_public:
+        target = _add_business_days(base, 5)
+        return f"{target.year}/{target.month}/{target.day}"
+
+    if score is not None and score >= 8.0 and is_public:
+        target = _add_business_days(base, 10)
+        return f"{target.year}/{target.month}/{target.day}"
+
+    if score is not None and score >= 8.0 and is_internal:
+        target = _add_months(base, 3)
+        return f"{target.year}/{target.month}/{target.day}"
+
     delta = SEVERITY_DEADLINES.get(severity, timedelta(days=7))
-    return (datetime.now() + delta).strftime("%Y年%m月%d日")
+    fallback = datetime.combine(base, datetime.min.time()) + delta
+    return fallback.strftime("%Y年%m月%d日")
+
+
+def _add_business_days(start_date: date, business_days: int) -> date:
+    current = start_date
+    remaining = max(0, int(business_days))
+    while remaining > 0:
+        current += timedelta(days=1)
+        if current.weekday() < 5:
+            remaining -= 1
+    return current
+
+
+def _add_months(start_date: date, months: int) -> date:
+    month_index = start_date.month - 1 + max(0, int(months))
+    year = start_date.year + month_index // 12
+    month = month_index % 12 + 1
+    # 月末調整
+    day = min(start_date.day, _days_in_month(year, month))
+    return date(year, month, day)
+
+
+def _days_in_month(year: int, month: int) -> int:
+    if month == 12:
+        next_month = date(year + 1, 1, 1)
+    else:
+        next_month = date(year, month + 1, 1)
+    return (next_month - timedelta(days=1)).day
+
+
+def _normalize_vulnerability_links(
+    vulnerability_links: dict[str, str] | list[dict[str, str]] | None,
+) -> list[tuple[str, str]]:
+    if not vulnerability_links:
+        return []
+    normalized: list[tuple[str, str]] = []
+    if isinstance(vulnerability_links, dict):
+        for key, value in vulnerability_links.items():
+            name = str(key).strip()
+            url = str(value).strip()
+            if name and url:
+                normalized.append((name, url))
+        return normalized
+    if isinstance(vulnerability_links, list):
+        for item in vulnerability_links:
+            if not isinstance(item, dict):
+                continue
+            name = str(item.get("name", "")).strip()
+            url = str(item.get("url", "")).strip()
+            if name and url:
+                normalized.append((name, url))
+    return normalized
+
+
+def _build_structured_alert_text(
+    affected_systems: list[str],
+    vulnerability_id: str,
+    title: str,
+    cvss_score: float | None,
+    vulnerability_links: dict[str, str] | list[dict[str, str]] | None,
+    deadline: str,
+    remediation: str | None,
+) -> str:
+    systems = [str(s).strip() for s in (affected_systems or []) if str(s).strip()]
+    if not systems:
+        systems = ["不明"]
+
+    links = _normalize_vulnerability_links(vulnerability_links)
+    if not links:
+        links = [(title or vulnerability_id or "脆弱性情報", f"https://nvd.nist.gov/vuln/detail/{vulnerability_id}")]
+
+    score_label = "不明"
+    if cvss_score is not None:
+        try:
+            score = float(cvss_score)
+            if score >= 9.0:
+                score_label = "9以上"
+            elif score >= 8.0:
+                score_label = "8以上"
+            else:
+                score_label = str(score)
+        except Exception:
+            score_label = str(cvss_score)
+
+    request_text = (
+        remediation.strip()
+        if isinstance(remediation, str) and remediation.strip()
+        else (
+            "上記脆弱性情報をご確認いただき、バージョンが低い場合は"
+            "バージョンアップのご対応をお願いいたします。\n"
+            "対応を実施した場合はサーバのホスト名をご教示ください。"
+        )
+    )
+
+    sections: list[str] = []
+    sections.append("【対象の機器/アプリ】\n" + "\n".join(systems))
+
+    link_lines: list[str] = []
+    for name, url in links:
+        link_lines.append(name)
+        link_lines.append(url)
+        link_lines.append("")
+    sections.append("【脆弱性情報】（リンク貼り付け）\n" + "\n".join(link_lines).strip())
+
+    sections.append(f"【CVSSスコア】\n{score_label}")
+    sections.append(f"【依頼内容】\n{request_text}")
+    sections.append(f"【対応完了目標】\n{deadline}")
+    return "\n\n".join(sections).strip()
 
 
 def check_chat_connection(space_id: str | None = None) -> dict[str, Any]:

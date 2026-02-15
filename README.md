@@ -140,6 +140,8 @@ gcloud functions logs read vuln-agent-chat-webhook --region=asia-northeast1 --li
   - `list_sbom_package_versions`
   - `get_sbom_entry_by_purl`
 - Chat: `send_vulnerability_alert`, `send_simple_message`, `check_chat_connection`, `list_space_members`
+  - `send_vulnerability_alert` は定型フォーマット通知（対象機器/脆弱性リンク/CVSS/依頼内容/対応完了目標）に対応
+  - 対応期限は CVSS・公開/内部リソース・悪用実績/Exploit 公開有無ルールを優先
 - 履歴: `log_vulnerability_history`
 - A2A: `register_remote_agent`, `call_remote_agent`, `list_registered_agents`, `create_jira_ticket_request`, `create_approval_request`
 - 権限可視化/柔軟参照: `get_runtime_capabilities`, `inspect_bigquery_capabilities`, `list_bigquery_tables`, `run_bigquery_readonly_query`
