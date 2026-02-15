@@ -46,6 +46,7 @@ OIDC_SESSION_COOKIE_NAME = os.environ.get("OIDC_SESSION_COOKIE_NAME", "vuln_agen
 OIDC_STATE_COOKIE_NAME = os.environ.get("OIDC_STATE_COOKIE_NAME", "vuln_agent_oidc_state").strip()
 OIDC_SESSION_TTL_SEC = 8 * 60 * 60
 OIDC_STATE_TTL_SEC = 10 * 60
+CORS_ALLOW_ORIGINS_RAW = os.environ.get("CORS_ALLOW_ORIGINS", "").strip()
 _oidc_metadata_cache: dict[str, Any] | None = None
 _oidc_metadata_cache_at = 0.0
 
@@ -145,19 +146,23 @@ def _sign_value(payload: dict[str, Any], ttl_sec: int) -> str:
 def _verify_signed_value(value: str | None) -> dict[str, Any] | None:
     if not value or "." not in value or not OIDC_SESSION_SECRET:
         return None
-    body_b64, sig_b64 = value.split(".", 1)
-    expected_sig = hmac.new(
-        OIDC_SESSION_SECRET.encode("utf-8"),
-        body_b64.encode("utf-8"),
-        hashlib.sha256,
-    ).digest()
-    provided_sig = _base64url_decode(sig_b64)
-    if not hmac.compare_digest(expected_sig, provided_sig):
+    try:
+        body_b64, sig_b64 = value.split(".", 1)
+        expected_sig = hmac.new(
+            OIDC_SESSION_SECRET.encode("utf-8"),
+            body_b64.encode("utf-8"),
+            hashlib.sha256,
+        ).digest()
+        provided_sig = _base64url_decode(sig_b64)
+        if not hmac.compare_digest(expected_sig, provided_sig):
+            return None
+        payload = json.loads(_base64url_decode(body_b64).decode("utf-8"))
+        if int(payload.get("exp", 0)) < int(time.time()):
+            return None
+        return payload
+    except Exception:
+        # 壊れたCookieは未認証として扱う（500を避ける）。
         return None
-    payload = json.loads(_base64url_decode(body_b64).decode("utf-8"))
-    if int(payload.get("exp", 0)) < int(time.time()):
-        return None
-    return payload
 
 
 def _is_oidc_ready() -> bool:
@@ -175,6 +180,16 @@ def _resolve_base_url_from_request(request: Request) -> str:
     scheme = forwarded_proto or request.url.scheme
     host = request.headers.get("host") or request.url.netloc
     return f"{scheme}://{host}"
+
+
+def _cookie_secure_flag(request: Request) -> bool:
+    base = _resolve_base_url_from_request(request)
+    return base.lower().startswith("https://")
+
+
+def _cookie_samesite_value(request: Request) -> str:
+    # SameSite=None は Secure 必須。http 開発環境では Lax にフォールバックする。
+    return "none" if _cookie_secure_flag(request) else "lax"
 
 
 def _resolve_redirect_uri(request: Request) -> str:
@@ -302,10 +317,29 @@ async def _safe_send(websocket: WebSocket, data: dict[str, Any]) -> None:
 
 app = FastAPI()
 
+
+def _resolve_cors_origins() -> list[str]:
+    if CORS_ALLOW_ORIGINS_RAW:
+        origins = [o.strip() for o in CORS_ALLOW_ORIGINS_RAW.split(",") if o.strip()]
+        if OIDC_ENABLED and "*" in origins:
+            origins = [o for o in origins if o != "*"]
+        if origins:
+            return origins
+    if OIDC_ENABLED:
+        # Cookie 認証が必要なデフォルト開発オリジンを明示許可する。
+        return [
+            "http://localhost:8080",
+            "http://127.0.0.1:8080",
+            "http://localhost:5173",
+            "http://127.0.0.1:5173",
+        ]
+    return ["*"]
+
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
-    allow_credentials=False,
+    allow_origins=_resolve_cors_origins(),
+    allow_credentials=OIDC_ENABLED,
     allow_methods=["*"],
     allow_headers=["*"],
 )
@@ -499,8 +533,8 @@ def auth_login(request: Request, next: str = "/"):
             ttl_sec=OIDC_STATE_TTL_SEC,
         ),
         httponly=True,
-        secure=True,
-        samesite="none",
+        secure=_cookie_secure_flag(request),
+        samesite=_cookie_samesite_value(request),
         max_age=OIDC_STATE_TTL_SEC,
         path="/",
     )
@@ -537,8 +571,8 @@ def auth_callback(request: Request, code: str = "", state: str = ""):
         key=OIDC_SESSION_COOKIE_NAME,
         value=_sign_value(session_payload, ttl_sec=OIDC_SESSION_TTL_SEC),
         httponly=True,
-        secure=True,
-        samesite="none",
+        secure=_cookie_secure_flag(request),
+        samesite=_cookie_samesite_value(request),
         max_age=OIDC_SESSION_TTL_SEC,
         path="/",
     )

@@ -262,6 +262,56 @@ class ChatToolsTests(unittest.TestCase):
         )
         self.assertEqual(deadline, "2026/2/20")
 
+    def test_structured_alert_text_matches_required_sections(self):
+        text = self.chat_tools._build_structured_alert_text(
+            affected_systems=["Almalinux8", "Almalinux9"],
+            vulnerability_id="CVE-2026-0001",
+            title="OpenSSL issue",
+            cvss_score=8.8,
+            vulnerability_links={
+                "Almalinux8": "https://sid.softek.jp/filter/sinfo/60846",
+                "Almalinux9": "https://sid.softek.jp/filter/sinfo/53834",
+            },
+            deadline="2026/2/17",
+            remediation=None,
+        )
+
+        expected = (
+            "【対象の機器/アプリ】\n"
+            "Almalinux8\n"
+            "Almalinux9\n\n"
+            "【脆弱性情報】（リンク貼り付け）\n"
+            "Almalinux8\n"
+            "https://sid.softek.jp/filter/sinfo/60846\n\n"
+            "Almalinux9\n"
+            "https://sid.softek.jp/filter/sinfo/53834\n\n"
+            "【CVSSスコア】\n"
+            "8以上\n\n"
+            "【依頼内容】\n"
+            "上記脆弱性情報をご確認いただき、バージョンが低い場合は"
+            "バージョンアップのご対応をお願いいたします。\n"
+            "対応を実施した場合はサーバのホスト名をご教示ください。\n\n"
+            "【対応完了目標】\n"
+            "2026/2/17"
+        )
+        self.assertEqual(text, expected)
+
+    def test_structured_alert_text_defaults_when_inputs_missing(self):
+        text = self.chat_tools._build_structured_alert_text(
+            affected_systems=[],
+            vulnerability_id="CVE-2026-9999",
+            title="",
+            cvss_score=None,
+            vulnerability_links=None,
+            deadline="2026/3/1",
+            remediation="手順Aを実施してください。",
+        )
+
+        self.assertIn("【対象の機器/アプリ】\n不明", text)
+        self.assertIn("https://nvd.nist.gov/vuln/detail/CVE-2026-9999", text)
+        self.assertIn("【CVSSスコア】\n不明", text)
+        self.assertIn("【依頼内容】\n手順Aを実施してください。", text)
+
 
 if __name__ == "__main__":
     unittest.main()
