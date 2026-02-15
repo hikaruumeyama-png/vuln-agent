@@ -642,6 +642,47 @@ def get_owner_mapping() -> dict[str, Any]:
     return result
 
 
+def get_sbom_contents(max_results: int = 50) -> dict[str, Any]:
+    """
+    SBOMデータの内容を一覧で返す（先頭N件）。
+
+    「SBOMの内容を教えて」という問い合わせ向けの読み取り専用ツール。
+    未依頼の追加処理を避けるため、検索・集計・通知は行わない。
+    """
+    limit = _normalize_result_limit(max_results, default=50, max_value=200)
+    backend = _get_sbom_data_backend()
+    sbom = _load_sbom()
+
+    if not sbom:
+        return {
+            "status": "error",
+            "backend": backend,
+            "entries": [],
+            "returned_count": 0,
+            "total_count": 0,
+            "message": _build_sbom_missing_message(),
+        }
+
+    entries = sbom[:limit]
+    type_counts: dict[str, int] = {}
+    for entry in sbom:
+        pkg_type = (entry.get("type") or "").strip() or "(unknown)"
+        type_counts[pkg_type] = type_counts.get(pkg_type, 0) + 1
+
+    return {
+        "status": "success",
+        "backend": backend,
+        "columns": ["type", "name", "version", "release", "purl"],
+        "entries": entries,
+        "returned_count": len(entries),
+        "total_count": len(sbom),
+        "type_counts": dict(sorted(type_counts.items(), key=lambda x: x[0])),
+        "message": (
+            "SBOM内容の一覧です。追加の集計・検索・脆弱性スキャンは未実行です。"
+        ),
+    }
+
+
 def _matches_criteria(entry: dict, product_type: str, product_name: str, version_range: str) -> bool:
     """エントリが検索条件にマッチするかチェック"""
     entry_type = (entry.get("type") or "").strip()
@@ -666,6 +707,18 @@ def _matches_criteria(entry: dict, product_type: str, product_name: str, version
             return False
     
     return True
+
+
+def _normalize_result_limit(value: Any, default: int, max_value: int) -> int:
+    try:
+        num = int(value)
+    except (TypeError, ValueError):
+        return default
+    if num < 1:
+        return 1
+    if num > max_value:
+        return max_value
+    return num
 
 
 def _normalize_bigquery_table_id(raw_table_id: str, env_name: str) -> str:

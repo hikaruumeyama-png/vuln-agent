@@ -33,6 +33,7 @@ TOOL_DISPLAY_MAP: dict[str, dict[str, str]] = {
     "check_gmail_connection":   {"label": "Gmail接続を確認中",           "icon": "mail"},
     "search_sbom_by_purl":      {"label": "SBOMをパッケージURLで検索中",   "icon": "search"},
     "search_sbom_by_product":   {"label": "SBOMを製品名で検索中",         "icon": "search"},
+    "get_sbom_contents":        {"label": "SBOM一覧を取得中",             "icon": "list"},
     "get_affected_systems":     {"label": "影響を受けるシステムを特定中",   "icon": "server"},
     "get_owner_mapping":        {"label": "システムオーナーを検索中",      "icon": "users"},
     "send_vulnerability_alert": {"label": "脆弱性アラートを送信中",       "icon": "alert-triangle"},

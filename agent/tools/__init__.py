@@ -13,6 +13,7 @@ from .sheets_tools import (
     search_sbom_by_product,
     get_affected_systems,
     get_owner_mapping,
+    get_sbom_contents,
 )
 from .chat_tools import (
     send_vulnerability_alert,
@@ -54,6 +55,7 @@ __all__ = [
     "search_sbom_by_product",
     "get_affected_systems",
     "get_owner_mapping",
+    "get_sbom_contents",
     # Chat
     "send_vulnerability_alert",
     "send_simple_message",

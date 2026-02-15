@@ -125,6 +125,7 @@ class BigQuerySheetsToolsTests(unittest.TestCase):
 
     def setUp(self):
         self._orig_env = dict(os.environ)
+        self._orig_load_sbom = self.sheets_tools._load_sbom
         os.environ["SBOM_DATA_BACKEND"] = "bigquery"
         self.sheets_tools._sbom_cache = None
         self.sheets_tools._sbom_cache_timestamp = None
@@ -133,6 +134,7 @@ class BigQuerySheetsToolsTests(unittest.TestCase):
         _StubQueryClient.should_raise = False
 
     def tearDown(self):
+        self.sheets_tools._load_sbom = self._orig_load_sbom
         os.environ.clear()
         os.environ.update(self._orig_env)
 
@@ -171,6 +173,25 @@ class BigQuerySheetsToolsTests(unittest.TestCase):
         _StubQueryClient.should_raise = True
         result = self.sheets_tools.search_sbom_by_purl("pkg:maven")
         self.assertIn("BigQueryからSBOM取得に失敗", result["message"])
+
+    def test_get_sbom_contents_returns_preview_and_summary(self):
+        self.sheets_tools._load_sbom = lambda force_refresh=False: [
+            {"type": "maven", "name": "a", "version": "1.0.0", "release": "", "purl": "pkg:maven/a@1.0.0"},
+            {"type": "npm", "name": "b", "version": "2.0.0", "release": "", "purl": "pkg:npm/b@2.0.0"},
+            {"type": "maven", "name": "c", "version": "3.0.0", "release": "", "purl": "pkg:maven/c@3.0.0"},
+        ]
+        result = self.sheets_tools.get_sbom_contents(max_results=2)
+        self.assertEqual(result["status"], "success")
+        self.assertEqual(result["returned_count"], 2)
+        self.assertEqual(result["total_count"], 3)
+        self.assertEqual(result["type_counts"]["maven"], 2)
+        self.assertEqual(result["type_counts"]["npm"], 1)
+
+    def test_get_sbom_contents_returns_error_when_empty(self):
+        self.sheets_tools._load_sbom = lambda force_refresh=False: []
+        result = self.sheets_tools.get_sbom_contents(max_results=10)
+        self.assertEqual(result["status"], "error")
+        self.assertEqual(result["returned_count"], 0)
 
 
 class BigQueryHistoryToolsTests(unittest.TestCase):

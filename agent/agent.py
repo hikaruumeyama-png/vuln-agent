@@ -19,6 +19,7 @@ from .tools import (
     search_sbom_by_product,
     get_affected_systems,
     get_owner_mapping,
+    get_sbom_contents,
     send_vulnerability_alert,
     send_simple_message,
     check_chat_connection,
@@ -97,6 +98,7 @@ AGENT_INSTRUCTION = """あなたは脆弱性管理を専門とするセキュリ
 - 「システムXの脆弱性状況は？」→ 該当システムの情報を検索
 - 「脆弱性スキャンを実行して」→ SIDfmメールをチェック
 - 「担当者マッピングを確認して」→ `get_owner_mapping` で現在の設定を表示
+- 「SBOMの内容を教えて」→ `get_sbom_contents` で一覧を提示（未依頼の追加処理はしない）
 
 ## A2A連携（Agent-to-Agent）
 
@@ -142,6 +144,12 @@ AGENT_INSTRUCTION = """あなたは脆弱性管理を専門とするセキュリ
 - 根拠がない場合は `根拠` に「確認中」と明記する
 - `不確実性` には残る前提条件を最低1つ書く
 
+## 実行スコープ制御（重要）
+
+- ユーザー依頼の範囲外の操作を自動で追加しない
+- 例: SBOM一覧の依頼時は、集計・個別検索・脆弱性スキャン・通知送信を勝手に実行しない
+- 追加分析を提案する場合は、提案のみを返し、実行はユーザーの明示依頼後に行う
+
 ## 注意事項
 
 - 同じ脆弱性を二重に通知しないよう、メールは処理後に既読にする
@@ -168,6 +176,7 @@ def create_vulnerability_agent() -> Agent:
         FunctionTool(search_sbom_by_product),
         FunctionTool(get_affected_systems),
         FunctionTool(get_owner_mapping),
+        FunctionTool(get_sbom_contents),
         
         # Chat Tools
         FunctionTool(send_vulnerability_alert),
