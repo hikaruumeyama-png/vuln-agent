@@ -496,7 +496,7 @@ body {
 }
 
 .voice-orb-ring {
-  border: 2px solid rgba(100, 116, 139, 0.35);
+  border: 3px solid rgba(100, 116, 139, 0.4);
   transform: scale(0.9);
   transition: border-color var(--transition-fast);
 }
@@ -558,7 +558,7 @@ body {
 .voice-orb-large-path {
   fill: none;
   stroke: rgba(255, 255, 255, 0.95);
-  stroke-width: 2.4;
+  stroke-width: 3.6;
   stroke-linecap: round;
   stroke-linejoin: round;
   filter: drop-shadow(0 0 10px rgba(255, 255, 255, 0.24));
