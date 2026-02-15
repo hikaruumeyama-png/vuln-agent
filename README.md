@@ -90,6 +90,26 @@ bash test_agent.sh "Chatへの接続を確認して"
 bash test_agent.sh "SBOMでlog4jを検索して結果を教えて"
 ```
 
+## Entra ID SSO (OIDC)
+Live Gateway は OIDC 認証を有効化できます（Entra ID 対応）。
+
+必要環境変数（`live_gateway`）:
+- `OIDC_ENABLED=true`
+- `OIDC_TENANT_ID=<entra-tenant-id>`
+- `OIDC_CLIENT_ID=<app-registration-client-id>`
+- `OIDC_CLIENT_SECRET=<client-secret>`
+- `OIDC_REDIRECT_URI=https://<live-gateway-domain>/auth/callback`
+- `OIDC_SESSION_SECRET=<32bytes以上のランダム文字列>`
+
+任意:
+- `OIDC_SCOPES`（デフォルト: `openid profile email`）
+- `OIDC_ISSUER`（未指定時は tenant から自動生成）
+
+動作:
+- `/auth/login` で Entra ID へリダイレクト
+- `/auth/callback` でログイン完了し、セッションCookieを発行
+- `/ws` は認証済みセッションがないと接続拒否
+
 ## よく使う運用コマンド
 再デプロイ:
 ```bash

@@ -7,6 +7,8 @@ const statusIndicator = document.getElementById("status-indicator");
 const statusText = document.getElementById("status-text");
 const connectButton = document.getElementById("connect-button");
 const disconnectButton = document.getElementById("disconnect-button");
+const loginButton = document.getElementById("login-button");
+const logoutButton = document.getElementById("logout-button");
 const gatewayInput = document.getElementById("gateway-url");
 const chatForm = document.getElementById("chat-form");
 const chatInput = document.getElementById("chat-input");
@@ -86,6 +88,7 @@ let lastBargeInAt = 0;
 let ambientNoiseRms = RMS_SILENCE_THRESHOLD;
 let lastPlaybackStartedAt = 0;
 let pendingBargeInResponse = false;
+let authState = { enabled: false, authenticated: true, user: null };
 
 // ── Utility Functions ───────────────────────────────────
 function escapeHtml(str) {
@@ -393,6 +396,34 @@ function stopAllPlayback() {
 
 function suppressIncomingLiveAudio(ms = 1200) {
   suppressLiveAudioUntilMs = Math.max(suppressLiveAudioUntilMs, Date.now() + ms);
+}
+
+async function fetchAuthState() {
+  const wsUrl = gatewayInput.value.trim();
+  const baseUrl = parseGatewayBaseHttpUrl(wsUrl);
+  if (!baseUrl) return { enabled: false, authenticated: true, user: null };
+  try {
+    const res = await fetch(`${baseUrl}/auth/me`, {
+      method: "GET",
+      credentials: "include",
+      cache: "no-store",
+    });
+    if (!res.ok) return { enabled: false, authenticated: true, user: null };
+    const data = await res.json();
+    return {
+      enabled: !!data.enabled,
+      authenticated: !!data.authenticated,
+      user: data.user || null,
+    };
+  } catch {
+    return { enabled: false, authenticated: true, user: null };
+  }
+}
+
+function updateAuthButtons() {
+  if (!loginButton || !logoutButton) return;
+  loginButton.disabled = false;
+  logoutButton.disabled = !authState.enabled || !authState.authenticated;
 }
 
 function shouldTriggerBargeIn(nowMs) {
@@ -916,13 +947,57 @@ gatewayInput.addEventListener("change", () => {
   if (value) {
     window.localStorage.setItem(GATEWAY_URL_STORAGE_KEY, value);
   }
+  void (async () => {
+    authState = await fetchAuthState();
+    updateAuthButtons();
+  })();
+});
+
+loginButton?.addEventListener("click", () => {
+  const wsUrl = gatewayInput.value.trim();
+  const baseUrl = parseGatewayBaseHttpUrl(wsUrl);
+  if (!baseUrl) {
+    showToast("Gateway URL を入力してください。", "warning");
+    return;
+  }
+  window.location.href = `${baseUrl}/auth/login?next=${encodeURIComponent("/")}`;
+});
+
+logoutButton?.addEventListener("click", () => {
+  void (async () => {
+    const wsUrl = gatewayInput.value.trim();
+    const baseUrl = parseGatewayBaseHttpUrl(wsUrl);
+    if (!baseUrl) {
+      showToast("Gateway URL を入力してください。", "warning");
+      return;
+    }
+    try {
+      await fetch(`${baseUrl}/auth/logout`, {
+        method: "POST",
+        credentials: "include",
+      });
+      authState = await fetchAuthState();
+      updateAuthButtons();
+      showToast("ログアウトしました。", "info");
+    } catch {
+      showToast("ログアウトに失敗しました。", "error");
+    }
+  })();
 });
 
 connectButton.addEventListener("click", () => {
+  void (async () => {
   const url = gatewayInput.value.trim();
   if (!url) {
     showToast("Gateway URL を入力してください。", "warning");
     appendMessage("Gateway URL を入力してください。", "system");
+    return;
+  }
+  authState = await fetchAuthState();
+  updateAuthButtons();
+  if (authState.enabled && !authState.authenticated) {
+    showToast("SSOログイン後に接続してください。", "warning");
+    appendMessage("SSOログインが必要です。Login ボタンを押してください。", "system");
     return;
   }
   manualDisconnectRequested = false;
@@ -1098,6 +1173,7 @@ connectButton.addEventListener("click", () => {
     markThinkingComplete(false);
     setStatus(false, "Error");
   });
+  })();
 });
 
 disconnectButton.addEventListener("click", () => {
@@ -1329,6 +1405,11 @@ setMode("idle");
 updateHealthMetrics(null);
 updateActivityHeader(null, null, "Idle");
 resizeChatInput();
+updateAuthButtons();
+void (async () => {
+  authState = await fetchAuthState();
+  updateAuthButtons();
+})();
 window.addEventListener("beforeunload", () => {
   stopHealthPingLoop();
 });
