@@ -19,6 +19,12 @@ from .tools import (
     search_sbom_by_product,
     get_affected_systems,
     get_owner_mapping,
+    get_sbom_contents,
+    list_sbom_package_types,
+    count_sbom_packages_by_type,
+    list_sbom_packages_by_type,
+    list_sbom_package_versions,
+    get_sbom_entry_by_purl,
     send_vulnerability_alert,
     send_simple_message,
     check_chat_connection,
@@ -35,6 +41,23 @@ from .tools import (
     run_bigquery_readonly_query,
     web_search,
     fetch_web_content,
+    get_nvd_cve_details,
+    search_osv_vulnerabilities,
+    list_sidfm_email_subjects,
+    list_unread_email_ids,
+    get_email_preview_by_id,
+    get_chat_space_info,
+    list_chat_member_emails,
+    build_history_record_preview,
+    list_registered_agent_ids,
+    get_registered_agent_details,
+    get_configured_bigquery_tables,
+    check_bigquery_readability_summary,
+    list_web_search_urls,
+    get_web_content_excerpt,
+    get_nvd_cvss_summary,
+    list_osv_vulnerability_ids,
+    save_vulnerability_history_minimal,
 )
 from .tools.secret_config import get_config_value
 
@@ -95,6 +118,14 @@ AGENT_INSTRUCTION = """あなたは脆弱性管理を専門とするセキュリ
 - 「システムXの脆弱性状況は？」→ 該当システムの情報を検索
 - 「脆弱性スキャンを実行して」→ SIDfmメールをチェック
 - 「担当者マッピングを確認して」→ `get_owner_mapping` で現在の設定を表示
+- 「SBOMの内容を教えて」→ `get_sbom_contents` で一覧を提示（未依頼の追加処理はしない）
+
+### SBOMの細粒度ツール
+- `list_sbom_package_types`: type 一覧
+- `count_sbom_packages_by_type`: type ごとの件数
+- `list_sbom_packages_by_type`: type 指定で一覧
+- `list_sbom_package_versions`: パッケージ名のバージョン一覧
+- `get_sbom_entry_by_purl`: PURL完全一致で1件取得
 
 ## A2A連携（Agent-to-Agent）
 
@@ -123,8 +154,40 @@ AGENT_INSTRUCTION = """あなたは脆弱性管理を専門とするセキュリ
 
 1. 最新性が重要な問い（価格、脆弱性動向、リリース、ニュース）は `web_search` で根拠を取得
 2. 必要に応じて `fetch_web_content` で一次情報本文を確認
-3. 回答では「事実」「推定」を分けて記述し、根拠URLを明示
-4. 根拠不足時は断定せず、追加確認のための質問を先に行う
+3. CVE詳細は `get_nvd_cve_details`、パッケージ脆弱性は `search_osv_vulnerabilities` を優先利用
+4. 回答では「事実」「推定」を分けて記述し、根拠URLを明示
+5. 根拠不足時は断定せず、追加確認のための質問を先に行う
+
+## 出力フォーマット（必須）
+
+すべての通常回答は、以下の4セクションをこの順で必ず含める。
+1. `結論`
+2. `根拠`
+3. `不確実性`
+4. `次アクション`
+
+追加ルール:
+- `根拠` には参照したツール名とURL/データソースを明記する
+- 根拠がない場合は `根拠` に「確認中」と明記する
+- `不確実性` には残る前提条件を最低1つ書く
+
+## 実行スコープ制御（重要）
+
+- ユーザー依頼の範囲外の操作を自動で追加しない
+- 例: SBOM一覧の依頼時は、集計・個別検索・脆弱性スキャン・通知送信を勝手に実行しない
+- 追加分析を提案する場合は、提案のみを返し、実行はユーザーの明示依頼後に行う
+
+## ツール合成ポリシー（重要）
+
+- まず細粒度ツールで最小限の事実を取得し、必要に応じて段階的に追加取得する
+- 大きい依頼が来た場合は、内部で複数の細粒度ツールを組み合わせて回答する
+- 回答には、どのツールを使って何を確認したかを簡潔に示す
+
+## 細粒度優先ポリシー
+
+- Gmail/Chat/履歴/A2A/Capability/Web/Vuln Intel すべてで、まず細粒度ツールを優先利用する
+- 大きい依頼は細粒度ツールを複数回呼び出して合成し、必要最小の追加呼び出しだけ行う
+- 単一の大きいツール呼び出しで済ませず、説明可能な手順に分解して実行する
 
 ## 注意事項
 
@@ -152,6 +215,12 @@ def create_vulnerability_agent() -> Agent:
         FunctionTool(search_sbom_by_product),
         FunctionTool(get_affected_systems),
         FunctionTool(get_owner_mapping),
+        FunctionTool(get_sbom_contents),
+        FunctionTool(list_sbom_package_types),
+        FunctionTool(count_sbom_packages_by_type),
+        FunctionTool(list_sbom_packages_by_type),
+        FunctionTool(list_sbom_package_versions),
+        FunctionTool(get_sbom_entry_by_purl),
         
         # Chat Tools
         FunctionTool(send_vulnerability_alert),
@@ -177,6 +246,25 @@ def create_vulnerability_agent() -> Agent:
         # Web Tools
         FunctionTool(web_search),
         FunctionTool(fetch_web_content),
+        # Vulnerability Intel Tools
+        FunctionTool(get_nvd_cve_details),
+        FunctionTool(search_osv_vulnerabilities),
+        # Granular Tools
+        FunctionTool(list_sidfm_email_subjects),
+        FunctionTool(list_unread_email_ids),
+        FunctionTool(get_email_preview_by_id),
+        FunctionTool(get_chat_space_info),
+        FunctionTool(list_chat_member_emails),
+        FunctionTool(build_history_record_preview),
+        FunctionTool(list_registered_agent_ids),
+        FunctionTool(get_registered_agent_details),
+        FunctionTool(get_configured_bigquery_tables),
+        FunctionTool(check_bigquery_readability_summary),
+        FunctionTool(list_web_search_urls),
+        FunctionTool(get_web_content_excerpt),
+        FunctionTool(get_nvd_cvss_summary),
+        FunctionTool(list_osv_vulnerability_ids),
+        FunctionTool(save_vulnerability_history_minimal),
     ]
 
     model_name = get_config_value(

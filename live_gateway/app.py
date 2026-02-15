@@ -21,6 +21,10 @@ except ImportError:
 GCP_PROJECT_ID = os.environ.get("GCP_PROJECT_ID")
 GCP_LOCATION = os.environ.get("GCP_LOCATION", "asia-northeast1")
 AGENT_RESOURCE_NAME = os.environ.get("AGENT_RESOURCE_NAME")
+LIVE_GREETING_TEXT = os.environ.get(
+    "LIVE_GREETING_TEXT",
+    "こんにちは。脆弱性管理AIエージェントです。ご要望をどうぞ。",
+)
 
 TOOL_DISPLAY_MAP: dict[str, dict[str, str]] = {
     "get_sidfm_emails":         {"label": "SIDfm脆弱性メールを取得中",     "icon": "mail"},
@@ -29,6 +33,12 @@ TOOL_DISPLAY_MAP: dict[str, dict[str, str]] = {
     "check_gmail_connection":   {"label": "Gmail接続を確認中",           "icon": "mail"},
     "search_sbom_by_purl":      {"label": "SBOMをパッケージURLで検索中",   "icon": "search"},
     "search_sbom_by_product":   {"label": "SBOMを製品名で検索中",         "icon": "search"},
+    "get_sbom_contents":        {"label": "SBOM一覧を取得中",             "icon": "list"},
+    "list_sbom_package_types":  {"label": "SBOM type一覧を取得中",        "icon": "list"},
+    "count_sbom_packages_by_type": {"label": "SBOM type別件数を集計中",   "icon": "bar-chart-3"},
+    "list_sbom_packages_by_type": {"label": "SBOMをtype指定で取得中",     "icon": "filter"},
+    "list_sbom_package_versions": {"label": "パッケージの版一覧を取得中",  "icon": "history"},
+    "get_sbom_entry_by_purl":   {"label": "PURLでSBOMを1件取得中",       "icon": "target"},
     "get_affected_systems":     {"label": "影響を受けるシステムを特定中",   "icon": "server"},
     "get_owner_mapping":        {"label": "システムオーナーを検索中",      "icon": "users"},
     "send_vulnerability_alert": {"label": "脆弱性アラートを送信中",       "icon": "alert-triangle"},
@@ -41,6 +51,21 @@ TOOL_DISPLAY_MAP: dict[str, dict[str, str]] = {
     "list_registered_agents":   {"label": "登録済エージェントを取得中",    "icon": "link"},
     "create_jira_ticket_request": {"label": "Jiraチケットを作成中",      "icon": "clipboard"},
     "create_approval_request":  {"label": "承認リクエストを作成中",       "icon": "check-circle"},
+    "list_sidfm_email_subjects": {"label": "SIDfm件名一覧を取得中",        "icon": "list"},
+    "list_unread_email_ids":    {"label": "未読メールID一覧を取得中",      "icon": "list"},
+    "get_email_preview_by_id":  {"label": "メールプレビューを取得中",      "icon": "mail-open"},
+    "get_chat_space_info":      {"label": "Chatスペース情報を取得中",      "icon": "message-square"},
+    "list_chat_member_emails":  {"label": "Chatメンバー一覧を取得中",      "icon": "users"},
+    "build_history_record_preview": {"label": "履歴レコードを組立中",      "icon": "clipboard"},
+    "list_registered_agent_ids": {"label": "連携エージェントIDを取得中",    "icon": "list"},
+    "get_registered_agent_details": {"label": "連携エージェント詳細を取得中","icon": "info"},
+    "get_configured_bigquery_tables": {"label": "BQ設定テーブルを確認中",   "icon": "database"},
+    "check_bigquery_readability_summary": {"label": "BQ読取可否を確認中",   "icon": "shield-check"},
+    "list_web_search_urls":     {"label": "検索URL一覧を取得中",           "icon": "globe"},
+    "get_web_content_excerpt":  {"label": "Web本文抜粋を取得中",           "icon": "file-text"},
+    "get_nvd_cvss_summary":     {"label": "NVD CVSS要約を取得中",          "icon": "activity"},
+    "list_osv_vulnerability_ids": {"label": "OSV脆弱性ID一覧を取得中",      "icon": "list"},
+    "save_vulnerability_history_minimal": {"label": "最小履歴を保存中",      "icon": "database"},
 }
 
 logger = logging.getLogger(__name__)
@@ -303,6 +328,10 @@ async def websocket_endpoint(websocket: WebSocket):
             async for response in live_client.stream_transcription(audio_queue):
                 if response.text:
                     transcript_parts.append(response.text)
+                    await _safe_send(websocket, {
+                        "type": "live_user_text",
+                        "text": " ".join(transcript_parts).strip(),
+                    })
                     now = time.monotonic()
                     if response_task is None and now - last_response_at > 2.0:
                         response_task = asyncio.create_task(_trigger_agent_response())
@@ -335,21 +364,7 @@ async def websocket_endpoint(websocket: WebSocket):
             return has_audio
 
         async def _greeting():
-            greeting_text = "こんにちは。要件を教えてください。"
-            try:
-                greeting_response = await _query_agent(
-                    client,
-                    (
-                        "音声対話が開始されました。"
-                        "脆弱性管理エージェントとして最初の挨拶を60文字以内で返してください。"
-                    ),
-                    websocket,
-                )
-                generated_text = greeting_response.get("text", "").strip()
-                if generated_text:
-                    greeting_text = generated_text
-            except Exception as exc:
-                logger.exception("Greeting generation failed: %s", exc)
+            greeting_text = LIVE_GREETING_TEXT.strip() or "こんにちは。要件を教えてください。"
 
             sent_audio = False
             await _safe_send(websocket, {"type": "live_text", "text": greeting_text})

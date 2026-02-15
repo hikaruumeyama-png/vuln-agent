@@ -35,13 +35,16 @@ const RMS_SPEECH_THRESHOLD = 0.025;
 const RMS_SILENCE_THRESHOLD = 0.012;
 const RMS_SMOOTHING = 0.2;
 const PAUSE_TRIGGER_MS = 650;
-const BARGE_IN_RMS_THRESHOLD = 0.045;
-const BARGE_IN_MIN_HOLD_MS = 180;
+const BARGE_IN_RMS_THRESHOLD = 0.04;
+const BARGE_IN_MIN_HOLD_MS = 260;
+const BARGE_IN_GREETING_MIN_HOLD_MS = 320;
 const BARGE_IN_COOLDOWN_MS = 900;
+const BARGE_IN_POST_PAUSE_MS = 260;
 const MAX_RENDERED_MESSAGES = 200;
 const HEALTH_PING_INTERVAL_MS = 30000;
 const GATEWAY_URL_STORAGE_KEY = "vuln_agent_gateway_url";
 const GREETING_UNLOCK_TIMEOUT_MS = 20000;
+const DEFAULT_FIXED_GREETING = "こんにちは。脆弱性管理AIエージェントです。ご要望をどうぞ。";
 
 // ── State ───────────────────────────────────────────────
 let socket = null;
@@ -57,6 +60,7 @@ let activityCount = 0;
 let isLiveSessionActive = false;
 let hasSocketError = false;
 let liveTextBubble = null;
+let liveUserVoiceBubble = null;
 let socketGeneration = 0;
 let healthPingIntervalId = null;
 let reconnectCount = 0;
@@ -79,6 +83,9 @@ let standalonePlaybackContext = null;
 let suppressLiveAudioUntilMs = 0;
 let bargeInVoiceSince = 0;
 let lastBargeInAt = 0;
+let ambientNoiseRms = RMS_SILENCE_THRESHOLD;
+let lastPlaybackStartedAt = 0;
+let pendingBargeInResponse = false;
 
 // ── Utility Functions ───────────────────────────────────
 function escapeHtml(str) {
@@ -313,7 +320,7 @@ function animateVoiceOverlay(timestamp) {
   if (voiceOrbLargePath) {
     const energy = Math.min(1, orbEnergy);
     voiceOrbLargePath.setAttribute("d", buildJaggedOrbPath(energy, timestamp));
-    voiceOrbLargePath.style.strokeWidth = (2 + energy * 1.2).toFixed(2);
+    voiceOrbLargePath.style.strokeWidth = (3.2 + energy * 1.6).toFixed(2);
   }
   overlayRafId = window.requestAnimationFrame(animateVoiceOverlay);
 }
@@ -389,14 +396,20 @@ function suppressIncomingLiveAudio(ms = 1200) {
 }
 
 function shouldTriggerBargeIn(nowMs) {
-  if (awaitingAgentGreeting) {
-    bargeInVoiceSince = 0;
-    return false;
-  }
   if (nowMs - lastBargeInAt < BARGE_IN_COOLDOWN_MS) {
     return false;
   }
-  if (smoothedRms <= BARGE_IN_RMS_THRESHOLD) {
+  const holdMs = awaitingAgentGreeting ? BARGE_IN_GREETING_MIN_HOLD_MS : BARGE_IN_MIN_HOLD_MS;
+  const speakingStartGrace = nowMs - lastPlaybackStartedAt < 250;
+  let threshold = Math.max(
+    BARGE_IN_RMS_THRESHOLD,
+    ambientNoiseRms * 3.0,
+    RMS_SPEECH_THRESHOLD * 1.45,
+  );
+  if (speakingStartGrace) {
+    threshold *= 1.2;
+  }
+  if (smoothedRms <= threshold) {
     bargeInVoiceSince = 0;
     return false;
   }
@@ -404,7 +417,7 @@ function shouldTriggerBargeIn(nowMs) {
     bargeInVoiceSince = nowMs;
     return false;
   }
-  if (nowMs - bargeInVoiceSince < BARGE_IN_MIN_HOLD_MS) {
+  if (nowMs - bargeInVoiceSince < holdMs) {
     return false;
   }
   bargeInVoiceSince = 0;
@@ -526,8 +539,42 @@ function appendLiveText(text) {
   messagesArea.scrollTop = messagesArea.scrollHeight;
 }
 
+function appendLiveUserText(text) {
+  const normalized = String(text || "").trim();
+  if (!normalized) return;
+  hideThinking();
+  if (!liveUserVoiceBubble) {
+    const bubble = document.createElement("div");
+    bubble.className = "message user";
+    bubble.innerHTML = `
+      <div class="message-header">
+        <i data-lucide="mic"></i>
+        <span>You (voice)</span>
+      </div>
+      <div class="message-body live-user-text-body"></div>
+      <div class="message-meta">
+        <i data-lucide="clock"></i>
+        <span>${formatTime()}</span>
+      </div>
+    `;
+    messagesArea.appendChild(bubble);
+    pruneMessages();
+    renderIcons(bubble);
+    liveUserVoiceBubble = bubble;
+  }
+  const body = liveUserVoiceBubble.querySelector(".live-user-text-body");
+  if (body) {
+    body.textContent = normalized;
+  }
+  messagesArea.scrollTop = messagesArea.scrollHeight;
+}
+
 function resetLiveTextBubble() {
   liveTextBubble = null;
+}
+
+function commitLiveUserTextBubble() {
+  liveUserVoiceBubble = null;
 }
 
 // ── Thinking Bubble ─────────────────────────────────────
@@ -767,7 +814,6 @@ function encodePcmToBase64(floatSamples) {
 }
 
 function sendAudioChunk(floatSamples, sampleRate) {
-  if (awaitingAgentGreeting) return;
   if (!socket || socket.readyState !== WebSocket.OPEN) return;
   socket.send(
     JSON.stringify({
@@ -807,6 +853,9 @@ registerProcessor("pcm-capture-processor", PcmCaptureProcessor);
       const rms = Math.sqrt(input.reduce((sum, value) => sum + value * value, 0) / input.length);
       smoothedRms = RMS_SMOOTHING * rms + (1 - RMS_SMOOTHING) * smoothedRms;
       updateAudioLevel(smoothedRms);
+      if (!currentPlaybackSource && smoothedRms < RMS_SPEECH_THRESHOLD) {
+        ambientNoiseRms = ambientNoiseRms * 0.94 + smoothedRms * 0.06;
+      }
       const now = Date.now();
       if (smoothedRms > RMS_SPEECH_THRESHOLD) {
         lastSpeechTimestamp = now;
@@ -814,6 +863,7 @@ registerProcessor("pcm-capture-processor", PcmCaptureProcessor);
         if (currentPlaybackSource && shouldTriggerBargeIn(now)) {
           suppressIncomingLiveAudio();
           stopAllPlayback();
+          pendingBargeInResponse = true;
           if (socket && socket.readyState === WebSocket.OPEN) {
             socket.send(JSON.stringify({ type: "barge_in" }));
           }
@@ -821,15 +871,17 @@ registerProcessor("pcm-capture-processor", PcmCaptureProcessor);
       } else {
         bargeInVoiceSince = 0;
       }
+      const pauseWindowMs = pendingBargeInResponse ? BARGE_IN_POST_PAUSE_MS : PAUSE_TRIGGER_MS;
       if (
         smoothedRms < RMS_SILENCE_THRESHOLD &&
         lastSpeechTimestamp !== 0 &&
-        now - lastSpeechTimestamp > PAUSE_TRIGGER_MS
+        now - lastSpeechTimestamp > pauseWindowMs
       ) {
         if (socket && socket.readyState === WebSocket.OPEN) {
           socket.send(JSON.stringify({ type: "speech_pause" }));
         }
         lastSpeechTimestamp = 0;
+        pendingBargeInResponse = false;
       }
       sendAudioChunk(input, context.sampleRate);
     };
@@ -913,9 +965,15 @@ connectButton.addEventListener("click", () => {
         setRequestInFlight(false);
         markThinkingComplete(true);
         updateActivityHeader(payload.request_id || currentActivityRequestId, null, "Response ready");
+        commitLiveUserTextBubble();
         if (!isLiveSessionActive) {
           appendMessage(payload.text || "(no response)", "agent");
         }
+        return;
+      }
+
+      if (payload.type === "live_user_text") {
+        appendLiveUserText(payload.text || "");
         return;
       }
 
@@ -944,15 +1002,16 @@ connectButton.addEventListener("click", () => {
           isLiveSessionActive = true;
           setOverlayVisible(true);
           resetLiveTextBubble();
+          commitLiveUserTextBubble();
           setMode(awaitingAgentGreeting ? "awaiting-greeting" : "listening");
         } else if (
           awaitingAgentGreeting &&
           (payload.status === "greeting_no_audio" || payload.status === "greeting_error")
         ) {
-          const fallbackText =
+      const fallbackText =
             typeof payload.text === "string" && payload.text.trim()
               ? payload.text.trim()
-              : "こんにちは。要件を教えてください。";
+              : DEFAULT_FIXED_GREETING;
           if (!playGreetingFallbackSpeech(fallbackText) && !hasReceivedGreetingAudio) {
             unlockGreetingAndListening(false, true);
           }
@@ -960,6 +1019,9 @@ connectButton.addEventListener("click", () => {
           bargeInVoiceSince = 0;
           suppressIncomingLiveAudio();
           stopAllPlayback();
+          awaitingAgentGreeting = false;
+          clearGreetingUnlockTimer();
+          pendingBargeInResponse = true;
           setMode("listening (barge-in)");
         } else if (payload.status === "stopped") {
           isLiveSessionActive = false;
@@ -971,7 +1033,10 @@ connectButton.addEventListener("click", () => {
           stopGreetingFallbackSpeech();
           setOverlayVisible(false);
           resetLiveTextBubble();
+          commitLiveUserTextBubble();
           setMode("idle");
+        } else if (payload.status === "speech_pause") {
+          commitLiveUserTextBubble();
         }
         return;
       }
@@ -1008,6 +1073,7 @@ connectButton.addEventListener("click", () => {
     clearPlaybackIdleTimer();
     setRequestInFlight(false);
     resetLiveTextBubble();
+    commitLiveUserTextBubble();
     if (socket === ws) {
       socket = null;
     }
@@ -1063,6 +1129,9 @@ startAudioButton.addEventListener("click", async () => {
     suppressLiveAudioUntilMs = 0;
     bargeInVoiceSince = 0;
     lastBargeInAt = 0;
+    pendingBargeInResponse = false;
+    ambientNoiseRms = RMS_SILENCE_THRESHOLD;
+    lastPlaybackStartedAt = 0;
     hasReceivedGreetingAudio = false;
     didAttemptGreetingSpeechFallback = false;
     clearPlaybackIdleTimer();
@@ -1073,7 +1142,7 @@ startAudioButton.addEventListener("click", async () => {
     greetingUnlockTimerId = window.setTimeout(() => {
       if (!hasReceivedGreetingAudio) {
         if (!didAttemptGreetingSpeechFallback) {
-          const started = playGreetingFallbackSpeech("こんにちは。要件を教えてください。");
+          const started = playGreetingFallbackSpeech(DEFAULT_FIXED_GREETING);
           if (!started) {
             unlockGreetingAndListening(false, true);
           }
@@ -1095,6 +1164,9 @@ startAudioButton.addEventListener("click", async () => {
         );
         smoothedRms = RMS_SMOOTHING * rms + (1 - RMS_SMOOTHING) * smoothedRms;
         updateAudioLevel(smoothedRms);
+        if (!currentPlaybackSource && smoothedRms < RMS_SPEECH_THRESHOLD) {
+          ambientNoiseRms = ambientNoiseRms * 0.94 + smoothedRms * 0.06;
+        }
 
         const now = Date.now();
         if (smoothedRms > RMS_SPEECH_THRESHOLD) {
@@ -1105,6 +1177,7 @@ startAudioButton.addEventListener("click", async () => {
           if (currentPlaybackSource && shouldTriggerBargeIn(now)) {
             suppressIncomingLiveAudio();
             stopAllPlayback();
+            pendingBargeInResponse = true;
             if (socket && socket.readyState === WebSocket.OPEN) {
               socket.send(JSON.stringify({ type: "barge_in" }));
             }
@@ -1112,15 +1185,17 @@ startAudioButton.addEventListener("click", async () => {
         } else {
           bargeInVoiceSince = 0;
         }
+        const pauseWindowMs = pendingBargeInResponse ? BARGE_IN_POST_PAUSE_MS : PAUSE_TRIGGER_MS;
         if (
           smoothedRms < RMS_SILENCE_THRESHOLD &&
           lastSpeechTimestamp !== 0 &&
-          now - lastSpeechTimestamp > PAUSE_TRIGGER_MS
+          now - lastSpeechTimestamp > pauseWindowMs
         ) {
           if (socket && socket.readyState === WebSocket.OPEN) {
             socket.send(JSON.stringify({ type: "speech_pause" }));
           }
           lastSpeechTimestamp = 0;
+          pendingBargeInResponse = false;
         }
         sendAudioChunk(input, audioContext.sampleRate);
       };
@@ -1178,13 +1253,15 @@ chatForm.addEventListener("submit", (event) => {
   socket.send(JSON.stringify({ type: "user_text", text: message }));
   chatInput.value = "";
   resizeChatInput();
-  resetLiveTextBubble();
+    resetLiveTextBubble();
+    commitLiveUserTextBubble();
 });
 
 // ── Audio Playback ──────────────────────────────────────
 function playAudio(base64Audio, mimeType) {
   if (!base64Audio) return;
   playbackQueue.push({ base64Audio, mimeType });
+  lastPlaybackStartedAt = Date.now();
   if (mode !== "speaking") {
     setMode("speaking");
   }

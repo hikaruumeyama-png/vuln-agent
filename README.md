@@ -112,16 +112,31 @@ gcloud functions logs read vuln-agent-chat-webhook --region=asia-northeast1 --li
 ## ツール一覧（Agent）
 - Gmail: `get_sidfm_emails`, `get_unread_emails`, `mark_email_as_read`, `check_gmail_connection`
 - SBOM/担当者: `search_sbom_by_purl`, `search_sbom_by_product`, `get_affected_systems`, `get_owner_mapping`
+- SBOM一覧: `get_sbom_contents`（SBOM内容の先頭N件を返す）
+- SBOM細粒度:
+  - `list_sbom_package_types`
+  - `count_sbom_packages_by_type`
+  - `list_sbom_packages_by_type`
+  - `list_sbom_package_versions`
+  - `get_sbom_entry_by_purl`
 - Chat: `send_vulnerability_alert`, `send_simple_message`, `check_chat_connection`, `list_space_members`
 - 履歴: `log_vulnerability_history`
 - A2A: `register_remote_agent`, `call_remote_agent`, `list_registered_agents`, `create_jira_ticket_request`, `create_approval_request`
 - 権限可視化/柔軟参照: `get_runtime_capabilities`, `inspect_bigquery_capabilities`, `list_bigquery_tables`, `run_bigquery_readonly_query`
 - Web参照: `web_search`, `fetch_web_content`
+- 脆弱性インテリジェンス: `get_nvd_cve_details`, `search_osv_vulnerabilities`
+- 細粒度ツール（横断）:
+  - Gmail: `list_sidfm_email_subjects`, `list_unread_email_ids`, `get_email_preview_by_id`
+  - Chat: `get_chat_space_info`, `list_chat_member_emails`
+  - 履歴/A2A: `build_history_record_preview`, `list_registered_agent_ids`, `get_registered_agent_details`, `save_vulnerability_history_minimal`
+  - Capability/Web/Intel: `get_configured_bigquery_tables`, `check_bigquery_readability_summary`, `list_web_search_urls`, `get_web_content_excerpt`, `get_nvd_cvss_summary`, `list_osv_vulnerability_ids`
 
 ## 回答品質を上げる設定
 - モデルは `AGENT_MODEL`（または Secret `vuln-agent-model-name`）で上書き可能  
   例: `gemini-2.5-pro`
 - 最新情報が必要な質問は、エージェントが `web_search` / `fetch_web_content` を使って根拠確認して回答します。
+- 通常回答は `結論 / 根拠 / 不確実性 / 次アクション` の固定フォーマットで返すように指示済みです。
+- 大きい依頼に対しては、細粒度ツールを段階的に組み合わせて回答するよう指示済みです。
 
 ## トラブルシュート（最小）
 - `SBOMデータが見つかりません`

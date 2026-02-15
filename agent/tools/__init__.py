@@ -13,6 +13,12 @@ from .sheets_tools import (
     search_sbom_by_product,
     get_affected_systems,
     get_owner_mapping,
+    get_sbom_contents,
+    list_sbom_package_types,
+    count_sbom_packages_by_type,
+    list_sbom_packages_by_type,
+    list_sbom_package_versions,
+    get_sbom_entry_by_purl,
 )
 from .chat_tools import (
     send_vulnerability_alert,
@@ -38,6 +44,27 @@ from .web_tools import (
     web_search,
     fetch_web_content,
 )
+from .vuln_intel_tools import (
+    get_nvd_cve_details,
+    search_osv_vulnerabilities,
+)
+from .granular_tools import (
+    list_sidfm_email_subjects,
+    list_unread_email_ids,
+    get_email_preview_by_id,
+    get_chat_space_info,
+    list_chat_member_emails,
+    build_history_record_preview,
+    list_registered_agent_ids,
+    get_registered_agent_details,
+    get_configured_bigquery_tables,
+    check_bigquery_readability_summary,
+    list_web_search_urls,
+    get_web_content_excerpt,
+    get_nvd_cvss_summary,
+    list_osv_vulnerability_ids,
+    save_vulnerability_history_minimal,
+)
 
 __all__ = [
     # Gmail
@@ -50,6 +77,12 @@ __all__ = [
     "search_sbom_by_product",
     "get_affected_systems",
     "get_owner_mapping",
+    "get_sbom_contents",
+    "list_sbom_package_types",
+    "count_sbom_packages_by_type",
+    "list_sbom_packages_by_type",
+    "list_sbom_package_versions",
+    "get_sbom_entry_by_purl",
     # Chat
     "send_vulnerability_alert",
     "send_simple_message",
@@ -71,4 +104,23 @@ __all__ = [
     # Web
     "web_search",
     "fetch_web_content",
+    # Vulnerability Intel
+    "get_nvd_cve_details",
+    "search_osv_vulnerabilities",
+    # Granular
+    "list_sidfm_email_subjects",
+    "list_unread_email_ids",
+    "get_email_preview_by_id",
+    "get_chat_space_info",
+    "list_chat_member_emails",
+    "build_history_record_preview",
+    "list_registered_agent_ids",
+    "get_registered_agent_details",
+    "get_configured_bigquery_tables",
+    "check_bigquery_readability_summary",
+    "list_web_search_urls",
+    "get_web_content_excerpt",
+    "get_nvd_cvss_summary",
+    "list_osv_vulnerability_ids",
+    "save_vulnerability_history_minimal",
 ]
