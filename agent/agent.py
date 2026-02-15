@@ -43,6 +43,21 @@ from .tools import (
     fetch_web_content,
     get_nvd_cve_details,
     search_osv_vulnerabilities,
+    list_sidfm_email_subjects,
+    list_unread_email_ids,
+    get_email_preview_by_id,
+    get_chat_space_info,
+    list_chat_member_emails,
+    build_history_record_preview,
+    list_registered_agent_ids,
+    get_registered_agent_details,
+    get_configured_bigquery_tables,
+    check_bigquery_readability_summary,
+    list_web_search_urls,
+    get_web_content_excerpt,
+    get_nvd_cvss_summary,
+    list_osv_vulnerability_ids,
+    save_vulnerability_history_minimal,
 )
 from .tools.secret_config import get_config_value
 
@@ -168,6 +183,12 @@ AGENT_INSTRUCTION = """あなたは脆弱性管理を専門とするセキュリ
 - 大きい依頼が来た場合は、内部で複数の細粒度ツールを組み合わせて回答する
 - 回答には、どのツールを使って何を確認したかを簡潔に示す
 
+## 細粒度優先ポリシー
+
+- Gmail/Chat/履歴/A2A/Capability/Web/Vuln Intel すべてで、まず細粒度ツールを優先利用する
+- 大きい依頼は細粒度ツールを複数回呼び出して合成し、必要最小の追加呼び出しだけ行う
+- 単一の大きいツール呼び出しで済ませず、説明可能な手順に分解して実行する
+
 ## 注意事項
 
 - 同じ脆弱性を二重に通知しないよう、メールは処理後に既読にする
@@ -228,6 +249,22 @@ def create_vulnerability_agent() -> Agent:
         # Vulnerability Intel Tools
         FunctionTool(get_nvd_cve_details),
         FunctionTool(search_osv_vulnerabilities),
+        # Granular Tools
+        FunctionTool(list_sidfm_email_subjects),
+        FunctionTool(list_unread_email_ids),
+        FunctionTool(get_email_preview_by_id),
+        FunctionTool(get_chat_space_info),
+        FunctionTool(list_chat_member_emails),
+        FunctionTool(build_history_record_preview),
+        FunctionTool(list_registered_agent_ids),
+        FunctionTool(get_registered_agent_details),
+        FunctionTool(get_configured_bigquery_tables),
+        FunctionTool(check_bigquery_readability_summary),
+        FunctionTool(list_web_search_urls),
+        FunctionTool(get_web_content_excerpt),
+        FunctionTool(get_nvd_cvss_summary),
+        FunctionTool(list_osv_vulnerability_ids),
+        FunctionTool(save_vulnerability_history_minimal),
     ]
 
     model_name = get_config_value(

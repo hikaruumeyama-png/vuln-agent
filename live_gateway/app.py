@@ -51,6 +51,21 @@ TOOL_DISPLAY_MAP: dict[str, dict[str, str]] = {
     "list_registered_agents":   {"label": "登録済エージェントを取得中",    "icon": "link"},
     "create_jira_ticket_request": {"label": "Jiraチケットを作成中",      "icon": "clipboard"},
     "create_approval_request":  {"label": "承認リクエストを作成中",       "icon": "check-circle"},
+    "list_sidfm_email_subjects": {"label": "SIDfm件名一覧を取得中",        "icon": "list"},
+    "list_unread_email_ids":    {"label": "未読メールID一覧を取得中",      "icon": "list"},
+    "get_email_preview_by_id":  {"label": "メールプレビューを取得中",      "icon": "mail-open"},
+    "get_chat_space_info":      {"label": "Chatスペース情報を取得中",      "icon": "message-square"},
+    "list_chat_member_emails":  {"label": "Chatメンバー一覧を取得中",      "icon": "users"},
+    "build_history_record_preview": {"label": "履歴レコードを組立中",      "icon": "clipboard"},
+    "list_registered_agent_ids": {"label": "連携エージェントIDを取得中",    "icon": "list"},
+    "get_registered_agent_details": {"label": "連携エージェント詳細を取得中","icon": "info"},
+    "get_configured_bigquery_tables": {"label": "BQ設定テーブルを確認中",   "icon": "database"},
+    "check_bigquery_readability_summary": {"label": "BQ読取可否を確認中",   "icon": "shield-check"},
+    "list_web_search_urls":     {"label": "検索URL一覧を取得中",           "icon": "globe"},
+    "get_web_content_excerpt":  {"label": "Web本文抜粋を取得中",           "icon": "file-text"},
+    "get_nvd_cvss_summary":     {"label": "NVD CVSS要約を取得中",          "icon": "activity"},
+    "list_osv_vulnerability_ids": {"label": "OSV脆弱性ID一覧を取得中",      "icon": "list"},
+    "save_vulnerability_history_minimal": {"label": "最小履歴を保存中",      "icon": "database"},
 }
 
 logger = logging.getLogger(__name__)
