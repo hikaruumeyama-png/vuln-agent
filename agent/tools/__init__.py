@@ -14,6 +14,11 @@ from .sheets_tools import (
     get_affected_systems,
     get_owner_mapping,
     get_sbom_contents,
+    list_sbom_package_types,
+    count_sbom_packages_by_type,
+    list_sbom_packages_by_type,
+    list_sbom_package_versions,
+    get_sbom_entry_by_purl,
 )
 from .chat_tools import (
     send_vulnerability_alert,
@@ -56,6 +61,11 @@ __all__ = [
     "get_affected_systems",
     "get_owner_mapping",
     "get_sbom_contents",
+    "list_sbom_package_types",
+    "count_sbom_packages_by_type",
+    "list_sbom_packages_by_type",
+    "list_sbom_package_versions",
+    "get_sbom_entry_by_purl",
     # Chat
     "send_vulnerability_alert",
     "send_simple_message",

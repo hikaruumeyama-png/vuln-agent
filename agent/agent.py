@@ -20,6 +20,11 @@ from .tools import (
     get_affected_systems,
     get_owner_mapping,
     get_sbom_contents,
+    list_sbom_package_types,
+    count_sbom_packages_by_type,
+    list_sbom_packages_by_type,
+    list_sbom_package_versions,
+    get_sbom_entry_by_purl,
     send_vulnerability_alert,
     send_simple_message,
     check_chat_connection,
@@ -100,6 +105,13 @@ AGENT_INSTRUCTION = """あなたは脆弱性管理を専門とするセキュリ
 - 「担当者マッピングを確認して」→ `get_owner_mapping` で現在の設定を表示
 - 「SBOMの内容を教えて」→ `get_sbom_contents` で一覧を提示（未依頼の追加処理はしない）
 
+### SBOMの細粒度ツール
+- `list_sbom_package_types`: type 一覧
+- `count_sbom_packages_by_type`: type ごとの件数
+- `list_sbom_packages_by_type`: type 指定で一覧
+- `list_sbom_package_versions`: パッケージ名のバージョン一覧
+- `get_sbom_entry_by_purl`: PURL完全一致で1件取得
+
 ## A2A連携（Agent-to-Agent）
 
 他のエージェントと連携して、より高度な自動化が可能です：
@@ -150,6 +162,12 @@ AGENT_INSTRUCTION = """あなたは脆弱性管理を専門とするセキュリ
 - 例: SBOM一覧の依頼時は、集計・個別検索・脆弱性スキャン・通知送信を勝手に実行しない
 - 追加分析を提案する場合は、提案のみを返し、実行はユーザーの明示依頼後に行う
 
+## ツール合成ポリシー（重要）
+
+- まず細粒度ツールで最小限の事実を取得し、必要に応じて段階的に追加取得する
+- 大きい依頼が来た場合は、内部で複数の細粒度ツールを組み合わせて回答する
+- 回答には、どのツールを使って何を確認したかを簡潔に示す
+
 ## 注意事項
 
 - 同じ脆弱性を二重に通知しないよう、メールは処理後に既読にする
@@ -177,6 +195,11 @@ def create_vulnerability_agent() -> Agent:
         FunctionTool(get_affected_systems),
         FunctionTool(get_owner_mapping),
         FunctionTool(get_sbom_contents),
+        FunctionTool(list_sbom_package_types),
+        FunctionTool(count_sbom_packages_by_type),
+        FunctionTool(list_sbom_packages_by_type),
+        FunctionTool(list_sbom_package_versions),
+        FunctionTool(get_sbom_entry_by_purl),
         
         # Chat Tools
         FunctionTool(send_vulnerability_alert),

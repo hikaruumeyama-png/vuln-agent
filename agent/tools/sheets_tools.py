@@ -683,6 +683,182 @@ def get_sbom_contents(max_results: int = 50) -> dict[str, Any]:
     }
 
 
+def list_sbom_package_types() -> dict[str, Any]:
+    """
+    SBOMに含まれるパッケージ type 一覧を返す。
+    """
+    backend = _get_sbom_data_backend()
+    sbom = _load_sbom()
+    if not sbom:
+        return {
+            "status": "error",
+            "backend": backend,
+            "types": [],
+            "total_count": 0,
+            "message": _build_sbom_missing_message(),
+        }
+
+    types = sorted({(entry.get("type") or "").strip() or "(unknown)" for entry in sbom})
+    return {
+        "status": "success",
+        "backend": backend,
+        "types": types,
+        "total_count": len(types),
+    }
+
+
+def count_sbom_packages_by_type() -> dict[str, Any]:
+    """
+    SBOMを type ごとに件数集計して返す。
+    """
+    backend = _get_sbom_data_backend()
+    sbom = _load_sbom()
+    if not sbom:
+        return {
+            "status": "error",
+            "backend": backend,
+            "counts": {},
+            "total_count": 0,
+            "message": _build_sbom_missing_message(),
+        }
+
+    counts: dict[str, int] = {}
+    for entry in sbom:
+        pkg_type = (entry.get("type") or "").strip() or "(unknown)"
+        counts[pkg_type] = counts.get(pkg_type, 0) + 1
+
+    return {
+        "status": "success",
+        "backend": backend,
+        "counts": dict(sorted(counts.items(), key=lambda x: x[0])),
+        "total_count": len(sbom),
+    }
+
+
+def list_sbom_packages_by_type(package_type: str, max_results: int = 50) -> dict[str, Any]:
+    """
+    指定 type のSBOMエントリ一覧を返す。
+    """
+    pkg_type = (package_type or "").strip()
+    if not pkg_type:
+        return {"status": "error", "message": "package_type は必須です。"}
+
+    limit = _normalize_result_limit(max_results, default=50, max_value=300)
+    backend = _get_sbom_data_backend()
+    sbom = _load_sbom()
+    if not sbom:
+        return {
+            "status": "error",
+            "backend": backend,
+            "package_type": pkg_type,
+            "entries": [],
+            "returned_count": 0,
+            "total_count": 0,
+            "message": _build_sbom_missing_message(),
+        }
+
+    matched = [e for e in sbom if (e.get("type") or "").strip().lower() == pkg_type.lower()]
+    return {
+        "status": "success",
+        "backend": backend,
+        "package_type": pkg_type,
+        "entries": matched[:limit],
+        "returned_count": min(limit, len(matched)),
+        "total_count": len(matched),
+    }
+
+
+def list_sbom_package_versions(
+    package_name: str,
+    package_type: str | None = None,
+    max_results: int = 50,
+) -> dict[str, Any]:
+    """
+    指定パッケージ名のバージョン一覧を返す（必要なら type で絞り込み）。
+    """
+    name_query = (package_name or "").strip()
+    type_query = (package_type or "").strip()
+    if not name_query:
+        return {"status": "error", "message": "package_name は必須です。"}
+
+    limit = _normalize_result_limit(max_results, default=50, max_value=300)
+    backend = _get_sbom_data_backend()
+    sbom = _load_sbom()
+    if not sbom:
+        return {
+            "status": "error",
+            "backend": backend,
+            "package_name": name_query,
+            "package_type": type_query,
+            "entries": [],
+            "returned_count": 0,
+            "total_count": 0,
+            "message": _build_sbom_missing_message(),
+        }
+
+    matched = []
+    for entry in sbom:
+        entry_name = (entry.get("name") or "").strip()
+        if name_query.lower() not in entry_name.lower():
+            continue
+        if type_query and (entry.get("type") or "").strip().lower() != type_query.lower():
+            continue
+        matched.append(entry)
+
+    versions = sorted({(e.get("version") or "").strip() or "(unknown)" for e in matched})
+    return {
+        "status": "success",
+        "backend": backend,
+        "package_name": name_query,
+        "package_type": type_query,
+        "versions": versions,
+        "entries": matched[:limit],
+        "returned_count": min(limit, len(matched)),
+        "total_count": len(matched),
+    }
+
+
+def get_sbom_entry_by_purl(purl: str) -> dict[str, Any]:
+    """
+    指定PURLのSBOMエントリを1件返す（完全一致）。
+    """
+    normalized = (purl or "").strip()
+    if not normalized:
+        return {"status": "error", "message": "purl は必須です。"}
+
+    backend = _get_sbom_data_backend()
+    sbom = _load_sbom()
+    if not sbom:
+        return {
+            "status": "error",
+            "backend": backend,
+            "purl": normalized,
+            "found": False,
+            "entry": None,
+            "message": _build_sbom_missing_message(),
+        }
+
+    for entry in sbom:
+        if (entry.get("purl") or "").strip() == normalized:
+            owner_info = _find_owner_for_purl(normalized)
+            return {
+                "status": "success",
+                "backend": backend,
+                "purl": normalized,
+                "found": True,
+                "entry": {**entry, **owner_info},
+            }
+
+    return {
+        "status": "success",
+        "backend": backend,
+        "purl": normalized,
+        "found": False,
+        "entry": None,
+        "message": "指定したPURLのエントリは見つかりませんでした。",
+    }
+
+
 def _matches_criteria(entry: dict, product_type: str, product_name: str, version_range: str) -> bool:
     """エントリが検索条件にマッチするかチェック"""
     entry_type = (entry.get("type") or "").strip()

@@ -126,6 +126,7 @@ class BigQuerySheetsToolsTests(unittest.TestCase):
     def setUp(self):
         self._orig_env = dict(os.environ)
         self._orig_load_sbom = self.sheets_tools._load_sbom
+        self._orig_find_owner_for_purl = self.sheets_tools._find_owner_for_purl
         os.environ["SBOM_DATA_BACKEND"] = "bigquery"
         self.sheets_tools._sbom_cache = None
         self.sheets_tools._sbom_cache_timestamp = None
@@ -135,6 +136,7 @@ class BigQuerySheetsToolsTests(unittest.TestCase):
 
     def tearDown(self):
         self.sheets_tools._load_sbom = self._orig_load_sbom
+        self.sheets_tools._find_owner_for_purl = self._orig_find_owner_for_purl
         os.environ.clear()
         os.environ.update(self._orig_env)
 
@@ -192,6 +194,41 @@ class BigQuerySheetsToolsTests(unittest.TestCase):
         result = self.sheets_tools.get_sbom_contents(max_results=10)
         self.assertEqual(result["status"], "error")
         self.assertEqual(result["returned_count"], 0)
+
+    def test_list_sbom_package_types(self):
+        self.sheets_tools._load_sbom = lambda force_refresh=False: [
+            {"type": "maven", "name": "a", "version": "1.0.0", "release": "", "purl": "pkg:maven/a@1.0.0"},
+            {"type": "npm", "name": "b", "version": "2.0.0", "release": "", "purl": "pkg:npm/b@2.0.0"},
+            {"type": "maven", "name": "c", "version": "3.0.0", "release": "", "purl": "pkg:maven/c@3.0.0"},
+        ]
+        result = self.sheets_tools.list_sbom_package_types()
+        self.assertEqual(result["status"], "success")
+        self.assertEqual(result["types"], ["maven", "npm"])
+
+    def test_list_sbom_package_versions(self):
+        self.sheets_tools._load_sbom = lambda force_refresh=False: [
+            {"type": "maven", "name": "log4j-core", "version": "2.14.1", "release": "", "purl": "pkg:maven/log4j-core@2.14.1"},
+            {"type": "maven", "name": "log4j-core", "version": "2.17.0", "release": "", "purl": "pkg:maven/log4j-core@2.17.0"},
+            {"type": "npm", "name": "express", "version": "4.17.1", "release": "", "purl": "pkg:npm/express@4.17.1"},
+        ]
+        result = self.sheets_tools.list_sbom_package_versions("log4j-core", "maven")
+        self.assertEqual(result["status"], "success")
+        self.assertEqual(result["versions"], ["2.14.1", "2.17.0"])
+        self.assertEqual(result["total_count"], 2)
+
+    def test_get_sbom_entry_by_purl(self):
+        self.sheets_tools._load_sbom = lambda force_refresh=False: [
+            {"type": "maven", "name": "commons-text", "version": "1.9", "release": "", "purl": "pkg:maven/org.apache.commons/commons-text@1.9"},
+        ]
+        self.sheets_tools._find_owner_for_purl = lambda purl: {
+            "system_name": "基幹システム",
+            "owner_email": "owner@example.com",
+            "owner_name": "Owner",
+        }
+        result = self.sheets_tools.get_sbom_entry_by_purl("pkg:maven/org.apache.commons/commons-text@1.9")
+        self.assertEqual(result["status"], "success")
+        self.assertTrue(result["found"])
+        self.assertEqual(result["entry"]["owner_email"], "owner@example.com")
 
 
 class BigQueryHistoryToolsTests(unittest.TestCase):

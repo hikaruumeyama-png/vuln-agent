@@ -118,6 +118,12 @@ gcloud functions logs read vuln-agent-chat-webhook --region=asia-northeast1 --li
 - Gmail: `get_sidfm_emails`, `get_unread_emails`, `mark_email_as_read`, `check_gmail_connection`
 - SBOM/担当者: `search_sbom_by_purl`, `search_sbom_by_product`, `get_affected_systems`, `get_owner_mapping`
 - SBOM一覧: `get_sbom_contents`（SBOM内容の先頭N件を返す）
+- SBOM細粒度:
+  - `list_sbom_package_types`
+  - `count_sbom_packages_by_type`
+  - `list_sbom_packages_by_type`
+  - `list_sbom_package_versions`
+  - `get_sbom_entry_by_purl`
 - Chat: `send_vulnerability_alert`, `send_simple_message`, `check_chat_connection`, `list_space_members`
 - 履歴: `log_vulnerability_history`
 - A2A: `register_remote_agent`, `call_remote_agent`, `list_registered_agents`, `create_jira_ticket_request`, `create_approval_request`
