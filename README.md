@@ -116,6 +116,12 @@ gcloud functions logs read vuln-agent-chat-webhook --region=asia-northeast1 --li
 - 履歴: `log_vulnerability_history`
 - A2A: `register_remote_agent`, `call_remote_agent`, `list_registered_agents`, `create_jira_ticket_request`, `create_approval_request`
 - 権限可視化/柔軟参照: `get_runtime_capabilities`, `inspect_bigquery_capabilities`, `list_bigquery_tables`, `run_bigquery_readonly_query`
+- Web参照: `web_search`, `fetch_web_content`
+
+## 回答品質を上げる設定
+- モデルは `AGENT_MODEL`（または Secret `vuln-agent-model-name`）で上書き可能  
+  例: `gemini-2.5-pro`
+- 最新情報が必要な質問は、エージェントが `web_search` / `fetch_web_content` を使って根拠確認して回答します。
 
 ## トラブルシュート（最小）
 - `SBOMデータが見つかりません`
