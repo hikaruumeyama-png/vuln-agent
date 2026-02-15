@@ -33,7 +33,10 @@ from .tools import (
     inspect_bigquery_capabilities,
     list_bigquery_tables,
     run_bigquery_readonly_query,
+    web_search,
+    fetch_web_content,
 )
+from .tools.secret_config import get_config_value
 
 # エージェントの指示（システムプロンプト）
 AGENT_INSTRUCTION = """あなたは脆弱性管理を専門とするセキュリティAIエージェントです。
@@ -116,6 +119,13 @@ AGENT_INSTRUCTION = """あなたは脆弱性管理を専門とするセキュリ
 4. 柔軟な参照は `run_bigquery_readonly_query` を使い、read-only SQLのみ実行
 5. 権限不足が出たら代替手段（既存SBOM検索など）に即時フォールバック
 
+## 回答品質ポリシー
+
+1. 最新性が重要な問い（価格、脆弱性動向、リリース、ニュース）は `web_search` で根拠を取得
+2. 必要に応じて `fetch_web_content` で一次情報本文を確認
+3. 回答では「事実」「推定」を分けて記述し、根拠URLを明示
+4. 根拠不足時は断定せず、追加確認のための質問を先に行う
+
 ## 注意事項
 
 - 同じ脆弱性を二重に通知しないよう、メールは処理後に既読にする
@@ -164,12 +174,21 @@ def create_vulnerability_agent() -> Agent:
         FunctionTool(inspect_bigquery_capabilities),
         FunctionTool(list_bigquery_tables),
         FunctionTool(run_bigquery_readonly_query),
+        # Web Tools
+        FunctionTool(web_search),
+        FunctionTool(fetch_web_content),
     ]
-    
+
+    model_name = get_config_value(
+        ["AGENT_MODEL", "GEMINI_MODEL", "VERTEX_MODEL"],
+        secret_name="vuln-agent-model-name",
+        default="gemini-2.5-pro",
+    ).strip()
+
     # エージェント作成
     agent = Agent(
         name="vulnerability_management_agent",
-        model="gemini-2.5-flash",
+        model=model_name,
         instruction=AGENT_INSTRUCTION,
         tools=tools,
     )

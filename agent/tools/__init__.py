@@ -34,6 +34,10 @@ from .capability_tools import (
     list_bigquery_tables,
     run_bigquery_readonly_query,
 )
+from .web_tools import (
+    web_search,
+    fetch_web_content,
+)
 
 __all__ = [
     # Gmail
@@ -64,4 +68,7 @@ __all__ = [
     "inspect_bigquery_capabilities",
     "list_bigquery_tables",
     "run_bigquery_readonly_query",
+    # Web
+    "web_search",
+    "fetch_web_content",
 ]
