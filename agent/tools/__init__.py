@@ -28,6 +28,12 @@ from .a2a_tools import (
     create_jira_ticket_request,
     create_approval_request,
 )
+from .capability_tools import (
+    get_runtime_capabilities,
+    inspect_bigquery_capabilities,
+    list_bigquery_tables,
+    run_bigquery_readonly_query,
+)
 
 __all__ = [
     # Gmail
@@ -53,4 +59,9 @@ __all__ = [
     "list_registered_agents",
     "create_jira_ticket_request",
     "create_approval_request",
+    # Capability
+    "get_runtime_capabilities",
+    "inspect_bigquery_capabilities",
+    "list_bigquery_tables",
+    "run_bigquery_readonly_query",
 ]

@@ -115,6 +115,7 @@ gcloud functions logs read vuln-agent-chat-webhook --region=asia-northeast1 --li
 - Chat: `send_vulnerability_alert`, `send_simple_message`, `check_chat_connection`, `list_space_members`
 - 履歴: `log_vulnerability_history`
 - A2A: `register_remote_agent`, `call_remote_agent`, `list_registered_agents`, `create_jira_ticket_request`, `create_approval_request`
+- 権限可視化/柔軟参照: `get_runtime_capabilities`, `inspect_bigquery_capabilities`, `list_bigquery_tables`, `run_bigquery_readonly_query`
 
 ## トラブルシュート（最小）
 - `SBOMデータが見つかりません`
