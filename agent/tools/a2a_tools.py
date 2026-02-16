@@ -24,6 +24,56 @@ logger = logging.getLogger(__name__)
 _agent_registry: dict[str, Any] = {}
 
 
+def _is_valid_resource_name(resource_name: str) -> bool:
+    text = str(resource_name or "").strip()
+    if not text:
+        return False
+    # Expected:
+    # projects/<project>/locations/<location>/reasoningEngines/<id>
+    parts = text.split("/")
+    if len(parts) != 6:
+        return False
+    return (
+        parts[0] == "projects"
+        and bool(parts[1])
+        and parts[2] == "locations"
+        and bool(parts[3])
+        and parts[4] == "reasoningEngines"
+        and bool(parts[5])
+    )
+
+
+def _extract_remote_response_text(response: Any) -> str:
+    """Best-effort extraction of text from remote agent response payload."""
+    if isinstance(response, str):
+        return response.strip()
+    if isinstance(response, dict):
+        # Common direct keys
+        for key in ("text", "message", "output", "result"):
+            value = response.get(key)
+            if isinstance(value, str) and value.strip():
+                return value.strip()
+        # Agent style nested content
+        content = response.get("content")
+        if isinstance(content, dict):
+            parts = content.get("parts", [])
+            if isinstance(parts, list):
+                texts: list[str] = []
+                for part in parts:
+                    if isinstance(part, dict):
+                        text = part.get("text")
+                        if isinstance(text, str) and text.strip():
+                            texts.append(text.strip())
+                if texts:
+                    return "\n".join(texts)
+    if isinstance(response, list):
+        texts = [_extract_remote_response_text(item) for item in response]
+        texts = [t for t in texts if t]
+        if texts:
+            return "\n".join(texts)
+    return ""
+
+
 def register_remote_agent(
     agent_id: str,
     resource_name: str,
@@ -48,22 +98,60 @@ def register_remote_agent(
         ... )
     """
     try:
-        _agent_registry[agent_id] = {
-            "resource_name": resource_name,
-            "description": description,
+        normalized_agent_id = str(agent_id or "").strip()
+        normalized_resource = str(resource_name or "").strip()
+        if not normalized_agent_id:
+            return {"status": "error", "message": "agent_id is required."}
+        if not _is_valid_resource_name(normalized_resource):
+            return {
+                "status": "error",
+                "message": (
+                    "resource_name format is invalid. Expected: "
+                    "projects/<project>/locations/<location>/reasoningEngines/<id>"
+                ),
+            }
+
+        _agent_registry[normalized_agent_id] = {
+            "resource_name": normalized_resource,
+            "description": str(description or "").strip(),
         }
 
-        logger.info(f"Registered agent: {agent_id} -> {resource_name}")
+        logger.info(f"Registered agent: {normalized_agent_id} -> {normalized_resource}")
 
         return {
             "status": "registered",
-            "agent_id": agent_id,
-            "resource_name": resource_name,
+            "agent_id": normalized_agent_id,
+            "resource_name": normalized_resource,
         }
 
     except Exception as e:
         logger.error(f"Failed to register agent: {e}")
         return {"status": "error", "message": str(e)}
+
+
+def register_master_agent(
+    resource_name: str | None = None,
+    description: str = "課のマスターエージェント",
+) -> dict[str, Any]:
+    """
+    マスターエージェントを `master_agent` として登録する。
+
+    resource_name 未指定時は REMOTE_AGENT_MASTER 環境変数を使用する。
+    """
+    resolved_resource = str(resource_name or "").strip() or str(os.environ.get("REMOTE_AGENT_MASTER", "")).strip()
+    if not resolved_resource:
+        return {
+            "status": "error",
+            "message": "resource_name is required. Set argument or REMOTE_AGENT_MASTER.",
+        }
+    result = register_remote_agent(
+        agent_id="master_agent",
+        resource_name=resolved_resource,
+        description=description,
+    )
+    if result.get("status") == "registered":
+        result["agent_role"] = "master_agent"
+    return result
 
 
 def call_remote_agent(
@@ -90,13 +178,21 @@ def call_remote_agent(
         ... )
     """
     try:
-        if agent_id not in _agent_registry:
+        normalized_agent_id = str(agent_id or "").strip()
+        normalized_message = str(message or "").strip()
+        normalized_user_id = str(user_id or "vuln_agent").strip() or "vuln_agent"
+        if not normalized_agent_id:
+            return {"status": "error", "message": "agent_id is required."}
+        if not normalized_message:
+            return {"status": "error", "agent_id": normalized_agent_id, "message": "message is required."}
+
+        if normalized_agent_id not in _agent_registry:
             return {
                 "status": "error",
-                "message": f"Agent '{agent_id}' is not registered. Use register_remote_agent first."
+                "message": f"Agent '{normalized_agent_id}' is not registered. Use register_remote_agent first."
             }
 
-        agent_info = _agent_registry[agent_id]
+        agent_info = _agent_registry[normalized_agent_id]
         resource_name = agent_info["resource_name"]
 
         # Vertex AI 初期化
@@ -111,16 +207,19 @@ def call_remote_agent(
 
         # クエリを実行
         response = remote_agent.query(
-            user_id=user_id,
-            message=message,
+            user_id=normalized_user_id,
+            message=normalized_message,
         )
 
-        logger.info(f"Called agent {agent_id}: {message[:50]}...")
+        response_text = _extract_remote_response_text(response)
+
+        logger.info(f"Called agent {normalized_agent_id}: {normalized_message[:50]}...")
 
         return {
             "status": "success",
-            "agent_id": agent_id,
+            "agent_id": normalized_agent_id,
             "response": response,
+            "response_text": response_text,
         }
 
     except Exception as e:
@@ -130,6 +229,115 @@ def call_remote_agent(
             "agent_id": agent_id,
             "message": str(e)
         }
+
+
+def create_master_agent_handoff_request(
+    task_type: str,
+    objective: str,
+    facts: list[str] | None = None,
+    constraints: list[str] | None = None,
+    requested_actions: list[str] | None = None,
+    context: dict[str, Any] | None = None,
+    urgency: str = "中",
+) -> dict[str, Any]:
+    """
+    マスターエージェントへの引き継ぎ依頼文を標準フォーマットで構築する。
+    """
+    normalized_task_type = str(task_type or "").strip()
+    normalized_objective = str(objective or "").strip()
+    normalized_urgency = str(urgency or "中").strip() or "中"
+
+    if not normalized_task_type:
+        return {"status": "error", "message": "task_type is required."}
+    if not normalized_objective:
+        return {"status": "error", "message": "objective is required."}
+
+    fact_lines = [f"- {str(x).strip()}" for x in (facts or []) if str(x).strip()]
+    constraint_lines = [f"- {str(x).strip()}" for x in (constraints or []) if str(x).strip()]
+    action_lines = [f"- {str(x).strip()}" for x in (requested_actions or []) if str(x).strip()]
+
+    context_pairs = []
+    for k, v in (context or {}).items():
+        key = str(k).strip()
+        value = str(v).strip()
+        if key and value:
+            context_pairs.append(f"- {key}: {value}")
+
+    sections = [
+        "【連携種別】",
+        normalized_task_type,
+        "",
+        "【目的】",
+        normalized_objective,
+        "",
+        "【緊急度】",
+        normalized_urgency,
+    ]
+
+    if fact_lines:
+        sections.extend(["", "【確定事項】", *fact_lines])
+    if constraint_lines:
+        sections.extend(["", "【制約条件】", *constraint_lines])
+    if action_lines:
+        sections.extend(["", "【依頼アクション】", *action_lines])
+    if context_pairs:
+        sections.extend(["", "【追加コンテキスト】", *context_pairs])
+
+    message = "\n".join(sections).strip()
+    return {
+        "status": "ready",
+        "target_agent_id": "master_agent",
+        "message": message,
+        "handoff": {
+            "task_type": normalized_task_type,
+            "objective": normalized_objective,
+            "urgency": normalized_urgency,
+            "facts": [str(x).strip() for x in (facts or []) if str(x).strip()],
+            "constraints": [str(x).strip() for x in (constraints or []) if str(x).strip()],
+            "requested_actions": [str(x).strip() for x in (requested_actions or []) if str(x).strip()],
+            "context": context or {},
+        },
+    }
+
+
+def call_master_agent(
+    task_type: str,
+    objective: str,
+    facts: list[str] | None = None,
+    constraints: list[str] | None = None,
+    requested_actions: list[str] | None = None,
+    context: dict[str, Any] | None = None,
+    urgency: str = "中",
+    user_id: str = "vuln_agent",
+) -> dict[str, Any]:
+    """
+    標準フォーマットでマスターエージェントを呼び出す。
+    """
+    handoff = create_master_agent_handoff_request(
+        task_type=task_type,
+        objective=objective,
+        facts=facts,
+        constraints=constraints,
+        requested_actions=requested_actions,
+        context=context,
+        urgency=urgency,
+    )
+    if handoff.get("status") != "ready":
+        return handoff
+
+    result = call_remote_agent(
+        agent_id="master_agent",
+        message=handoff["message"],
+        user_id=user_id,
+    )
+    return {
+        "status": result.get("status", "error"),
+        "agent_id": "master_agent",
+        "handoff": handoff.get("handoff", {}),
+        "response": result.get("response"),
+        "response_text": result.get("response_text", ""),
+        "message": result.get("message", ""),
+    }
 
 
 def list_registered_agents() -> dict[str, Any]:
@@ -189,6 +397,15 @@ def create_jira_ticket_request(
         ... )
         >>> call_remote_agent("jira_agent", request["message"])
     """
+    if not str(vulnerability_id or "").strip():
+        return {"status": "error", "message": "vulnerability_id is required."}
+    if not str(title or "").strip():
+        return {"status": "error", "message": "title is required."}
+    if not str(assignee or "").strip():
+        return {"status": "error", "message": "assignee is required."}
+    if not affected_systems:
+        return {"status": "error", "message": "affected_systems is required."}
+
     priority_map = {
         "緊急": "Highest",
         "高": "High",
@@ -255,6 +472,13 @@ def create_approval_request(
         ... )
         >>> call_remote_agent("approval_agent", request["message"])
     """
+    if not str(vulnerability_id or "").strip():
+        return {"status": "error", "message": "vulnerability_id is required."}
+    if not str(action or "").strip():
+        return {"status": "error", "message": "action is required."}
+    if not approvers:
+        return {"status": "error", "message": "approvers is required."}
+
     approvers_text = ", ".join(approvers)
 
     message = f"""以下の内容で承認リクエストを作成してください:
@@ -289,6 +513,7 @@ def _load_preconfigured_agents():
         "approval_agent": ("REMOTE_AGENT_APPROVAL", "承認ワークフローエージェント"),
         "patch_agent": ("REMOTE_AGENT_PATCH", "パッチ管理エージェント"),
         "report_agent": ("REMOTE_AGENT_REPORT", "報告書作成エージェント"),
+        "master_agent": ("REMOTE_AGENT_MASTER", "課のマスターエージェント"),
     }
 
     for agent_id, (env_var, description) in agent_configs.items():

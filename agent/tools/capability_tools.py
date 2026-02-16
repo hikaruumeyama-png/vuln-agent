@@ -97,10 +97,13 @@ def get_runtime_capabilities(include_live_checks: bool = True) -> dict[str, Any]
             "history": ["log_vulnerability_history"],
             "a2a": [
                 "register_remote_agent",
+                "register_master_agent",
                 "list_registered_agents",
                 "call_remote_agent",
+                "call_master_agent",
                 "create_jira_ticket_request",
                 "create_approval_request",
+                "create_master_agent_handoff_request",
             ],
             "capability": [
                 "get_runtime_capabilities",
