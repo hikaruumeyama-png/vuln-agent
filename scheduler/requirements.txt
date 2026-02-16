@@ -1,5 +1,0 @@
-# Cloud Functions
-functions-framework>=3.0.0
-
-# Vertex AI (vertexai namespace is included in google-cloud-aiplatform)
-google-cloud-aiplatform[agent_engines]>=1.112.0

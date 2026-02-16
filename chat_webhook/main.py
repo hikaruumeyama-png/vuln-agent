@@ -1,6 +1,4 @@
-"""
-Google Chat webhook handler for mention-based conversations.
-"""
+"""Google Chat webhook handler for message-triggered vulnerability analysis."""
 
 from __future__ import annotations
 
@@ -70,6 +68,34 @@ def _clean_chat_text(event: dict[str, Any]) -> str:
     return re.sub(r"\s+", " ", text).strip()
 
 
+def _sender_info(event: dict[str, Any]) -> dict[str, str]:
+    sender = ((event.get("message") or {}).get("sender") or {})
+    return {
+        "name": str(sender.get("name") or ""),
+        "display_name": str(sender.get("displayName") or ""),
+        "type": str(sender.get("type") or ""),
+    }
+
+
+def _looks_like_gmail_digest(text: str) -> bool:
+    t = text.lower()
+    return (
+        ("subject:" in t and "from:" in t)
+        or ("差出人:" in t and "件名:" in t)
+        or ("gmail" in t and "new email" in t)
+    )
+
+
+def _is_gmail_app_message(event: dict[str, Any]) -> bool:
+    sender = _sender_info(event)
+    text = str(((event.get("message") or {}).get("text") or ""))
+    if "gmail" in sender["display_name"].lower():
+        return True
+    if sender["type"].upper() == "BOT" and "gmail" in sender["name"].lower():
+        return True
+    return _looks_like_gmail_digest(text)
+
+
 def _is_valid_token(event: dict[str, Any]) -> bool:
     expected = _get_config(
         "CHAT_WEBHOOK_VERIFICATION_TOKEN",
@@ -108,8 +134,9 @@ def _run_agent_query(prompt: str, user_id: str) -> str:
                 chunks.append(obj.strip())
             return
         if isinstance(obj, dict):
-            if isinstance(obj.get("text"), str) and obj["text"].strip():
-                chunks.append(obj["text"].strip())
+            text = obj.get("text")
+            if isinstance(text, str) and text.strip():
+                chunks.append(text.strip())
             for value in obj.values():
                 _harvest_text(value)
             return
@@ -142,7 +169,6 @@ def _run_agent_query(prompt: str, user_id: str) -> str:
             parts = getattr(content, "parts", []) or []
 
         for part in parts:
-            text = ""
             if isinstance(part, dict):
                 text = part.get("text", "")
             else:
@@ -229,16 +255,25 @@ def handle_chat_event(request):
     user_name = (user.get("name") or "").replace("users/", "") or "google-chat-user"
 
     if event_type == "ADDED_TO_SPACE":
-        text = "追加ありがとうございます。@メンションで脆弱性やSBOMの相談ができます。"
+        text = "追加ありがとうございます。Gmail通知投稿を検知して自動分析し、このスレッドに返信します。"
         return json.dumps({"text": text}, ensure_ascii=False), 200, {"Content-Type": "application/json"}
 
     if event_type != "MESSAGE":
         return json.dumps({"text": "Unsupported event type"}), 200, {"Content-Type": "application/json"}
 
+    raw_text = str(((event.get("message") or {}).get("text") or "")).strip()
     prompt = _clean_chat_text(event)
-    if not prompt:
-        text = "メンションのあとに質問を入れてください。例: `@bot CVE-2026-XXXX の影響を調べて`"
-        return json.dumps(_thread_payload(event, text), ensure_ascii=False), 200, {"Content-Type": "application/json"}
+    is_gmail_post = _is_gmail_app_message(event)
+    if is_gmail_post:
+        prompt = (
+            "以下はGmailアプリがChatに投稿したメール内容です。"
+            "脆弱性通知として解析し、重要なポイントを簡潔に要約してください。"
+            "CVE/CVSS/影響システム/推奨対応を優先して示し、必要なら担当者通知アクションを実行してください。\n\n"
+            f"{raw_text}"
+        )
+    elif not prompt:
+        # メンションでもGmail投稿でもない通常メッセージは何もしない。
+        return json.dumps({}, ensure_ascii=False), 200, {"Content-Type": "application/json"}
 
     try:
         response_text = _run_agent_query(prompt, user_name)

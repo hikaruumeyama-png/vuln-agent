@@ -100,10 +100,6 @@ class ConnectionEnvWiringTests(unittest.TestCase):
     def test_setup_cloud_has_gmail_user_secret(self):
         self.assertIn("vuln-agent-gmail-user-email", self.setup_cloud_source)
         self.assertIn("GMAIL_USER_EMAIL=$(_sm_get vuln-agent-gmail-user-email)", self.setup_cloud_source)
-        self.assertIn("pubsub.googleapis.com", self.setup_cloud_source)
-        self.assertIn("eventarc.googleapis.com", self.setup_cloud_source)
-        self.assertIn("vuln-agent-gmail-trigger", self.setup_cloud_source)
-        self.assertIn("vuln-agent-gmail-watch-refresh", self.setup_cloud_source)
         self.assertIn("vuln-agent-chat-webhook", self.setup_cloud_source)
         self.assertIn("vuln-agent-chat-verification-token", self.setup_cloud_source)
 
