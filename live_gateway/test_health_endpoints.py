@@ -80,6 +80,21 @@ class HealthEndpointTests(unittest.TestCase):
         self.assertIn('return "none" if _cookie_secure_flag(request) else "lax"', source)
         self.assertIn("samesite=_cookie_samesite_value(request)", source)
 
+    def test_gateway_emits_a2a_trace_events(self):
+        source = APP_FILE.read_text(encoding="utf-8")
+        self.assertIn('"type": "a2a_trace"', source)
+        self.assertIn('if tool_name in {"call_remote_agent", "call_master_agent"}', source)
+        self.assertIn('"phase": "call"', source)
+        self.assertIn('"phase": "result"', source)
+
+    def test_ambiguous_prompt_guard_exists(self):
+        source = APP_FILE.read_text(encoding="utf-8")
+        self.assertIn("def _is_ambiguous_prompt", source)
+        self.assertIn("def _build_clarification_message", source)
+        self.assertIn("if _is_ambiguous_prompt(message):", source)
+        self.assertIn('"message": "追加情報待ち"', source)
+        self.assertIn('AMBIGUITY_PRESET_NAME = (os.environ.get("AMBIGUITY_PRESET") or "standard")', source)
+
 
 if __name__ == "__main__":
     unittest.main()

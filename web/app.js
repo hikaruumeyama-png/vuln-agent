@@ -24,6 +24,8 @@ const voiceOrbLargePath = document.getElementById("voice-orb-large-path");
 const voiceSessionCloseButton = document.getElementById("voice-session-close");
 const activityFeed = document.getElementById("activity-feed");
 const clearActivityButton = document.getElementById("clear-activity");
+const a2aTraceFeed = document.getElementById("a2a-trace-feed");
+const clearA2aTraceButton = document.getElementById("clear-a2a-trace");
 const pingLatencyText = document.getElementById("ping-latency");
 const reconnectCountText = document.getElementById("reconnect-count");
 const toastContainer = document.getElementById("toast-container");
@@ -71,6 +73,7 @@ let manualDisconnectRequested = false;
 let isRequestInFlight = false;
 let audioCaptureNode = null;
 let currentActivityRequestId = null;
+let a2aTraceCount = 0;
 let awaitingAgentGreeting = false;
 let greetingUnlockTimerId = null;
 let hasReceivedGreetingAudio = false;
@@ -695,6 +698,55 @@ function resetActivityFeed() {
   renderIcons(activityFeed);
 }
 
+function resetA2aTraceFeed() {
+  if (!a2aTraceFeed) return;
+  a2aTraceFeed.innerHTML = `
+    <div class="activity-empty">
+      <i data-lucide="network" class="empty-icon"></i>
+      <p>A2A呼び出しの送受信はここに表示されます。</p>
+    </div>
+  `;
+  a2aTraceCount = 0;
+  renderIcons(a2aTraceFeed);
+}
+
+function appendA2aTrace(payload) {
+  if (!a2aTraceFeed) return;
+  a2aTraceCount++;
+  const emptyEl = a2aTraceFeed.querySelector(".activity-empty");
+  if (emptyEl) emptyEl.remove();
+
+  const phase = String(payload.phase || "");
+  const status = String(payload.status || "");
+  const tool = String(payload.tool || "a2a");
+  const agentId = String(payload.agent_id || "unknown");
+  const preview =
+    phase === "call"
+      ? String(payload.message_preview || "").trim()
+      : String(payload.response_preview || "").trim();
+  const phaseLabel = phase === "call" ? "CALL" : "RESULT";
+  const phaseIcon = phase === "call" ? "upload" : status === "error" ? "x-circle" : "download";
+  const statusClass =
+    phase !== "result" ? "" : status === "error" ? "result-error" : "result-success";
+
+  const item = document.createElement("div");
+  item.className = "a2a-trace-item";
+  item.innerHTML = `
+    <div class="a2a-trace-icon ${statusClass}">
+      <i data-lucide="${escapeHtml(phaseIcon)}"></i>
+    </div>
+    <div class="a2a-trace-body">
+      <div class="a2a-trace-label">${escapeHtml(phaseLabel)} · ${escapeHtml(tool)}</div>
+      <div class="a2a-trace-agent">${escapeHtml(agentId)}</div>
+      ${preview ? `<div class="a2a-trace-preview">${escapeHtml(preview)}</div>` : ""}
+    </div>
+    <div class="a2a-trace-time">${formatTime()}</div>
+  `;
+  a2aTraceFeed.appendChild(item);
+  a2aTraceFeed.scrollTop = a2aTraceFeed.scrollHeight;
+  renderIcons(item);
+}
+
 async function stopAudioCapture(sendLiveStop = false) {
   if (sendLiveStop && socket && socket.readyState === WebSocket.OPEN) {
     socket.send(JSON.stringify({ type: "live_stop" }));
@@ -930,6 +982,9 @@ registerProcessor("pcm-capture-processor", PcmCaptureProcessor);
 clearActivityButton.addEventListener("click", () => {
   resetActivityFeed();
 });
+clearA2aTraceButton?.addEventListener("click", () => {
+  resetA2aTraceFeed();
+});
 
 voiceSessionCloseButton.addEventListener("click", async () => {
   await stopAudioCapture(true);
@@ -1023,6 +1078,7 @@ connectButton.addEventListener("click", () => {
     updateHealthMetrics(null);
     appendMessage("接続しました。", "system");
     showToast("Live Gateway に接続しました。", "success", 2500);
+    resetA2aTraceFeed();
   });
 
   ws.addEventListener("message", (event) => {
@@ -1032,6 +1088,11 @@ connectButton.addEventListener("click", () => {
 
       if (payload.type === "agent_activity") {
         handleAgentActivity(payload);
+        return;
+      }
+
+      if (payload.type === "a2a_trace") {
+        appendA2aTrace(payload);
         return;
       }
 
@@ -1404,6 +1465,7 @@ setStatus(false, "Disconnected");
 setMode("idle");
 updateHealthMetrics(null);
 updateActivityHeader(null, null, "Idle");
+resetA2aTraceFeed();
 resizeChatInput();
 updateAuthButtons();
 void (async () => {

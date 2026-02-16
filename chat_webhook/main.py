@@ -15,6 +15,54 @@ import vertexai
 logger = logging.getLogger(__name__)
 
 _secret_client = None
+_AMBIGUITY_PRESETS = {
+    "strict": {"min_chars_without_context": 6},
+    "standard": {"min_chars_without_context": 4},
+    "relaxed": {"min_chars_without_context": 2},
+}
+_AMBIGUITY_PRESET_NAME = (os.environ.get("AMBIGUITY_PRESET") or "standard").strip().lower()
+if _AMBIGUITY_PRESET_NAME not in _AMBIGUITY_PRESETS:
+    _AMBIGUITY_PRESET_NAME = "standard"
+_AMBIGUITY_PRESET = _AMBIGUITY_PRESETS[_AMBIGUITY_PRESET_NAME]
+_AMBIGUOUS_PROMPT_EXACT = {
+    "?",
+    "？",
+    "help",
+    "ヘルプ",
+    "お願い",
+    "お願いします",
+    "教えて",
+    "調べて",
+    "確認して",
+    "これ",
+    "それ",
+    "あれ",
+    "この件",
+    "その件",
+    "上記",
+}
+_AMBIGUOUS_REFERENCE_TOKENS = ("これ", "それ", "あれ", "この件", "その件", "上記", "さっき", "先ほど")
+_CLEAR_CONTEXT_KEYWORDS = (
+    "cve-",
+    "cwe-",
+    "cvss",
+    "osv",
+    "nvd",
+    "sbom",
+    "sidfm",
+    "purl",
+    "bigquery",
+    "gmail",
+    "chat",
+    "jira",
+    "脆弱性",
+    "パッケージ",
+    "システム",
+    "通知",
+    "担当者",
+    "メール",
+    "製品",
+)
 
 
 def _get_secret_client():
@@ -106,6 +154,31 @@ def _is_valid_token(event: dict[str, Any]) -> bool:
         return True
     actual = (event.get("token") or "").strip()
     return actual == expected
+
+
+def _is_ambiguous_prompt(prompt: str) -> bool:
+    normalized = re.sub(r"\s+", " ", (prompt or "").strip()).lower()
+    if not normalized:
+        return True
+    if normalized in _AMBIGUOUS_PROMPT_EXACT:
+        return True
+    if re.fullmatch(r"[?？!！。,.、\s]+", normalized):
+        return True
+    has_context = any(keyword in normalized for keyword in _CLEAR_CONTEXT_KEYWORDS)
+    min_chars = int(_AMBIGUITY_PRESET.get("min_chars_without_context", 4))
+    if len(normalized) < min_chars and not has_context:
+        return True
+    if any(token in normalized for token in _AMBIGUOUS_REFERENCE_TOKENS) and not has_context:
+        return True
+    return False
+
+
+def _build_clarification_message() -> str:
+    return (
+        "ぶれた回答を防ぐため、意図を正確に把握したいです。もう少し具体化してください。\n"
+        "1) 対象（例: CVE番号 / 製品名 / システム名）\n"
+        "2) 知りたい内容（影響範囲 / 優先度 / 対応方法 など）"
+    )
 
 
 def _run_agent_query(prompt: str, user_id: str) -> str:
@@ -274,6 +347,10 @@ def handle_chat_event(request):
     elif not prompt:
         # メンションでもGmail投稿でもない通常メッセージは何もしない。
         return json.dumps({}, ensure_ascii=False), 200, {"Content-Type": "application/json"}
+    elif _is_ambiguous_prompt(prompt):
+        return json.dumps(_thread_payload(event, _build_clarification_message()), ensure_ascii=False), 200, {
+            "Content-Type": "application/json"
+        }
 
     try:
         response_text = _run_agent_query(prompt, user_name)

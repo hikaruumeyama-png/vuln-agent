@@ -6,6 +6,7 @@ import hmac
 import json
 import logging
 import os
+import re
 import secrets
 import time
 import urllib.parse
@@ -91,6 +92,54 @@ TOOL_DISPLAY_MAP: dict[str, dict[str, str]] = {
     "list_osv_vulnerability_ids": {"label": "OSV脆弱性ID一覧を取得中",      "icon": "list"},
     "save_vulnerability_history_minimal": {"label": "最小履歴を保存中",      "icon": "database"},
 }
+AMBIGUOUS_PROMPT_EXACT = {
+    "?",
+    "？",
+    "help",
+    "ヘルプ",
+    "お願い",
+    "お願いします",
+    "教えて",
+    "調べて",
+    "確認して",
+    "これ",
+    "それ",
+    "あれ",
+    "この件",
+    "その件",
+    "上記",
+}
+AMBIGUITY_PRESETS = {
+    "strict": {"min_chars_without_context": 6},
+    "standard": {"min_chars_without_context": 4},
+    "relaxed": {"min_chars_without_context": 2},
+}
+AMBIGUITY_PRESET_NAME = (os.environ.get("AMBIGUITY_PRESET") or "standard").strip().lower()
+if AMBIGUITY_PRESET_NAME not in AMBIGUITY_PRESETS:
+    AMBIGUITY_PRESET_NAME = "standard"
+AMBIGUITY_PRESET = AMBIGUITY_PRESETS[AMBIGUITY_PRESET_NAME]
+AMBIGUOUS_REFERENCE_TOKENS = ("これ", "それ", "あれ", "この件", "その件", "上記", "さっき", "先ほど")
+CLEAR_CONTEXT_KEYWORDS = (
+    "cve-",
+    "cwe-",
+    "cvss",
+    "osv",
+    "nvd",
+    "sbom",
+    "sidfm",
+    "purl",
+    "bigquery",
+    "gmail",
+    "chat",
+    "jira",
+    "脆弱性",
+    "パッケージ",
+    "システム",
+    "通知",
+    "担当者",
+    "メール",
+    "製品",
+)
 
 logger = logging.getLogger(__name__)
 
@@ -109,6 +158,31 @@ def _tool_display_message(tool_name: str) -> str:
 
 def _tool_display_icon(tool_name: str) -> str:
     return TOOL_DISPLAY_MAP.get(tool_name, {}).get("icon", "wrench")
+
+
+def _is_ambiguous_prompt(prompt: str) -> bool:
+    normalized = " ".join((prompt or "").strip().split()).lower()
+    if not normalized:
+        return True
+    if normalized in AMBIGUOUS_PROMPT_EXACT:
+        return True
+    if re.fullmatch(r"[?？!！。,.、\s]+", normalized):
+        return True
+    has_context = any(keyword in normalized for keyword in CLEAR_CONTEXT_KEYWORDS)
+    min_chars = int(AMBIGUITY_PRESET.get("min_chars_without_context", 4))
+    if len(normalized) < min_chars and not has_context:
+        return True
+    if any(token in normalized for token in AMBIGUOUS_REFERENCE_TOKENS) and not has_context:
+        return True
+    return False
+
+
+def _build_clarification_message() -> str:
+    return (
+        "ぶれた回答を防ぐため、意図を正確に把握したいです。もう少し具体化してください。\n"
+        "1) 対象（例: CVE番号 / 製品名 / システム名）\n"
+        "2) 知りたい内容（影響範囲 / 優先度 / 対応方法 など）"
+    )
 
 
 def _safe_healthz_headers(request: Request) -> dict[str, str]:
@@ -307,6 +381,29 @@ def _extract_error_detail(response_data: Any) -> str | None:
     return None
 
 
+def _as_dict(value: Any) -> dict[str, Any]:
+    if isinstance(value, dict):
+        return value
+    if isinstance(value, str):
+        try:
+            parsed = json.loads(value)
+            if isinstance(parsed, dict):
+                return parsed
+        except Exception:
+            return {}
+    return {}
+
+
+def _preview_text(value: Any, limit: int = 280) -> str:
+    text = str(value or "").strip()
+    if not text:
+        return ""
+    compact = " ".join(text.split())
+    if len(compact) <= limit:
+        return compact
+    return compact[:limit] + "..."
+
+
 async def _safe_send(websocket: WebSocket, data: dict[str, Any]) -> None:
     """Send JSON via WebSocket, silently ignoring disconnection errors."""
     try:
@@ -355,9 +452,41 @@ def _init_vertex() -> Client:
 async def _query_agent(
     client: Client, message: str, websocket: WebSocket, user_id: str,
 ) -> dict[str, Any]:
+    request_id = f"req-{uuid.uuid4().hex[:10]}"
+    if _is_ambiguous_prompt(message):
+        clarification = _build_clarification_message()
+        await _safe_send(websocket, {
+            "type": "agent_activity",
+            "request_id": request_id,
+            "activity": "thinking",
+            "tool": None,
+            "icon": "help-circle",
+            "message": "入力内容を確認中...",
+            "progress": {
+                "total_tool_calls": 0,
+                "completed_tool_calls": 0,
+            },
+        })
+        await _safe_send(websocket, {
+            "type": "agent_activity",
+            "request_id": request_id,
+            "activity": "done",
+            "tool": None,
+            "icon": "check-circle-2",
+            "message": "追加情報待ち",
+            "progress": {
+                "total_tool_calls": 0,
+                "completed_tool_calls": 0,
+            },
+        })
+        return {
+            "type": "agent_response",
+            "request_id": request_id,
+            "text": clarification,
+        }
+
     app_client = client.agent_engines.get(name=AGENT_RESOURCE_NAME)
     chunks: list[str] = []
-    request_id = f"req-{uuid.uuid4().hex[:10]}"
     total_tool_calls = 0
     completed_tool_calls = 0
 
@@ -402,6 +531,7 @@ async def _query_agent(
                 if "function_call" in part:
                     fc = part["function_call"]
                     tool_name = fc.get("name", "unknown")
+                    fc_args = _as_dict(fc.get("args"))
                     total_tool_calls += 1
                     await _safe_send(websocket, {
                         "type": "agent_activity",
@@ -415,6 +545,26 @@ async def _query_agent(
                             "completed_tool_calls": completed_tool_calls,
                         },
                     })
+                    if tool_name in {"call_remote_agent", "call_master_agent"}:
+                        agent_id = str(
+                            fc_args.get("agent_id")
+                            or fc_args.get("target_agent_id")
+                            or ("master_agent" if tool_name == "call_master_agent" else "")
+                        ).strip()
+                        message_preview = _preview_text(
+                            fc_args.get("message")
+                            or fc_args.get("objective")
+                            or ""
+                        )
+                        await _safe_send(websocket, {
+                            "type": "a2a_trace",
+                            "request_id": request_id,
+                            "phase": "call",
+                            "tool": tool_name,
+                            "agent_id": agent_id,
+                            "message_preview": message_preview,
+                            "timestamp": int(time.time()),
+                        })
                     continue
 
                 if "function_response" in part:
@@ -439,6 +589,25 @@ async def _query_agent(
                             "completed_tool_calls": completed_tool_calls,
                         },
                     })
+                    if tool_name in {"call_remote_agent", "call_master_agent"}:
+                        payload = _as_dict(response_data)
+                        agent_id = str(payload.get("agent_id") or "").strip()
+                        response_text = (
+                            payload.get("response_text")
+                            or payload.get("message")
+                            or _extract_error_detail(payload)
+                            or ""
+                        )
+                        await _safe_send(websocket, {
+                            "type": "a2a_trace",
+                            "request_id": request_id,
+                            "phase": "result",
+                            "tool": tool_name,
+                            "agent_id": agent_id,
+                            "status": status,
+                            "response_preview": _preview_text(response_text),
+                            "timestamp": int(time.time()),
+                        })
                     continue
 
             txt = getattr(part, "text", None)
