@@ -60,13 +60,29 @@ class ChatWebhookTests(unittest.TestCase):
         payload = {
             "type": "MESSAGE",
             "user": {"name": "users/111"},
-            "message": {"text": "<users/999> テスト", "thread": {"name": "spaces/AAA/threads/BBB"}},
+            "message": {"text": "<users/999> CVE-2026-1234 の影響を確認して", "thread": {"name": "spaces/AAA/threads/BBB"}},
         }
         raw_body, status, _headers = self.chat_webhook.handle_chat_event(_FakeRequest(payload))
         self.assertEqual(status, 200)
         body = json.loads(raw_body)
         self.assertEqual(body["thread"]["name"], "spaces/AAA/threads/BBB")
-        self.assertIn("echo:テスト:111", body["text"])
+        self.assertIn("echo:CVE-2026-1234 の影響を確認して:111", body["text"])
+
+    def test_handle_chat_event_returns_clarification_for_ambiguous_prompt(self):
+        self.chat_webhook._is_valid_token = lambda event: True
+        self.chat_webhook._run_agent_query = lambda prompt, user_id: (_ for _ in ()).throw(
+            AssertionError("Agent should not be called for ambiguous prompts")
+        )
+        payload = {
+            "type": "MESSAGE",
+            "user": {"name": "users/111"},
+            "message": {"text": "<users/999> これお願い", "thread": {"name": "spaces/AAA/threads/BBB"}},
+        }
+        raw_body, status, _headers = self.chat_webhook.handle_chat_event(_FakeRequest(payload))
+        self.assertEqual(status, 200)
+        body = json.loads(raw_body)
+        self.assertEqual(body["thread"]["name"], "spaces/AAA/threads/BBB")
+        self.assertIn("もう少し具体化してください", body["text"])
 
     def test_handle_chat_event_rejects_invalid_token(self):
         self.chat_webhook._is_valid_token = lambda event: False

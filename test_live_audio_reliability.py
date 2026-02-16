@@ -30,6 +30,8 @@ class LiveAudioReliabilityTests(unittest.TestCase):
         self.assertIn("function extractJapaneseText", source)
         self.assertIn("function drainPlaybackQueue", source)
         self.assertIn("playbackQueue.push", source)
+        self.assertIn('payload.type === "a2a_trace"', source)
+        self.assertIn("function appendA2aTrace", source)
 
     def test_live_api_uses_current_native_audio_model(self):
         source = LIVE_GATEWAY_API.read_text(encoding="utf-8")

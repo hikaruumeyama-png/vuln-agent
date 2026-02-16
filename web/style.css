@@ -725,7 +725,7 @@ body.mode-listening .voice-orb.voice-orb-listening .voice-orb-ring {
   flex: 1;
   overflow-y: auto;
   min-height: 200px;
-  max-height: calc(100vh - 380px);
+  max-height: calc(100vh - 520px);
   padding-right: 4px;
 }
 
@@ -740,6 +740,110 @@ body.mode-listening .voice-orb.voice-orb-listening .voice-orb-ring {
 .activity-feed::-webkit-scrollbar-thumb {
   background: var(--border-secondary);
   border-radius: var(--radius-full);
+}
+
+.a2a-trace-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 12px;
+  margin-bottom: 8px;
+  padding-top: 10px;
+  border-top: 1px solid var(--border-primary);
+  font-size: var(--font-sm);
+  font-weight: 600;
+  color: var(--text-secondary);
+}
+
+.a2a-trace-header .btn-icon {
+  margin-left: auto;
+}
+
+.a2a-trace-feed {
+  overflow-y: auto;
+  min-height: 130px;
+  max-height: 180px;
+  padding-right: 4px;
+}
+
+.a2a-trace-feed::-webkit-scrollbar {
+  width: 6px;
+}
+
+.a2a-trace-feed::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.a2a-trace-feed::-webkit-scrollbar-thumb {
+  background: var(--border-secondary);
+  border-radius: var(--radius-full);
+}
+
+.a2a-trace-item {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  padding: 9px 10px;
+  border-radius: var(--radius-md);
+  background: #121b2c;
+  border: 1px solid #22304b;
+}
+
+.a2a-trace-item + .a2a-trace-item {
+  margin-top: 6px;
+}
+
+.a2a-trace-icon {
+  width: 26px;
+  height: 26px;
+  border-radius: var(--radius-sm);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  color: #93c5fd;
+  background: rgba(59, 130, 246, 0.2);
+  flex-shrink: 0;
+}
+
+.a2a-trace-icon.result-success {
+  color: #86efac;
+  background: rgba(34, 197, 94, 0.2);
+}
+
+.a2a-trace-icon.result-error {
+  color: #fca5a5;
+  background: rgba(239, 68, 68, 0.2);
+}
+
+.a2a-trace-body {
+  flex: 1;
+  min-width: 0;
+}
+
+.a2a-trace-label {
+  font-size: var(--font-xs);
+  color: var(--text-muted);
+}
+
+.a2a-trace-agent {
+  font-size: var(--font-sm);
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
+.a2a-trace-preview {
+  margin-top: 3px;
+  font-size: var(--font-xs);
+  color: #cbd5e1;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.a2a-trace-time {
+  font-size: var(--font-xs);
+  color: var(--text-muted);
+  margin-left: 8px;
+  white-space: nowrap;
 }
 
 /* Empty state */
@@ -1023,7 +1127,11 @@ body.mode-listening .voice-orb.voice-orb-listening .voice-orb-ring {
   }
 
   .activity-feed {
-    max-height: 40vh;
+    max-height: 34vh;
+  }
+
+  .a2a-trace-feed {
+    max-height: 24vh;
   }
 
   .chat-input-form {
