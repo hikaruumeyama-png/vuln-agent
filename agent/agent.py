@@ -31,10 +31,13 @@ from .tools import (
     list_space_members,
     log_vulnerability_history,
     register_remote_agent,
+    register_master_agent,
     call_remote_agent,
+    call_master_agent,
     list_registered_agents,
     create_jira_ticket_request,
     create_approval_request,
+    create_master_agent_handoff_request,
     get_runtime_capabilities,
     inspect_bigquery_capabilities,
     list_bigquery_tables,
@@ -136,11 +139,13 @@ AGENT_INSTRUCTION = """あなたは脆弱性管理を専門とするセキュリ
 - **approval_agent**: 承認ワークフロー（緊急パッチ適用の承認等）
 - **patch_agent**: パッチ管理（自動パッチ適用の指示）
 - **report_agent**: 報告書作成（週次/月次レポート）
+- **master_agent**: 課のマスターエージェント（統合判断・方針決定）
 
 ### A2A連携の使い方
 1. `list_registered_agents` で利用可能なエージェントを確認
-2. `create_jira_ticket_request` または `create_approval_request` でリクエストを構築
-3. `call_remote_agent` でエージェントを呼び出し
+2. `register_master_agent` で `master_agent` を登録（未登録時）
+3. `create_master_agent_handoff_request` で引き継ぎ依頼文を構築
+4. `call_master_agent` または `call_remote_agent` でエージェントを呼び出し
 
 ## 権限内での自律実行ポリシー
 
@@ -233,10 +238,13 @@ def create_vulnerability_agent() -> Agent:
 
         # A2A Tools (Agent-to-Agent連携)
         FunctionTool(register_remote_agent),
+        FunctionTool(register_master_agent),
         FunctionTool(call_remote_agent),
+        FunctionTool(call_master_agent),
         FunctionTool(list_registered_agents),
         FunctionTool(create_jira_ticket_request),
         FunctionTool(create_approval_request),
+        FunctionTool(create_master_agent_handoff_request),
 
         # Capability Tools
         FunctionTool(get_runtime_capabilities),

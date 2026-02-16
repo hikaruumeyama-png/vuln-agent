@@ -16,6 +16,7 @@ SIDfm の脆弱性通知メールを取り込み、SBOM と突合して担当者
 - `chat_webhook/`: Google Chat メンション受信Webhook
 - `live_gateway/`: リアルタイム対話ゲートウェイ（任意）
 - `web/`: Web UI（任意）
+- `test_dialog_agent/`: A2A疎通確認用の最小テスト対話エージェント
 - `setup_cloud.sh`: 初期セットアップ
 - `cloudbuild.yaml`: 再デプロイ/CI
 
@@ -90,6 +91,13 @@ bash test_agent.sh "Chatへの接続を確認して"
 bash test_agent.sh "SBOMでlog4jを検索して結果を教えて"
 ```
 
+A2A統合テスト（任意）:
+```bash
+export RUN_A2A_INTEGRATION_TEST=1
+export REMOTE_AGENT_TEST="projects/<PROJECT>/locations/<LOCATION>/reasoningEngines/<AGENT_ID>"
+python -m unittest -v test_a2a_integration.py
+```
+
 ## Entra ID SSO (OIDC)
 Live Gateway は OIDC 認証を有効化できます（Entra ID 対応）。
 
@@ -143,7 +151,7 @@ gcloud functions logs read vuln-agent-chat-webhook --region=asia-northeast1 --li
   - `send_vulnerability_alert` は定型フォーマット通知（対象機器/脆弱性リンク/CVSS/依頼内容/対応完了目標）に対応
   - 対応期限は CVSS・公開/内部リソース・悪用実績/Exploit 公開有無ルールを優先
 - 履歴: `log_vulnerability_history`
-- A2A: `register_remote_agent`, `call_remote_agent`, `list_registered_agents`, `create_jira_ticket_request`, `create_approval_request`
+- A2A: `register_remote_agent`, `register_master_agent`, `call_remote_agent`, `call_master_agent`, `list_registered_agents`, `create_jira_ticket_request`, `create_approval_request`, `create_master_agent_handoff_request`
 - 権限可視化/柔軟参照: `get_runtime_capabilities`, `inspect_bigquery_capabilities`, `list_bigquery_tables`, `run_bigquery_readonly_query`
 - Web参照: `web_search`, `fetch_web_content`
 - 脆弱性インテリジェンス: `get_nvd_cve_details`, `search_osv_vulnerabilities`
@@ -175,3 +183,4 @@ gcloud functions logs read vuln-agent-chat-webhook --region=asia-northeast1 --li
 - `docs/SETUP_CHAT.md`
 - `docs/SETUP_CHAT_INTERACTIVE.md`
 - `docs/SETUP_A2A.md`
+- `docs/EXTENSION_SIDEPANEL_BACKLOG.md`（ブラウザ拡張の開発予定）

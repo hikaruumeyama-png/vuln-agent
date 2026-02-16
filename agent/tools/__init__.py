@@ -50,10 +50,13 @@ _EXPORT_SPECS: list[tuple[str, list[str]]] = [
         "a2a_tools",
         [
             "register_remote_agent",
+            "register_master_agent",
             "call_remote_agent",
+            "call_master_agent",
             "list_registered_agents",
             "create_jira_ticket_request",
             "create_approval_request",
+            "create_master_agent_handoff_request",
         ],
     ),
     (

@@ -31,6 +31,20 @@
 
 ## Step 1: 連携エージェントのデプロイ
 
+### 1.0 最小テスト対話エージェント（推奨）
+
+まずは疎通確認専用の最小エージェントを作成することを推奨します。
+
+```bash
+cd test_dialog_agent
+adk deploy agent_engine --project=YOUR_PROJECT --location=us-central1 --display_name=test-dialog-agent .
+```
+
+このエージェントは以下のみ実行します:
+- ping（稼働確認）
+- echo_message（受信文のエコー）
+- parse_handoff_sections（`【...】` 形式の簡易解析）
+
 ### 1.1 Jira連携エージェントの例
 
 ```python
@@ -84,6 +98,7 @@ REMOTE_AGENT_JIRA=projects/your-project/locations/us-central1/reasoningEngines/j
 REMOTE_AGENT_APPROVAL=projects/your-project/locations/us-central1/reasoningEngines/approval-agent-id
 REMOTE_AGENT_PATCH=projects/your-project/locations/us-central1/reasoningEngines/patch-agent-id
 REMOTE_AGENT_REPORT=projects/your-project/locations/us-central1/reasoningEngines/report-agent-id
+REMOTE_AGENT_MASTER=projects/your-project/locations/us-central1/reasoningEngines/master-agent-id
 ```
 
 ### 2.2 再デプロイ
@@ -152,6 +167,18 @@ REMOTE_AGENT_REPORT=projects/your-project/locations/us-central1/reasoningEngines
 エージェントの処理:
 1. register_remote_agent("slack_agent", "projects/xxx/...", "Slack通知エージェント")
 2. 以降、call_remote_agent("slack_agent", ...) で呼び出し可能
+```
+
+### 例4: 課のマスターエージェント連携
+
+```
+ユーザー: 「この案件を課のマスターエージェントに連携して、方針を確認して」
+
+エージェントの処理:
+1. register_master_agent() で master_agent を登録（未登録時）
+2. create_master_agent_handoff_request() で引き継ぎ文面を構築
+3. call_master_agent() で判断依頼
+4. response_text を要約してユーザーに返答
 ```
 
 ---
