@@ -68,7 +68,7 @@
         </div>
       </section>
 
-      <!-- Main content: two-panel layout -->
+      <!-- Main content: three-panel layout -->
       <div class="main-content">
         <!-- Left: Chat panel -->
         <section class="chat-panel">
@@ -110,7 +110,7 @@
           </form>
         </section>
 
-        <!-- Right: Agent activity panel -->
+        <!-- Center: Agent activity panel -->
         <section class="activity-panel" id="activity-panel">
           <div class="panel-header">
             <i data-lucide="activity"></i>
@@ -130,8 +130,11 @@
               <p>リクエスト処理時にエージェントの動作がここに表示されます。</p>
             </div>
           </div>
+        </section>
 
-          <div class="a2a-trace-header">
+        <!-- Right: A2A trace panel -->
+        <section class="a2a-panel" id="a2a-panel">
+          <div class="panel-header">
             <i data-lucide="network"></i>
             <span>A2A Trace</span>
             <button class="btn-icon" id="clear-a2a-trace" title="Clear A2A Trace">
