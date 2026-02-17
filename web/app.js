@@ -26,6 +26,9 @@ const activityFeed = document.getElementById("activity-feed");
 const clearActivityButton = document.getElementById("clear-activity");
 const a2aTraceFeed = document.getElementById("a2a-trace-feed");
 const clearA2aTraceButton = document.getElementById("clear-a2a-trace");
+const historyFeed = document.getElementById("history-feed");
+const historyUser = document.getElementById("history-user");
+const clearHistoryButton = document.getElementById("clear-history");
 const pingLatencyText = document.getElementById("ping-latency");
 const reconnectCountText = document.getElementById("reconnect-count");
 const toastContainer = document.getElementById("toast-container");
@@ -47,6 +50,8 @@ const BARGE_IN_POST_PAUSE_MS = 260;
 const MAX_RENDERED_MESSAGES = 200;
 const HEALTH_PING_INTERVAL_MS = 30000;
 const GATEWAY_URL_STORAGE_KEY = "vuln_agent_gateway_url";
+const CHAT_HISTORY_STORAGE_PREFIX = "vuln_agent_chat_history";
+const MAX_HISTORY_ITEMS = 120;
 const GREETING_UNLOCK_TIMEOUT_MS = 20000;
 const DEFAULT_FIXED_GREETING = "こんにちは。脆弱性管理AIエージェントです。ご要望をどうぞ。";
 
@@ -92,6 +97,8 @@ let ambientNoiseRms = RMS_SILENCE_THRESHOLD;
 let lastPlaybackStartedAt = 0;
 let pendingBargeInResponse = false;
 let authState = { enabled: false, authenticated: true, user: null };
+let historyItems = [];
+let historyStorageKey = "";
 
 // ── Utility Functions ───────────────────────────────────
 function escapeHtml(str) {
@@ -429,6 +436,119 @@ function updateAuthButtons() {
   logoutButton.disabled = !authState.enabled || !authState.authenticated;
 }
 
+function getHistoryUserId() {
+  const sub = String(authState?.user?.sub || "").trim();
+  if (sub) return sub;
+  const email = String(authState?.user?.email || "").trim().toLowerCase();
+  if (email) return email;
+  return "anonymous";
+}
+
+function getHistoryUserLabel() {
+  const name = String(authState?.user?.name || "").trim();
+  const email = String(authState?.user?.email || "").trim();
+  if (name && email) return `${name} (${email})`;
+  if (name) return name;
+  if (email) return email;
+  return "anonymous";
+}
+
+function getHistoryStorageKey() {
+  return `${CHAT_HISTORY_STORAGE_PREFIX}:${getHistoryUserId()}`;
+}
+
+function renderHistoryFeed() {
+  if (!historyFeed) return;
+  if (historyUser) {
+    historyUser.textContent = `User: ${getHistoryUserLabel()}`;
+  }
+  if (!historyItems.length) {
+    historyFeed.innerHTML = `
+      <div class="activity-empty">
+        <i data-lucide="history" class="empty-icon"></i>
+        <p>このユーザーのチャット履歴がここに表示されます。</p>
+      </div>
+    `;
+    renderIcons(historyFeed);
+    return;
+  }
+  historyFeed.innerHTML = "";
+  for (const entry of historyItems) {
+    const item = document.createElement("div");
+    const role = entry.role === "user" ? "user" : "agent";
+    const roleText = role === "user" ? "You" : "Agent";
+    const roleIcon = role === "user" ? "user" : "bot";
+    item.className = `history-item ${role}`;
+    item.innerHTML = `
+      <div class="history-item-header">
+        <i data-lucide="${roleIcon}"></i>
+        <span>${escapeHtml(roleText)}</span>
+        <span>${escapeHtml(String(entry.at || ""))}</span>
+      </div>
+      <div class="history-item-text">${escapeHtml(String(entry.text || ""))}</div>
+    `;
+    historyFeed.appendChild(item);
+    renderIcons(item);
+  }
+  historyFeed.scrollTop = historyFeed.scrollHeight;
+}
+
+function loadHistoryForCurrentUser() {
+  historyStorageKey = getHistoryStorageKey();
+  try {
+    const raw = window.localStorage.getItem(historyStorageKey);
+    if (!raw) {
+      historyItems = [];
+      renderHistoryFeed();
+      return;
+    }
+    const parsed = JSON.parse(raw);
+    historyItems = Array.isArray(parsed) ? parsed.slice(-MAX_HISTORY_ITEMS) : [];
+  } catch {
+    historyItems = [];
+  }
+  renderHistoryFeed();
+}
+
+function saveHistoryForCurrentUser() {
+  if (!historyStorageKey) {
+    historyStorageKey = getHistoryStorageKey();
+  }
+  window.localStorage.setItem(historyStorageKey, JSON.stringify(historyItems.slice(-MAX_HISTORY_ITEMS)));
+}
+
+function appendHistoryEntry(role, text) {
+  const normalized = String(text || "").trim();
+  if (!normalized) return;
+  if (role !== "user" && role !== "agent") return;
+  if (historyStorageKey !== getHistoryStorageKey()) {
+    loadHistoryForCurrentUser();
+  }
+  historyItems.push({
+    role,
+    text: normalized.slice(0, 4000),
+    at: formatTime(),
+  });
+  if (historyItems.length > MAX_HISTORY_ITEMS) {
+    historyItems = historyItems.slice(-MAX_HISTORY_ITEMS);
+  }
+  saveHistoryForCurrentUser();
+  renderHistoryFeed();
+}
+
+function clearHistoryForCurrentUser() {
+  historyItems = [];
+  historyStorageKey = getHistoryStorageKey();
+  window.localStorage.removeItem(historyStorageKey);
+  renderHistoryFeed();
+}
+
+function applyAuthState(nextAuthState) {
+  authState = nextAuthState || { enabled: false, authenticated: true, user: null };
+  updateAuthButtons();
+  loadHistoryForCurrentUser();
+}
+
 function shouldTriggerBargeIn(nowMs) {
   if (nowMs - lastBargeInAt < BARGE_IN_COOLDOWN_MS) {
     return false;
@@ -543,6 +663,9 @@ function appendMessage(text, type) {
   pruneMessages();
   messagesArea.scrollTop = messagesArea.scrollHeight;
   renderIcons(bubble);
+  if (type === "user" || type === "agent") {
+    appendHistoryEntry(type, text);
+  }
 }
 
 function appendLiveText(text) {
@@ -608,6 +731,12 @@ function resetLiveTextBubble() {
 }
 
 function commitLiveUserTextBubble() {
+  if (liveUserVoiceBubble) {
+    const body = liveUserVoiceBubble.querySelector(".live-user-text-body");
+    if (body && body.textContent) {
+      appendHistoryEntry("user", body.textContent);
+    }
+  }
   liveUserVoiceBubble = null;
 }
 
@@ -990,6 +1119,9 @@ clearActivityButton.addEventListener("click", () => {
 clearA2aTraceButton?.addEventListener("click", () => {
   resetA2aTraceFeed();
 });
+clearHistoryButton?.addEventListener("click", () => {
+  clearHistoryForCurrentUser();
+});
 
 voiceSessionCloseButton.addEventListener("click", async () => {
   await stopAudioCapture(true);
@@ -1008,8 +1140,7 @@ gatewayInput.addEventListener("change", () => {
     window.localStorage.setItem(GATEWAY_URL_STORAGE_KEY, value);
   }
   void (async () => {
-    authState = await fetchAuthState();
-    updateAuthButtons();
+    applyAuthState(await fetchAuthState());
   })();
 });
 
@@ -1036,8 +1167,7 @@ logoutButton?.addEventListener("click", () => {
         method: "POST",
         credentials: "include",
       });
-      authState = await fetchAuthState();
-      updateAuthButtons();
+      applyAuthState(await fetchAuthState());
       showToast("ログアウトしました。", "info");
     } catch {
       showToast("ログアウトに失敗しました。", "error");
@@ -1053,8 +1183,7 @@ connectButton.addEventListener("click", () => {
     appendMessage("Gateway URL を入力してください。", "system");
     return;
   }
-  authState = await fetchAuthState();
-  updateAuthButtons();
+  applyAuthState(await fetchAuthState());
   if (authState.enabled && !authState.authenticated) {
     showToast("SSOログイン後に接続してください。", "warning");
     appendMessage("SSOログインが必要です。Login ボタンを押してください。", "system");
@@ -1109,6 +1238,8 @@ connectButton.addEventListener("click", () => {
         commitLiveUserTextBubble();
         if (!isLiveSessionActive) {
           appendMessage(payload.text || "(no response)", "agent");
+        } else {
+          appendHistoryEntry("agent", payload.text || "(no response)");
         }
         return;
       }
@@ -1474,10 +1605,10 @@ updateHealthMetrics(null);
 updateActivityHeader(null, null, "Idle");
 resetA2aTraceFeed();
 resizeChatInput();
+loadHistoryForCurrentUser();
 updateAuthButtons();
 void (async () => {
-  authState = await fetchAuthState();
-  updateAuthButtons();
+  applyAuthState(await fetchAuthState());
 })();
 window.addEventListener("beforeunload", () => {
   stopHealthPingLoop();
