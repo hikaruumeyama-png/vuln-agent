@@ -110,28 +110,46 @@
           </form>
         </section>
 
-        <!-- Center: Agent activity panel -->
-        <section class="activity-panel" id="activity-panel">
-          <div class="panel-header">
-            <i data-lucide="activity"></i>
-            <span>Agent Activity</span>
-            <div class="activity-meta" id="activity-meta">
-              <span id="activity-request-id">Request: -</span>
-              <span id="activity-progress">Progress: 0/0</span>
-              <span id="activity-step">Step: Idle</span>
+        <!-- Center: Agent activity + personal history -->
+        <div class="activity-column">
+          <section class="activity-panel" id="activity-panel">
+            <div class="panel-header">
+              <i data-lucide="activity"></i>
+              <span>Agent Activity</span>
+              <div class="activity-meta" id="activity-meta">
+                <span id="activity-request-id">Request: -</span>
+                <span id="activity-progress">Progress: 0/0</span>
+                <span id="activity-step">Step: Idle</span>
+              </div>
+              <button class="btn-icon" id="clear-activity" title="Clear">
+                <i data-lucide="x"></i>
+              </button>
             </div>
-            <button class="btn-icon" id="clear-activity" title="Clear">
-              <i data-lucide="x"></i>
-            </button>
-          </div>
-          <div id="activity-feed" class="activity-feed">
-            <div class="activity-empty">
-              <i data-lucide="bot" class="empty-icon"></i>
-              <p>リクエスト処理時にエージェントの動作がここに表示されます。</p>
+            <div id="activity-feed" class="activity-feed">
+              <div class="activity-empty">
+                <i data-lucide="bot" class="empty-icon"></i>
+                <p>リクエスト処理時にエージェントの動作がここに表示されます。</p>
+              </div>
             </div>
-          </div>
-        </section>
+          </section>
 
+          <section class="history-panel" id="history-panel">
+            <div class="panel-header">
+              <i data-lucide="history"></i>
+              <span>Personal Chat History</span>
+              <span class="history-user" id="history-user">User: anonymous</span>
+              <button class="btn-icon" id="clear-history" title="Clear History">
+                <i data-lucide="x"></i>
+              </button>
+            </div>
+            <div id="history-feed" class="history-feed">
+              <div class="activity-empty">
+                <i data-lucide="history" class="empty-icon"></i>
+                <p>このユーザーのチャット履歴がここに表示されます。</p>
+              </div>
+            </div>
+          </section>
+        </div>
         <!-- Right: A2A trace panel -->
         <section class="a2a-panel" id="a2a-panel">
           <div class="panel-header">
