@@ -77,6 +77,13 @@ _ANALYSIS_TRIGGER_WORDS = (
     "analyse",
     "check",
 )
+_THREAD_ROOT_REFERENCE_WORDS = (
+    "スレッド元",
+    "元メッセージ",
+    "このスレッド",
+    "上のメッセージ",
+    "前のメッセージ",
+)
 _COMPLEXITY_KEYWORDS = (
     "比較",
     "違い",
@@ -274,6 +281,13 @@ def _is_analysis_trigger_prompt(prompt: str) -> bool:
     return any(word in normalized for word in _ANALYSIS_TRIGGER_WORDS)
 
 
+def _requests_thread_root_context(prompt: str) -> bool:
+    normalized = re.sub(r"\s+", " ", (prompt or "").strip()).lower()
+    if not normalized:
+        return False
+    return any(token in normalized for token in _THREAD_ROOT_REFERENCE_WORDS)
+
+
 def _build_vulnerability_ticket_prompt(raw_text: str) -> str:
     return (
         "以下はGmailアプリがChatに投稿したメール内容です。"
@@ -292,6 +306,16 @@ def _build_vulnerability_ticket_prompt(raw_text: str) -> str:
         "【対応完了目標】\n\n"
         "必要なら上記の後ろに補足として「備考」を1段落だけ追加してください。\n\n"
         f"{raw_text}"
+    )
+
+
+def _build_thread_root_analysis_prompt(user_prompt: str, root_text: str) -> str:
+    return (
+        "以下はスレッド元メッセージです。"
+        "ユーザー指示に従い、根拠を示して解析してください。"
+        "不明点は推測せず「要確認」と明記してください。\n\n"
+        f"ユーザー指示:\n{user_prompt}\n\n"
+        f"スレッド元メッセージ:\n{root_text}"
     )
 
 
@@ -727,6 +751,17 @@ def handle_chat_event(request):
     elif not prompt:
         # メンションでもGmail投稿でもない通常メッセージは何もしない。
         return json.dumps({}, ensure_ascii=False), 200, {"Content-Type": "application/json"}
+    elif _is_analysis_trigger_prompt(prompt) and _requests_thread_root_context(prompt):
+        root_text = _fetch_thread_root_message_text(event)
+        if root_text:
+            if _looks_like_gmail_digest(root_text):
+                prompt = _build_vulnerability_ticket_prompt(root_text)
+            else:
+                prompt = _build_thread_root_analysis_prompt(prompt, root_text)
+        else:
+            return json.dumps(_thread_payload(event, _build_clarification_message()), ensure_ascii=False), 200, {
+                "Content-Type": "application/json"
+            }
     elif _is_analysis_trigger_prompt(prompt) and _is_ambiguous_prompt(prompt):
         root_text = _fetch_thread_root_message_text(event)
         if root_text:
