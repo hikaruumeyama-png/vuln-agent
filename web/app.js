@@ -718,27 +718,24 @@ function appendA2aTrace(payload) {
 
   const phase = String(payload.phase || "");
   const status = String(payload.status || "");
-  const tool = String(payload.tool || "a2a");
   const agentId = String(payload.agent_id || "unknown");
-  const preview =
-    phase === "call"
-      ? String(payload.message_preview || "").trim()
-      : String(payload.response_preview || "").trim();
-  const phaseLabel = phase === "call" ? "CALL" : "RESULT";
-  const phaseIcon = phase === "call" ? "upload" : status === "error" ? "x-circle" : "download";
-  const statusClass =
-    phase !== "result" ? "" : status === "error" ? "result-error" : "result-success";
+  const requestText = String(payload.request_text || payload.message_preview || "").trim();
+  const responseText = String(payload.response_text || payload.response_preview || "").trim();
+  const phaseLabel = phase === "call" ? "送信" : phase === "result" ? "応答" : "A2A";
+  const phaseIcon = phase === "call" ? "corner-down-right" : status === "error" ? "x-circle" : "message-square";
+  const statusClass = status === "error" ? "result-error" : status === "success" ? "result-success" : "";
+  const bodyText = phase === "call" ? requestText : responseText || requestText;
 
   const item = document.createElement("div");
-  item.className = "a2a-trace-item";
+  item.className = `a2a-trace-item ${phase === "call" ? "a2a-outgoing" : "a2a-incoming"} ${statusClass}`;
   item.innerHTML = `
     <div class="a2a-trace-icon ${statusClass}">
       <i data-lucide="${escapeHtml(phaseIcon)}"></i>
     </div>
     <div class="a2a-trace-body">
-      <div class="a2a-trace-label">${escapeHtml(phaseLabel)} · ${escapeHtml(tool)}</div>
+      <div class="a2a-trace-label">${escapeHtml(phaseLabel)}</div>
       <div class="a2a-trace-agent">${escapeHtml(agentId)}</div>
-      ${preview ? `<div class="a2a-trace-preview">${escapeHtml(preview)}</div>` : ""}
+      ${bodyText ? `<div class="a2a-trace-preview">${escapeHtml(bodyText)}</div>` : ""}
     </div>
     <div class="a2a-trace-time">${formatTime()}</div>
   `;
@@ -907,6 +904,12 @@ function sendAudioChunk(floatSamples, sampleRate) {
   );
 }
 
+function shouldUploadMicAudio() {
+  const isAgentSpeaking =
+    currentPlaybackSource != null || isPlaybackQueueDraining || playbackQueue.length > 0;
+  return !isAgentSpeaking;
+}
+
 async function setupAudioCaptureNode(source, context) {
   if (typeof AudioWorkletNode === "undefined" || !context.audioWorklet) {
     return false;
@@ -966,7 +969,9 @@ registerProcessor("pcm-capture-processor", PcmCaptureProcessor);
         lastSpeechTimestamp = 0;
         pendingBargeInResponse = false;
       }
-      sendAudioChunk(input, context.sampleRate);
+      if (shouldUploadMicAudio()) {
+        sendAudioChunk(input, context.sampleRate);
+      }
     };
     source.connect(workletNode);
     audioCaptureNode = workletNode;
@@ -1334,7 +1339,9 @@ startAudioButton.addEventListener("click", async () => {
           lastSpeechTimestamp = 0;
           pendingBargeInResponse = false;
         }
-        sendAudioChunk(input, audioContext.sampleRate);
+        if (shouldUploadMicAudio()) {
+          sendAudioChunk(input, audioContext.sampleRate);
+        }
       };
       source.connect(processor);
       processor.connect(audioContext.destination);
