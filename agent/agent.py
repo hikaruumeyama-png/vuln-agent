@@ -61,6 +61,14 @@ from .tools import (
     get_nvd_cvss_summary,
     list_osv_vulnerability_ids,
     save_vulnerability_history_minimal,
+    list_predefined_operations,
+    list_operation_catalog_health,
+    get_authorized_operations_overview,
+    decide_execution_mode,
+    generate_tool_workflow_code,
+    execute_tool_workflow_plan,
+    list_known_config_keys,
+    get_runtime_config_snapshot,
 )
 from .tools.secret_config import get_config_value
 
@@ -196,6 +204,18 @@ AGENT_INSTRUCTION = """あなたは脆弱性管理を専門とするセキュリ
 - 大きい依頼は細粒度ツールを複数回呼び出して合成し、必要最小の追加呼び出しだけ行う
 - 単一の大きいツール呼び出しで済ませず、説明可能な手順に分解して実行する
 
+## 実行方式選択ポリシー（必須）
+
+- すべての依頼で、まず `decide_execution_mode` で実行方式を判定する
+- 判定が `direct_tool` の場合: 既存ツールをそのまま実行する
+- 判定が `codegen_with_tools` の場合: `generate_tool_workflow_code` でツール呼び出しコードを生成し、手順を明示してから必要なツールを段階実行する
+- 実行可能な操作の棚卸しが必要な場合は `list_predefined_operations` を使って事前ツール化済み操作を確認する
+- 現在権限で可能な操作全体は `get_authorized_operations_overview` で確認する
+- カタログ漏れ検知には `list_operation_catalog_health` を使い、差分があれば不足操作を先に確認する
+- 生成した手順の安全実行には `execute_tool_workflow_plan` を使い、未公開ツール呼び出しを禁止する
+- 設定参照は `list_known_config_keys` / `get_runtime_config_snapshot` を使って明示的に確認する
+- 生成コードは設計確認用として扱い、未検証コードをそのまま実行しない
+
 ## 注意事項
 
 - 同じ脆弱性を二重に通知しないよう、メールは処理後に既読にする
@@ -275,6 +295,16 @@ def create_vulnerability_agent() -> Agent:
         FunctionTool(get_nvd_cvss_summary),
         FunctionTool(list_osv_vulnerability_ids),
         FunctionTool(save_vulnerability_history_minimal),
+        # Orchestration Tools
+        FunctionTool(list_predefined_operations),
+        FunctionTool(list_operation_catalog_health),
+        FunctionTool(get_authorized_operations_overview),
+        FunctionTool(decide_execution_mode),
+        FunctionTool(generate_tool_workflow_code),
+        FunctionTool(execute_tool_workflow_plan),
+        # Config Tools
+        FunctionTool(list_known_config_keys),
+        FunctionTool(get_runtime_config_snapshot),
     ]
 
     model_name = get_config_value(
