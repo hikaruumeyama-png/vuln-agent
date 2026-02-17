@@ -33,6 +33,7 @@ from .tools import (
     register_remote_agent,
     register_master_agent,
     call_remote_agent,
+    call_remote_agent_conversation_loop,
     call_master_agent,
     list_registered_agents,
     create_jira_ticket_request,
@@ -153,7 +154,8 @@ AGENT_INSTRUCTION = """あなたは脆弱性管理を専門とするセキュリ
 1. `list_registered_agents` で利用可能なエージェントを確認
 2. `register_master_agent` で `master_agent` を登録（未登録時）
 3. `create_master_agent_handoff_request` で引き継ぎ依頼文を構築
-4. `call_master_agent` または `call_remote_agent` でエージェントを呼び出し
+4. 単発連携は `call_master_agent` / `call_remote_agent` を使う
+5. 継続連携は `call_remote_agent_conversation_loop` を使い、停止条件付きで複数ターン実行する
 
 ## 権限内での自律実行ポリシー
 
@@ -262,6 +264,7 @@ def create_vulnerability_agent() -> Agent:
         FunctionTool(register_remote_agent),
         FunctionTool(register_master_agent),
         FunctionTool(call_remote_agent),
+        FunctionTool(call_remote_agent_conversation_loop),
         FunctionTool(call_master_agent),
         FunctionTool(list_registered_agents),
         FunctionTool(create_jira_ticket_request),
