@@ -201,6 +201,40 @@ steps:
           printf '%s' "$$latest_engine" | gcloud secrets create vuln-agent-resource-name-pro --data-file=- >/dev/null
         fi
 
+        # Deploy flash/pro dedicated Agent Engines so router targets always include latest code.
+        deploy_variant() {
+          local display_name="$$1"
+          local model_name="$$2"
+          local secret_name="$$3"
+
+          grep -v '^AGENT_MODEL=' .env > .env.variant.tmp || true
+          printf 'AGENT_MODEL=%s\n' "$$model_name" >> .env.variant.tmp
+          "$$adk_bin" deploy agent_engine \
+            --project=${PROJECT_ID} \
+            --region=${_REGION} \
+            --display_name="$$display_name" \
+            --env_file=.env.variant.tmp .
+
+          local variant_latest
+          engines_json="$(curl -sSf -H "Authorization: Bearer $$token" \
+            "$$api_base/projects/${PROJECT_ID}/locations/${_REGION}/reasoningEngines")"
+          variant_latest="$(printf '%s' "$$engines_json" | python3 -c 'import json,sys; display_name=sys.argv[1]; engines=json.load(sys.stdin).get("reasoningEngines", []); filtered=[e for e in engines if e.get("displayName")==display_name and e.get("name")]; filtered.sort(key=lambda e: e.get("createTime", ""), reverse=True); print(filtered[0]["name"] if filtered else "")' "$$display_name")"
+          if [ -z "$$variant_latest" ]; then
+            engines_json="$(curl -sSf -H "Authorization: Bearer $$token" \
+              "$$api_base/projects/${PROJECT_ID}/locations/${_REGION}/reasoningEngines")"
+            variant_latest="$(printf '%s' "$$engines_json" | python3 -c 'import json,sys; display_name=sys.argv[1]; engines=json.load(sys.stdin).get("reasoningEngines", []); filtered=[e for e in engines if e.get("displayName")==display_name and e.get("name")]; filtered.sort(key=lambda e: e.get("createTime", ""), reverse=True); print(filtered[0]["name"] if filtered else "")' "$$display_name")"
+          fi
+          if [ -z "$$variant_latest" ]; then
+            echo "エラー: $$display_name の最新 Engine を特定できませんでした"
+            exit 1
+          fi
+          printf '%s' "$$variant_latest" | gcloud secrets versions add "$$secret_name" --data-file=- >/dev/null
+          rm -f .env.variant.tmp
+        }
+
+        deploy_variant "${_AGENT_NAME}-flash" "gemini-2.5-flash" "vuln-agent-resource-name-flash"
+        deploy_variant "${_AGENT_NAME}-pro" "gemini-2.5-pro" "vuln-agent-resource-name-pro"
+
         protected_display_names="test-dialog-agent,SecSys Router Engine Tokyo v2"
         retention_count="${_AGENT_ENGINE_RETENTION}"
         if [ -z "$$retention_count" ]; then
