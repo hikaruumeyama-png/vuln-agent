@@ -127,6 +127,7 @@ steps:
         BQ_HISTORY_TABLE_ID=$(gcloud secrets versions access latest --secret=vuln-agent-bq-table-id 2>/dev/null || echo '')
         REMOTE_AGENT_MASTER=$(gcloud secrets versions access latest --secret=vuln-agent-master-agent-resource-name 2>/dev/null || echo '')
         REMOTE_AGENT_TEST=$(gcloud secrets versions access latest --secret=vuln-agent-test-dialog-resource-name 2>/dev/null || echo '')
+        AGENT_MODEL=$(gcloud secrets versions access latest --secret=vuln-agent-model-name 2>/dev/null || echo '')
         GCP_PROJECT_ID=${PROJECT_ID}
         GCP_LOCATION=${_REGION}
         EOF

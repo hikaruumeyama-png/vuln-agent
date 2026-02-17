@@ -365,6 +365,7 @@ DEFAULT_CHAT_SPACE_ID=$(_sm_get vuln-agent-chat-space-id)
 BQ_HISTORY_TABLE_ID=$(_sm_get vuln-agent-bq-table-id)
 REMOTE_AGENT_MASTER=$(_sm_get vuln-agent-master-agent-resource-name)
 REMOTE_AGENT_TEST=$(_sm_get vuln-agent-test-dialog-resource-name)
+AGENT_MODEL=$(_sm_get vuln-agent-model-name)
 GCP_PROJECT_ID=${PROJECT_ID}
 GCP_LOCATION=${REGION}
 ENVEOF
