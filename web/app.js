@@ -904,6 +904,12 @@ function sendAudioChunk(floatSamples, sampleRate) {
   );
 }
 
+function shouldUploadMicAudio() {
+  const isAgentSpeaking =
+    currentPlaybackSource != null || isPlaybackQueueDraining || playbackQueue.length > 0;
+  return !isAgentSpeaking;
+}
+
 async function setupAudioCaptureNode(source, context) {
   if (typeof AudioWorkletNode === "undefined" || !context.audioWorklet) {
     return false;
@@ -963,7 +969,9 @@ registerProcessor("pcm-capture-processor", PcmCaptureProcessor);
         lastSpeechTimestamp = 0;
         pendingBargeInResponse = false;
       }
-      sendAudioChunk(input, context.sampleRate);
+      if (shouldUploadMicAudio()) {
+        sendAudioChunk(input, context.sampleRate);
+      }
     };
     source.connect(workletNode);
     audioCaptureNode = workletNode;
@@ -1331,7 +1339,9 @@ startAudioButton.addEventListener("click", async () => {
           lastSpeechTimestamp = 0;
           pendingBargeInResponse = false;
         }
-        sendAudioChunk(input, audioContext.sampleRate);
+        if (shouldUploadMicAudio()) {
+          sendAudioChunk(input, audioContext.sampleRate);
+        }
       };
       source.connect(processor);
       processor.connect(audioContext.destination);

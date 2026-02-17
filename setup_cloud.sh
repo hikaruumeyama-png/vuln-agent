@@ -365,6 +365,7 @@ DEFAULT_CHAT_SPACE_ID=$(_sm_get vuln-agent-chat-space-id)
 BQ_HISTORY_TABLE_ID=$(_sm_get vuln-agent-bq-table-id)
 REMOTE_AGENT_MASTER=$(_sm_get vuln-agent-master-agent-resource-name)
 REMOTE_AGENT_TEST=$(_sm_get vuln-agent-test-dialog-resource-name)
+AGENT_MODEL=$(_sm_get vuln-agent-model-name)
 GCP_PROJECT_ID=${PROJECT_ID}
 GCP_LOCATION=${REGION}
 ENVEOF
@@ -413,6 +414,16 @@ if [[ -n "$AGENT_RESOURCE_NAME" ]]; then
     echo -n "$AGENT_RESOURCE_NAME" | gcloud secrets create "vuln-agent-resource-name" \
       --data-file=- --replication-policy="automatic" --project="$PROJECT_ID"
   fi
+  if ! gcloud secrets describe "vuln-agent-resource-name-flash" --project="$PROJECT_ID" &>/dev/null; then
+    echo -n "$AGENT_RESOURCE_NAME" | gcloud secrets create "vuln-agent-resource-name-flash" \
+      --data-file=- --replication-policy="automatic" --project="$PROJECT_ID"
+    info "vuln-agent-resource-name-flash を作成（初期値は base agent）"
+  fi
+  if ! gcloud secrets describe "vuln-agent-resource-name-pro" --project="$PROJECT_ID" &>/dev/null; then
+    echo -n "$AGENT_RESOURCE_NAME" | gcloud secrets create "vuln-agent-resource-name-pro" \
+      --data-file=- --replication-policy="automatic" --project="$PROJECT_ID"
+    info "vuln-agent-resource-name-pro を作成（初期値は base agent）"
+  fi
   info "Agent Resource Name を Secret Manager に保存: ${AGENT_RESOURCE_NAME}"
 fi
 
@@ -442,7 +453,7 @@ if [[ -n "$AGENT_RESOURCE_NAME" ]]; then
       --project="$PROJECT_ID" \
       --update-env-vars="GCP_PROJECT_ID=${PROJECT_ID},GCP_LOCATION=${REGION}" \
       --remove-env-vars="AGENT_RESOURCE_NAME" \
-      --update-secrets="AGENT_RESOURCE_NAME=vuln-agent-resource-name:latest,GEMINI_API_KEY=vuln-agent-gemini-api-key:latest" \
+      --update-secrets="AGENT_RESOURCE_NAME=vuln-agent-resource-name:latest,AGENT_RESOURCE_NAME_FLASH=vuln-agent-resource-name-flash:latest,AGENT_RESOURCE_NAME_PRO=vuln-agent-resource-name-pro:latest,GEMINI_API_KEY=vuln-agent-gemini-api-key:latest" \
       --service-account="$SA_EMAIL" \
       --allow-unauthenticated \
       --memory=512Mi \
@@ -473,8 +484,8 @@ if [[ -n "$AGENT_RESOURCE_NAME" ]]; then
     --allow-unauthenticated \
     --service-account="$SA_EMAIL" \
     --update-env-vars="GCP_PROJECT_ID=${PROJECT_ID},GCP_LOCATION=${REGION},CHAT_WEBHOOK_VERIFICATION_TOKEN=$(_sm_get vuln-agent-chat-verification-token)" \
-    --remove-env-vars="AGENT_RESOURCE_NAME" \
-    --set-secrets="AGENT_RESOURCE_NAME=vuln-agent-resource-name:latest" \
+    --remove-env-vars="AGENT_RESOURCE_NAME,AGENT_RESOURCE_NAME_FLASH,AGENT_RESOURCE_NAME_PRO" \
+    --set-secrets="AGENT_RESOURCE_NAME=vuln-agent-resource-name:latest,AGENT_RESOURCE_NAME_FLASH=vuln-agent-resource-name-flash:latest,AGENT_RESOURCE_NAME_PRO=vuln-agent-resource-name-pro:latest" \
     --memory=1024MB \
     --timeout=540s \
     --quiet; then

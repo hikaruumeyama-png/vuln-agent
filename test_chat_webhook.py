@@ -170,6 +170,50 @@ class ChatWebhookTests(unittest.TestCase):
         body = json.loads(raw_body)
         self.assertEqual(body["text"], "ok")
 
+    def test_analysis_trigger_uses_thread_root_message(self):
+        self.chat_webhook._is_valid_token = lambda event: True
+        self.chat_webhook._fetch_thread_root_message_text = lambda event: (
+            "From: sidfm-notification@rakus.co.jp\nCVE-2026-30001\nView message"
+        )
+        captured: list[str] = []
+
+        def _fake_run(prompt, user_id):
+            captured.append(prompt)
+            return "ok"
+
+        self.chat_webhook._run_agent_query = _fake_run
+        payload = {
+            "type": "MESSAGE",
+            "user": {"name": "users/111"},
+            "message": {
+                "text": "<users/999> 確認して",
+                "thread": {"name": "spaces/AAA/threads/BBB"},
+            },
+        }
+        raw_body, status, _headers = self.chat_webhook.handle_chat_event(_FakeRequest(payload))
+        self.assertEqual(status, 200)
+        self.assertEqual(len(captured), 1)
+        self.assertIn("【希望納期】", captured[0])
+        self.assertIn("sidfm-notification@rakus.co.jp", captured[0])
+        body = json.loads(raw_body)
+        self.assertEqual(body["text"], "ok")
+
+    def test_analysis_trigger_without_thread_source_returns_clarification(self):
+        self.chat_webhook._is_valid_token = lambda event: True
+        self.chat_webhook._fetch_thread_root_message_text = lambda event: ""
+        self.chat_webhook._run_agent_query = lambda prompt, user_id: (_ for _ in ()).throw(
+            AssertionError("Agent should not be called without thread source for ambiguous trigger")
+        )
+        payload = {
+            "type": "MESSAGE",
+            "user": {"name": "users/111"},
+            "message": {"text": "<users/999> 確認して", "thread": {"name": "spaces/AAA/threads/BBB"}},
+        }
+        raw_body, status, _headers = self.chat_webhook.handle_chat_event(_FakeRequest(payload))
+        self.assertEqual(status, 200)
+        body = json.loads(raw_body)
+        self.assertIn("もう少し具体化してください", body["text"])
+
     def test_handle_chat_event_rejects_invalid_token(self):
         self.chat_webhook._is_valid_token = lambda event: False
         payload = {"type": "MESSAGE", "message": {"text": "test"}}

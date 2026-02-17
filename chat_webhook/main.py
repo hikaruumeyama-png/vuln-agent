@@ -66,6 +66,15 @@ _CLEAR_CONTEXT_KEYWORDS = (
     "メール",
     "製品",
 )
+_ANALYSIS_TRIGGER_WORDS = (
+    "確認して",
+    "解析して",
+    "見て",
+    "チェックして",
+    "analyze",
+    "analyse",
+    "check",
+)
 _COMPLEXITY_KEYWORDS = (
     "比較",
     "違い",
@@ -254,6 +263,94 @@ def _build_clarification_message() -> str:
         "1) 対象（例: CVE番号 / 製品名 / システム名）\n"
         "2) 知りたい内容（影響範囲 / 優先度 / 対応方法 など）"
     )
+
+
+def _is_analysis_trigger_prompt(prompt: str) -> bool:
+    normalized = re.sub(r"\s+", " ", (prompt or "").strip()).lower()
+    if not normalized:
+        return False
+    return any(word in normalized for word in _ANALYSIS_TRIGGER_WORDS)
+
+
+def _build_vulnerability_ticket_prompt(raw_text: str) -> str:
+    return (
+        "以下はGmailアプリがChatに投稿したメール内容です。"
+        "SIDfm以外のフォーマットを含む可能性があるため、まず脆弱性関連通知かを判定してください。"
+        "脆弱性関連なら、以下の依頼票テンプレートを埋めた形式で出力してください。"
+        "必ずプレーンテキストで、コピペしやすい改行を維持してください。"
+        "不明な値は「要確認」と記載してください。\n\n"
+        "【希望納期】\n"
+        "【大分類】017.脆弱性対応（情シス専用）\n"
+        "【小分類】002.IT基盤チーム\n"
+        "【依頼概要】\n"
+        "【対象の機器/アプリ】\n"
+        "【脆弱性情報（リンク貼り付け）】\n"
+        "【CVSSスコア】\n"
+        "【依頼内容】\n"
+        "【対応完了目標】\n\n"
+        "必要なら上記の後ろに補足として「備考」を1段落だけ追加してください。\n\n"
+        f"{raw_text}"
+    )
+
+
+def _extract_space_name(event: dict[str, Any], thread_name: str) -> str:
+    space_name = str((event.get("space") or {}).get("name") or "").strip()
+    if space_name:
+        return space_name
+    if thread_name.startswith("spaces/"):
+        parts = thread_name.split("/")
+        if len(parts) >= 2:
+            return f"{parts[0]}/{parts[1]}"
+    return ""
+
+
+def _fetch_thread_root_message_text(event: dict[str, Any]) -> str:
+    message = event.get("message") or {}
+    thread_name = str(((message.get("thread") or {}).get("name") or "")).strip()
+    if not thread_name:
+        return ""
+    current_message_name = str(message.get("name") or "").strip()
+    space_name = _extract_space_name(event, thread_name)
+    if not space_name:
+        return ""
+
+    try:
+        import google.auth
+        from googleapiclient.discovery import build
+
+        credentials, _ = google.auth.default(scopes=["https://www.googleapis.com/auth/chat.bot"])
+        service = build("chat", "v1", credentials=credentials, cache_discovery=False)
+
+        def _list_messages(with_filter: bool) -> list[dict[str, Any]]:
+            kwargs: dict[str, Any] = {"parent": space_name, "pageSize": 100}
+            if with_filter:
+                kwargs["filter"] = f'thread.name="{thread_name}"'
+            response = service.spaces().messages().list(**kwargs).execute()
+            messages = response.get("messages") or []
+            return [m for m in messages if isinstance(m, dict)]
+
+        try:
+            messages = _list_messages(with_filter=True)
+        except Exception:
+            messages = [
+                m
+                for m in _list_messages(with_filter=False)
+                if str(((m.get("thread") or {}).get("name") or "")).strip() == thread_name
+            ]
+
+        candidates = [m for m in messages if (m.get("name") or "") != current_message_name]
+        if not candidates:
+            return ""
+
+        def _sort_key(msg: dict[str, Any]) -> tuple[str, str]:
+            return (str(msg.get("createTime") or ""), str(msg.get("name") or ""))
+
+        root_message = sorted(candidates, key=_sort_key)[0]
+        root_text = str(root_message.get("text") or root_message.get("formattedText") or "").strip()
+        return re.sub(r"\s+", " ", root_text).strip()
+    except Exception as exc:
+        logger.warning("Failed to fetch thread root message: %s", exc)
+        return ""
 
 
 def _estimate_prompt_complexity(prompt: str) -> dict[str, Any]:
@@ -543,27 +640,18 @@ def handle_chat_event(request):
     is_gmail_post = _is_gmail_app_message(event)
     history_key = _context_key(event, user_name)
     if is_gmail_post:
-        prompt = (
-            "以下はGmailアプリがChatに投稿したメール内容です。"
-            "SIDfm以外のフォーマットを含む可能性があるため、まず脆弱性関連通知かを判定してください。"
-            "脆弱性関連なら、以下の依頼票テンプレートを埋めた形式で出力してください。"
-            "必ずプレーンテキストで、コピペしやすい改行を維持してください。"
-            "不明な値は「要確認」と記載してください。\n\n"
-            "【希望納期】\n"
-            "【大分類】017.脆弱性対応（情シス専用）\n"
-            "【小分類】002.IT基盤チーム\n"
-            "【依頼概要】\n"
-            "【対象の機器/アプリ】\n"
-            "【脆弱性情報（リンク貼り付け）】\n"
-            "【CVSSスコア】\n"
-            "【依頼内容】\n"
-            "【対応完了目標】\n\n"
-            "必要なら上記の後ろに補足として「備考」を1段落だけ追加してください。\n\n"
-            f"{raw_text}"
-        )
+        prompt = _build_vulnerability_ticket_prompt(raw_text)
     elif not prompt:
         # メンションでもGmail投稿でもない通常メッセージは何もしない。
         return json.dumps({}, ensure_ascii=False), 200, {"Content-Type": "application/json"}
+    elif _is_analysis_trigger_prompt(prompt) and _is_ambiguous_prompt(prompt):
+        root_text = _fetch_thread_root_message_text(event)
+        if root_text:
+            prompt = _build_vulnerability_ticket_prompt(root_text)
+        else:
+            return json.dumps(_thread_payload(event, _build_clarification_message()), ensure_ascii=False), 200, {
+                "Content-Type": "application/json"
+            }
     elif _is_ambiguous_prompt(prompt):
         recent_turns = _get_recent_turns(history_key, max_turns=2)
         if not recent_turns:
