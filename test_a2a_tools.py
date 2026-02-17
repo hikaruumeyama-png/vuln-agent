@@ -24,6 +24,11 @@ class _FakeReasoningEngine:
         }
 
 
+class _FakeReasoningEngineNoQuery:
+    def __init__(self, resource_name: str):
+        self.resource_name = resource_name
+
+
 def _stub_vertexai_modules() -> None:
     vertexai = types.ModuleType("vertexai")
     vertexai.init = lambda *args, **kwargs: None
@@ -89,6 +94,28 @@ class A2AToolsTests(unittest.TestCase):
         result = self.a2a_tools.call_remote_agent("jira_agent", "create ticket")
         self.assertEqual(result["status"], "success")
         self.assertIn("processed: create ticket", result["response_text"])
+
+    def test_call_remote_agent_falls_back_when_query_missing(self):
+        self.a2a_tools.register_remote_agent(
+            "master_agent",
+            "projects/p1/locations/asia-northeast1/reasoningEngines/123",
+            "Master",
+        )
+        original_engine = self.a2a_tools.reasoning_engines.ReasoningEngine
+        original_rest_query = self.a2a_tools._query_remote_agent_rest
+        try:
+            self.a2a_tools.reasoning_engines.ReasoningEngine = _FakeReasoningEngineNoQuery
+
+            def _fake_rest_query(**kwargs):
+                return {"text": f"rest:{kwargs['message']}"}
+
+            self.a2a_tools._query_remote_agent_rest = _fake_rest_query
+            result = self.a2a_tools.call_remote_agent("master_agent", "ping")
+            self.assertEqual(result["status"], "success")
+            self.assertEqual(result["response_text"], "rest:ping")
+        finally:
+            self.a2a_tools.reasoning_engines.ReasoningEngine = original_engine
+            self.a2a_tools._query_remote_agent_rest = original_rest_query
 
     def test_create_jira_ticket_request_validates_required_fields(self):
         result = self.a2a_tools.create_jira_ticket_request(
