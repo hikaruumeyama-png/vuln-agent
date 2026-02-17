@@ -23,6 +23,7 @@ steps:
         DEPLOY_AGENT=false
         DEPLOY_GATEWAY=false
         DEPLOY_CHAT_WEBHOOK=false
+        DEPLOY_WORKSPACE_EVENTS=false
         DEPLOY_WEB=false
 
         full_deploy_raw="${_FORCE_FULL_DEPLOY}"
@@ -41,11 +42,13 @@ steps:
           DEPLOY_AGENT=true
           DEPLOY_GATEWAY=true
           DEPLOY_CHAT_WEBHOOK=true
+          DEPLOY_WORKSPACE_EVENTS=true
           DEPLOY_WEB=true
         elif [ -z "$$changed_files_raw" ]; then
           DEPLOY_AGENT=true
           DEPLOY_GATEWAY=true
           DEPLOY_CHAT_WEBHOOK=true
+          DEPLOY_WORKSPACE_EVENTS=true
           DEPLOY_WEB=true
         else
           unknown_path_detected=false
@@ -60,6 +63,9 @@ steps:
                 ;;
               chat_webhook/*)
                 DEPLOY_CHAT_WEBHOOK=true
+                ;;
+              workspace_events_webhook/*)
+                DEPLOY_WORKSPACE_EVENTS=true
                 ;;
               web/*)
                 DEPLOY_WEB=true
@@ -76,6 +82,7 @@ steps:
             DEPLOY_AGENT=true
             DEPLOY_GATEWAY=true
             DEPLOY_CHAT_WEBHOOK=true
+            DEPLOY_WORKSPACE_EVENTS=true
             DEPLOY_WEB=true
           fi
         fi
@@ -84,6 +91,7 @@ steps:
         DEPLOY_AGENT=$$DEPLOY_AGENT
         DEPLOY_GATEWAY=$$DEPLOY_GATEWAY
         DEPLOY_CHAT_WEBHOOK=$$DEPLOY_CHAT_WEBHOOK
+        DEPLOY_WORKSPACE_EVENTS=$$DEPLOY_WORKSPACE_EVENTS
         DEPLOY_WEB=$$DEPLOY_WEB
         EOF
 
@@ -117,6 +125,8 @@ steps:
         BQ_OWNER_MAPPING_TABLE_ID=$(gcloud secrets versions access latest --secret=vuln-agent-bq-owner-table-id 2>/dev/null || echo '')
         DEFAULT_CHAT_SPACE_ID=$(gcloud secrets versions access latest --secret=vuln-agent-chat-space-id 2>/dev/null || echo '')
         BQ_HISTORY_TABLE_ID=$(gcloud secrets versions access latest --secret=vuln-agent-bq-table-id 2>/dev/null || echo '')
+        REMOTE_AGENT_MASTER=$(gcloud secrets versions access latest --secret=vuln-agent-master-agent-resource-name 2>/dev/null || echo '')
+        REMOTE_AGENT_TEST=$(gcloud secrets versions access latest --secret=vuln-agent-test-dialog-resource-name 2>/dev/null || echo '')
         GCP_PROJECT_ID=${PROJECT_ID}
         GCP_LOCATION=${_REGION}
         EOF
@@ -266,6 +276,41 @@ steps:
           --trigger-http \
           --service-account=vuln-agent-sa@${PROJECT_ID}.iam.gserviceaccount.com \
           --update-env-vars="GCP_PROJECT_ID=${PROJECT_ID},GCP_LOCATION=${_REGION},CHAT_WEBHOOK_VERIFICATION_TOKEN=$$chat_verify_token" \
+          --remove-env-vars="AGENT_RESOURCE_NAME" \
+          --set-secrets="AGENT_RESOURCE_NAME=vuln-agent-resource-name:latest" \
+          --memory=1024MB \
+          --timeout=540s \
+          --quiet
+    waitFor:
+      - deploy-agent
+
+  - name: "gcr.io/google.com/cloudsdktool/cloud-sdk"
+    id: deploy-workspace-events-webhook
+    entrypoint: bash
+    args:
+      - "-c"
+      - |
+        set -euo pipefail
+        if [ -f /workspace/.deploy_flags ]; then
+          source /workspace/.deploy_flags
+        fi
+        if [ "${DEPLOY_WORKSPACE_EVENTS:-true}" != "true" ]; then
+          echo "[Step 5/6] Workspace Events Webhook が対象外のためデプロイをスキップします"
+          exit 0
+        fi
+        if ! gcloud secrets describe vuln-agent-resource-name >/dev/null 2>&1; then
+          echo "エラー: vuln-agent-resource-name が存在しません"
+          exit 1
+        fi
+        gcloud functions deploy vuln-agent-workspace-events-webhook \
+          --gen2 \
+          --runtime=python312 \
+          --region=${_REGION} \
+          --source=workspace_events_webhook \
+          --entry-point=handle_workspace_event \
+          --trigger-http \
+          --service-account=vuln-agent-sa@${PROJECT_ID}.iam.gserviceaccount.com \
+          --update-env-vars="GCP_PROJECT_ID=${PROJECT_ID},GCP_LOCATION=${_REGION}" \
           --remove-env-vars="AGENT_RESOURCE_NAME" \
           --set-secrets="AGENT_RESOURCE_NAME=vuln-agent-resource-name:latest" \
           --memory=1024MB \
