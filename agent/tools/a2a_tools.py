@@ -27,6 +27,34 @@ logger = logging.getLogger(__name__)
 _agent_registry: dict[str, Any] = {}
 
 
+def _get_config_value_fallback(
+    env_names: list[str],
+    *,
+    secret_name: str | None = None,
+    default: str = "",
+) -> str:
+    """Resolve config by env first, then optional Secret Manager fallback."""
+    try:
+        from .secret_config import get_config_value  # type: ignore
+    except Exception:
+        try:
+            from agent.tools.secret_config import get_config_value  # type: ignore
+        except Exception:
+            get_config_value = None
+
+    if get_config_value:
+        try:
+            return str(get_config_value(env_names, secret_name=secret_name, default=default) or "").strip()
+        except Exception:
+            pass
+
+    for env_name in env_names:
+        value = str(os.environ.get(env_name) or "").strip()
+        if value:
+            return value
+    return str(default or "").strip()
+
+
 def _is_valid_resource_name(resource_name: str) -> bool:
     text = str(resource_name or "").strip()
     if not text:
@@ -292,13 +320,35 @@ def register_master_agent(
     """
     マスターエージェントを `master_agent` として登録する。
 
-    resource_name 未指定時は REMOTE_AGENT_MASTER 環境変数を使用する。
+    resource_name 未指定時は以下の順で自動解決する。
+    1) REMOTE_AGENT_MASTER / Secret(vuln-agent-master-agent-resource-name)
+    2) REMOTE_AGENT_TEST / REMOTE_AGENT_TEST_DIALOG / Secret(vuln-agent-test-dialog-resource-name)
     """
-    resolved_resource = str(resource_name or "").strip() or str(os.environ.get("REMOTE_AGENT_MASTER", "")).strip()
+    resolved_resource = str(resource_name or "").strip()
+    resolution_source = "argument"
+    if not resolved_resource:
+        resolved_resource = _get_config_value_fallback(
+            ["REMOTE_AGENT_MASTER"],
+            secret_name="vuln-agent-master-agent-resource-name",
+            default="",
+        )
+        if resolved_resource:
+            resolution_source = "master_config"
+    if not resolved_resource:
+        resolved_resource = _get_config_value_fallback(
+            ["REMOTE_AGENT_TEST", "REMOTE_AGENT_TEST_DIALOG"],
+            secret_name="vuln-agent-test-dialog-resource-name",
+            default="",
+        )
+        if resolved_resource:
+            resolution_source = "test_dialog_config"
     if not resolved_resource:
         return {
             "status": "error",
-            "message": "resource_name is required. Set argument or REMOTE_AGENT_MASTER.",
+            "message": (
+                "resource_name is required. Set argument, REMOTE_AGENT_MASTER, "
+                "or configure vuln-agent-test-dialog-resource-name."
+            ),
         }
     result = register_remote_agent(
         agent_id="master_agent",
@@ -307,6 +357,7 @@ def register_master_agent(
     )
     if result.get("status") == "registered":
         result["agent_role"] = "master_agent"
+        result["resolved_from"] = resolution_source
     return result
 
 

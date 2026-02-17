@@ -793,6 +793,21 @@ body.mode-listening .voice-orb.voice-orb-listening .voice-orb-ring {
   margin-top: 6px;
 }
 
+.a2a-trace-item.a2a-outgoing {
+  background: rgba(29, 78, 216, 0.14);
+  border-color: rgba(59, 130, 246, 0.45);
+}
+
+.a2a-trace-item.a2a-incoming {
+  background: rgba(15, 118, 110, 0.16);
+  border-color: rgba(45, 212, 191, 0.4);
+}
+
+.a2a-trace-item.result-error {
+  background: rgba(127, 29, 29, 0.2);
+  border-color: rgba(248, 113, 113, 0.45);
+}
+
 .a2a-trace-icon {
   width: 26px;
   height: 26px;
@@ -822,7 +837,8 @@ body.mode-listening .voice-orb.voice-orb-listening .voice-orb-ring {
 
 .a2a-trace-label {
   font-size: var(--font-xs);
-  color: var(--text-muted);
+  color: #cbd5e1;
+  font-weight: 600;
 }
 
 .a2a-trace-agent {
@@ -833,8 +849,8 @@ body.mode-listening .voice-orb.voice-orb-listening .voice-orb-ring {
 
 .a2a-trace-preview {
   margin-top: 3px;
-  font-size: var(--font-xs);
-  color: #cbd5e1;
+  font-size: var(--font-sm);
+  color: #e2e8f0;
   white-space: pre-wrap;
   word-break: break-word;
 }

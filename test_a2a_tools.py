@@ -145,8 +145,25 @@ class A2AToolsTests(unittest.TestCase):
             result = self.a2a_tools.register_master_agent()
             self.assertEqual(result["status"], "registered")
             self.assertEqual(result["agent_id"], "master_agent")
+            self.assertEqual(result["resolved_from"], "master_config")
         finally:
             os.environ.pop("REMOTE_AGENT_MASTER", None)
+
+    def test_register_master_agent_uses_test_dialog_config_fallback(self):
+        original = self.a2a_tools._get_config_value_fallback
+        try:
+            def _fake_get_config(env_names, secret_name=None, default=""):
+                if secret_name == "vuln-agent-test-dialog-resource-name":
+                    return "projects/p1/locations/asia-northeast1/reasoningEngines/777"
+                return ""
+
+            self.a2a_tools._get_config_value_fallback = _fake_get_config
+            result = self.a2a_tools.register_master_agent()
+            self.assertEqual(result["status"], "registered")
+            self.assertEqual(result["agent_id"], "master_agent")
+            self.assertEqual(result["resolved_from"], "test_dialog_config")
+        finally:
+            self.a2a_tools._get_config_value_fallback = original
 
     def test_create_master_agent_handoff_request_requires_fields(self):
         result = self.a2a_tools.create_master_agent_handoff_request(
