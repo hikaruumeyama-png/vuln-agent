@@ -425,6 +425,41 @@ if [[ -n "$AGENT_RESOURCE_NAME" ]]; then
     info "vuln-agent-resource-name-pro を作成（初期値は base agent）"
   fi
   info "Agent Resource Name を Secret Manager に保存: ${AGENT_RESOURCE_NAME}"
+
+  token="$(gcloud auth print-access-token)"
+  api_base="https://${REGION}-aiplatform.googleapis.com/v1"
+  engines_json="$(curl -sSf -H "Authorization: Bearer ${token}" \
+    "${api_base}/projects/${PROJECT_ID}/locations/${REGION}/reasoningEngines")"
+  keep_engine_names="${AGENT_RESOURCE_NAME},$(_sm_get vuln-agent-resource-name | tr -d '\r\n '),$(_sm_get vuln-agent-resource-name-flash | tr -d '\r\n '),$(_sm_get vuln-agent-resource-name-pro | tr -d '\r\n ')"
+  protected_display_names="test-dialog-agent,SecSys Router Engine Tokyo v2"
+  delete_targets="$(printf '%s' "${engines_json}" | python3 -c 'import json,sys; keep={x for x in sys.argv[1].split(",") if x}; protected={x for x in sys.argv[2].split(",") if x}; engines=json.load(sys.stdin).get("reasoningEngines", []); out=[];
+for e in engines:
+  name=(e.get("name") or "").strip(); display=(e.get("displayName") or "").strip();
+  if not name or not display: continue
+  if display in protected: continue
+  if not display.startswith("vulnerability-management-agent"): continue
+  if name in keep: continue
+  out.append(name)
+print("\n".join(out))' "${keep_engine_names}" "${protected_display_names}")"
+  if [[ -n "${delete_targets}" ]]; then
+    info "古い Agent Engine を削除します:"
+    printf '%s\n' "${delete_targets}"
+    while IFS= read -r engine_name; do
+      [[ -z "${engine_name}" ]] && continue
+      deleted=false
+      for attempt in 1 2 3 4 5; do
+        http_code="$(curl -s -o /tmp/engine_delete_response.txt -w "%{http_code}" -X DELETE -H "Authorization: Bearer ${token}" "${api_base}/${engine_name}?force=true" || true)"
+        if [[ "${http_code}" == "200" || "${http_code}" == "204" || "${http_code}" == "404" ]]; then
+          deleted=true
+          break
+        fi
+        sleep $((attempt * 2))
+      done
+      if [[ "${deleted}" == "false" ]]; then
+        warn "削除リトライ失敗: ${engine_name}"
+      fi
+    done <<< "${delete_targets}"
+  fi
 fi
 
 # .env をクリーンアップ
