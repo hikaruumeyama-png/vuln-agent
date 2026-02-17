@@ -361,6 +361,36 @@ def register_master_agent(
     return result
 
 
+def _auto_register_default_agents() -> None:
+    """
+    Register default A2A agents from runtime config when possible.
+
+    This function is best-effort and never raises.
+    """
+    try:
+        test_dialog_resource = _get_config_value_fallback(
+            ["REMOTE_AGENT_TEST", "REMOTE_AGENT_TEST_DIALOG"],
+            secret_name="vuln-agent-test-dialog-resource-name",
+            default="",
+        )
+        if _is_valid_resource_name(test_dialog_resource):
+            if "test_agent" not in _agent_registry:
+                register_remote_agent(
+                    agent_id="test_agent",
+                    resource_name=test_dialog_resource,
+                    description="A2A test dialog agent",
+                )
+            if "master_agent" not in _agent_registry:
+                register_remote_agent(
+                    agent_id="master_agent",
+                    resource_name=test_dialog_resource,
+                    description="課のマスターエージェント",
+                )
+    except Exception:
+        # Best-effort only; explicit registration path still exists.
+        pass
+
+
 def call_remote_agent(
     agent_id: str,
     message: str,
@@ -393,6 +423,8 @@ def call_remote_agent(
         if not normalized_message:
             return {"status": "error", "agent_id": normalized_agent_id, "message": "message is required."}
 
+        if normalized_agent_id not in _agent_registry:
+            _auto_register_default_agents()
         if normalized_agent_id not in _agent_registry:
             return {
                 "status": "error",
@@ -449,6 +481,111 @@ def call_remote_agent(
             "agent_id": agent_id,
             "message": str(e)
         }
+
+
+def call_remote_agent_conversation_loop(
+    agent_id: str,
+    initial_message: str,
+    user_id: str = "vuln_agent",
+    max_turns: int = 5,
+    goal: str = "",
+    continue_instruction: str = "",
+    max_response_chars: int = 4000,
+) -> dict[str, Any]:
+    """
+    登録済みリモートエージェントと複数ターンで継続対話する。
+
+    単発 `call_remote_agent` を内部で繰り返し呼び出し、以下の条件で停止する:
+    - エラーが返る
+    - 最終回答マーカーを検出する
+    - 同一回答の繰り返しを検出する
+    - `max_turns` に到達する
+    """
+    normalized_agent_id = str(agent_id or "").strip()
+    normalized_initial = str(initial_message or "").strip()
+    normalized_user_id = str(user_id or "vuln_agent").strip() or "vuln_agent"
+    normalized_goal = str(goal or "").strip()
+    normalized_continue = str(continue_instruction or "").strip()
+
+    if not normalized_agent_id:
+        return {"status": "error", "message": "agent_id is required."}
+    if not normalized_initial:
+        return {"status": "error", "message": "initial_message is required."}
+    if max_turns < 1 or max_turns > 20:
+        return {"status": "error", "message": "max_turns must be between 1 and 20."}
+    if max_response_chars < 200 or max_response_chars > 20000:
+        return {"status": "error", "message": "max_response_chars must be between 200 and 20000."}
+
+    conversation_goal = normalized_goal or normalized_initial
+    followup_instruction = normalized_continue or (
+        "目的に対して次の最善ステップを1つ進めてください。"
+        "完了した場合は必ず '最終回答:' で始めて結論を示してください。"
+    )
+
+    transcript: list[dict[str, Any]] = []
+    seen_normalized_responses: set[str] = set()
+    final_markers = ("最終回答:", "final answer:", "完了です", "以上です")
+    current_message = normalized_initial
+    stop_reason = "max_turns_reached"
+
+    for turn in range(1, max_turns + 1):
+        result = call_remote_agent(
+            agent_id=normalized_agent_id,
+            message=current_message,
+            user_id=normalized_user_id,
+        )
+        response_text = str(result.get("response_text") or "").strip()
+        transcript.append(
+            {
+                "turn": turn,
+                "sent_message": current_message,
+                "status": result.get("status", "error"),
+                "response_text": response_text,
+                "message": result.get("message", ""),
+            }
+        )
+
+        if result.get("status") != "success":
+            stop_reason = "remote_error"
+            return {
+                "status": "error",
+                "agent_id": normalized_agent_id,
+                "stop_reason": stop_reason,
+                "turns_executed": turn,
+                "final_response_text": response_text,
+                "transcript": transcript,
+                "message": str(result.get("message") or "remote agent call failed"),
+            }
+
+        normalized_response = " ".join(response_text.lower().split())
+        if any(marker in response_text.lower() for marker in final_markers):
+            stop_reason = "final_marker_detected"
+            break
+        if normalized_response and normalized_response in seen_normalized_responses:
+            stop_reason = "duplicate_response_detected"
+            break
+        if normalized_response:
+            seen_normalized_responses.add(normalized_response)
+        if turn >= max_turns:
+            stop_reason = "max_turns_reached"
+            break
+
+        excerpt = response_text[:max_response_chars]
+        current_message = (
+            "継続対話です。以下を踏まえて次へ進めてください。\n"
+            f"目的: {conversation_goal}\n"
+            f"直前の回答:\n{excerpt}\n\n"
+            f"追加指示: {followup_instruction}"
+        )
+
+    return {
+        "status": "success",
+        "agent_id": normalized_agent_id,
+        "stop_reason": stop_reason,
+        "turns_executed": len(transcript),
+        "final_response_text": transcript[-1]["response_text"] if transcript else "",
+        "transcript": transcript,
+    }
 
 
 def create_master_agent_handoff_request(
@@ -567,6 +704,8 @@ def list_registered_agents() -> dict[str, Any]:
     Returns:
         登録済みエージェントの一覧
     """
+    _auto_register_default_agents()
+
     agents = []
     for agent_id, info in _agent_registry.items():
         agents.append({

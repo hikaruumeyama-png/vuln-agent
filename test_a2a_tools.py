@@ -117,6 +117,74 @@ class A2AToolsTests(unittest.TestCase):
             self.a2a_tools.reasoning_engines.ReasoningEngine = original_engine
             self.a2a_tools._query_remote_agent_rest = original_rest_query
 
+    def test_call_remote_agent_conversation_loop_stops_on_final_marker(self):
+        calls = {"count": 0}
+        original = self.a2a_tools.call_remote_agent
+        try:
+            def _fake_call(agent_id, message, user_id="vuln_agent"):
+                calls["count"] += 1
+                if calls["count"] == 1:
+                    return {"status": "success", "response_text": "検討中です。"}
+                return {"status": "success", "response_text": "最終回答: 完了しました。"}
+
+            self.a2a_tools.call_remote_agent = _fake_call
+            result = self.a2a_tools.call_remote_agent_conversation_loop(
+                agent_id="test_agent",
+                initial_message="開始してください",
+                max_turns=5,
+            )
+            self.assertEqual(result["status"], "success")
+            self.assertEqual(result["stop_reason"], "final_marker_detected")
+            self.assertEqual(result["turns_executed"], 2)
+            self.assertIn("最終回答", result["final_response_text"])
+        finally:
+            self.a2a_tools.call_remote_agent = original
+
+    def test_call_remote_agent_conversation_loop_stops_on_duplicate(self):
+        original = self.a2a_tools.call_remote_agent
+        try:
+            def _fake_call(agent_id, message, user_id="vuln_agent"):
+                return {"status": "success", "response_text": "同じ回答"}
+
+            self.a2a_tools.call_remote_agent = _fake_call
+            result = self.a2a_tools.call_remote_agent_conversation_loop(
+                agent_id="test_agent",
+                initial_message="開始してください",
+                max_turns=5,
+            )
+            self.assertEqual(result["status"], "success")
+            self.assertEqual(result["stop_reason"], "duplicate_response_detected")
+            self.assertEqual(result["turns_executed"], 2)
+        finally:
+            self.a2a_tools.call_remote_agent = original
+
+    def test_call_remote_agent_conversation_loop_validates_max_turns(self):
+        result = self.a2a_tools.call_remote_agent_conversation_loop(
+            agent_id="test_agent",
+            initial_message="開始してください",
+            max_turns=0,
+        )
+        self.assertEqual(result["status"], "error")
+        self.assertIn("max_turns", result["message"])
+
+    def test_call_remote_agent_conversation_loop_returns_error_on_remote_error(self):
+        original = self.a2a_tools.call_remote_agent
+        try:
+            def _fake_call(agent_id, message, user_id="vuln_agent"):
+                return {"status": "error", "message": "boom", "response_text": ""}
+
+            self.a2a_tools.call_remote_agent = _fake_call
+            result = self.a2a_tools.call_remote_agent_conversation_loop(
+                agent_id="test_agent",
+                initial_message="開始してください",
+                max_turns=3,
+            )
+            self.assertEqual(result["status"], "error")
+            self.assertEqual(result["stop_reason"], "remote_error")
+            self.assertEqual(result["turns_executed"], 1)
+        finally:
+            self.a2a_tools.call_remote_agent = original
+
     def test_create_jira_ticket_request_validates_required_fields(self):
         result = self.a2a_tools.create_jira_ticket_request(
             vulnerability_id="",
@@ -188,6 +256,22 @@ class A2AToolsTests(unittest.TestCase):
         self.assertEqual(result["status"], "success")
         self.assertEqual(result["agent_id"], "master_agent")
         self.assertIn("processed:", result["response_text"])
+
+    def test_list_registered_agents_auto_registers_test_and_master_from_config(self):
+        original = self.a2a_tools._get_config_value_fallback
+        try:
+            def _fake_get_config(env_names, secret_name=None, default=""):
+                if secret_name == "vuln-agent-test-dialog-resource-name":
+                    return "projects/p1/locations/asia-northeast1/reasoningEngines/777"
+                return ""
+
+            self.a2a_tools._get_config_value_fallback = _fake_get_config
+            listed = self.a2a_tools.list_registered_agents()
+            ids = {a["agent_id"] for a in listed["agents"]}
+            self.assertIn("test_agent", ids)
+            self.assertIn("master_agent", ids)
+        finally:
+            self.a2a_tools._get_config_value_fallback = original
 
 
 if __name__ == "__main__":

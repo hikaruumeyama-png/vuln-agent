@@ -52,6 +52,7 @@ _EXPORT_SPECS: list[tuple[str, list[str]]] = [
             "register_remote_agent",
             "register_master_agent",
             "call_remote_agent",
+            "call_remote_agent_conversation_loop",
             "call_master_agent",
             "list_registered_agents",
             "create_jira_ticket_request",
