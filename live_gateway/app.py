@@ -13,11 +13,12 @@ import time
 import urllib.parse
 import urllib.request
 import uuid
+from pathlib import Path
 from typing import Any
 
 import jwt
 from fastapi import FastAPI, Request, WebSocket, WebSocketDisconnect
-from fastapi.responses import RedirectResponse
+from fastapi.responses import FileResponse, PlainTextResponse, RedirectResponse
 from fastapi.middleware.cors import CORSMiddleware
 import vertexai
 from vertexai import Client
@@ -51,6 +52,7 @@ OIDC_STATE_COOKIE_NAME = os.environ.get("OIDC_STATE_COOKIE_NAME", "vuln_agent_oi
 OIDC_SESSION_TTL_SEC = 8 * 60 * 60
 OIDC_STATE_TTL_SEC = 10 * 60
 CORS_ALLOW_ORIGINS_RAW = os.environ.get("CORS_ALLOW_ORIGINS", "").strip()
+UI_STATIC_DIR = os.environ.get("UI_STATIC_DIR", "").strip()
 _oidc_metadata_cache: dict[str, Any] | None = None
 _oidc_metadata_cache_at = 0.0
 
@@ -360,6 +362,63 @@ def _safe_healthz_headers(request: Request) -> dict[str, str]:
         for key, value in request.headers.items()
         if key.lower() in HEALTHZ_HEADER_ALLOWLIST
     }
+
+
+def _resolve_ui_file(filename: str) -> Path | None:
+    normalized = (filename or "").strip().lstrip("/")
+    if not normalized:
+        return None
+    if ".." in normalized:
+        return None
+
+    candidates: list[Path] = []
+    if UI_STATIC_DIR:
+        candidates.append(Path(UI_STATIC_DIR) / normalized)
+
+    app_dir = Path(__file__).resolve().parent
+    candidates.append(app_dir / "ui" / normalized)
+    candidates.append(app_dir.parent / "web" / normalized)
+
+    for path in candidates:
+        try:
+            if path.is_file():
+                return path
+        except Exception:
+            continue
+    return None
+
+
+def _render_login_fallback() -> str:
+    return (
+        "<!doctype html><html lang='ja'><head><meta charset='utf-8'/>"
+        "<meta name='viewport' content='width=device-width, initial-scale=1'/>"
+        "<title>Login</title></head><body>"
+        "<h1>ログインが必要です</h1>"
+        "<p>このページを利用するには認証してください。</p>"
+        "<a href='/auth/login?next=/'>OIDCログイン</a>"
+        "</body></html>"
+    )
+
+
+def _audit_chat_event(
+    *,
+    event: str,
+    user: dict[str, Any] | None,
+    request_id: str,
+    message: str = "",
+    response_text: str = "",
+) -> None:
+    user = user or {}
+    payload = {
+        "event": event,
+        "user_sub": str(user.get("sub", "")),
+        "user_email": str(user.get("email", "")),
+        "user_name": str(user.get("name", "")),
+        "request_id": str(request_id or ""),
+        "message": str(message or "")[:4000],
+        "response_text": str(response_text or "")[:4000],
+    }
+    logger.info("chat_audit %s", json.dumps(payload, ensure_ascii=False))
 
 
 def _base64url_encode(raw: bytes) -> str:
@@ -904,6 +963,48 @@ def ping():
     return {"status": "ok"}
 
 
+@app.get("/")
+def ui_root(request: Request):
+    if OIDC_ENABLED and not _get_session_user_from_cookie(request.cookies):
+        return RedirectResponse(url="/login", status_code=302)
+    ui_file = _resolve_ui_file("index.html")
+    if not ui_file:
+        return PlainTextResponse("UI index not found", status_code=500)
+    return FileResponse(ui_file)
+
+
+@app.get("/login")
+def ui_login(request: Request):
+    if not OIDC_ENABLED:
+        return RedirectResponse(url="/", status_code=302)
+    if _get_session_user_from_cookie(request.cookies):
+        return RedirectResponse(url="/", status_code=302)
+    ui_file = _resolve_ui_file("login.html")
+    if ui_file:
+        return FileResponse(ui_file)
+    return PlainTextResponse(_render_login_fallback(), media_type="text/html; charset=utf-8")
+
+
+@app.get("/app.js")
+def ui_app_js(request: Request):
+    if OIDC_ENABLED and not _get_session_user_from_cookie(request.cookies):
+        return RedirectResponse(url="/login", status_code=302)
+    ui_file = _resolve_ui_file("app.js")
+    if not ui_file:
+        return PlainTextResponse("app.js not found", status_code=404)
+    return FileResponse(ui_file, media_type="application/javascript; charset=utf-8")
+
+
+@app.get("/style.css")
+def ui_style_css(request: Request):
+    if OIDC_ENABLED and not _get_session_user_from_cookie(request.cookies):
+        return RedirectResponse(url="/login", status_code=302)
+    ui_file = _resolve_ui_file("style.css")
+    if not ui_file:
+        return PlainTextResponse("style.css not found", status_code=404)
+    return FileResponse(ui_file, media_type="text/css; charset=utf-8")
+
+
 @app.get("/auth/me")
 def auth_me(request: Request):
     if not OIDC_ENABLED:
@@ -1123,8 +1224,20 @@ async def websocket_endpoint(websocket: WebSocket):
                 return
             last_response_index = len(transcript_parts)
             agent_response = await _query_agent(client, transcript, websocket, ws_user_id)
+            _audit_chat_event(
+                event="voice_request",
+                user=ws_user,
+                request_id=str(agent_response.get("request_id", "")),
+                message=transcript,
+            )
             await _safe_send(websocket, agent_response)
             response_text = agent_response.get("text", "")
+            _audit_chat_event(
+                event="voice_response",
+                user=ws_user,
+                request_id=str(agent_response.get("request_id", "")),
+                response_text=response_text,
+            )
             if response_text:
                 await _safe_send(websocket, {"type": "live_text", "text": response_text})
             if response_text:
@@ -1186,6 +1299,18 @@ async def websocket_endpoint(websocket: WebSocket):
                     continue
 
                 response = await _query_agent(client, message, websocket, ws_user_id)
+                _audit_chat_event(
+                    event="text_request",
+                    user=ws_user,
+                    request_id=str(response.get("request_id", "")),
+                    message=message,
+                )
+                _audit_chat_event(
+                    event="text_response",
+                    user=ws_user,
+                    request_id=str(response.get("request_id", "")),
+                    response_text=str(response.get("text", "")),
+                )
                 await websocket.send_text(json.dumps(response, ensure_ascii=False))
                 continue
 
