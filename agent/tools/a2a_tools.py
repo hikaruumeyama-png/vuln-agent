@@ -11,8 +11,11 @@ Vertex AI Agent Engine の A2A プロトコルを使用して
   - 報告書作成エージェント
 """
 
-import os
 import logging
+import json
+import os
+import urllib.error
+import urllib.request
 from typing import Any
 
 import vertexai
@@ -72,6 +75,159 @@ def _extract_remote_response_text(response: Any) -> str:
         if texts:
             return "\n".join(texts)
     return ""
+
+
+def _extract_project_location_from_resource(resource_name: str) -> tuple[str, str]:
+    parts = resource_name.split("/")
+    if len(parts) == 6 and parts[0] == "projects" and parts[2] == "locations":
+        return parts[1], parts[3]
+    return "", ""
+
+
+def _get_access_token() -> str:
+    """Fetch OAuth2 access token for calling Vertex AI REST APIs."""
+    # Preferred path: google-auth (available in Cloud Run image).
+    try:
+        import google.auth  # type: ignore
+        from google.auth.transport.requests import Request  # type: ignore
+
+        credentials, _ = google.auth.default(
+            scopes=["https://www.googleapis.com/auth/cloud-platform"]
+        )
+        credentials.refresh(Request())
+        token = getattr(credentials, "token", None)
+        if token:
+            return str(token)
+    except Exception:
+        pass
+
+    # Fallback path for Cloud Run/GCE metadata server.
+    metadata_url = (
+        "http://metadata.google.internal/computeMetadata/v1/instance/service-accounts/default/token"
+    )
+    req = urllib.request.Request(
+        metadata_url,
+        headers={"Metadata-Flavor": "Google"},
+        method="GET",
+    )
+    with urllib.request.urlopen(req, timeout=5) as resp:
+        payload = json.loads(resp.read().decode("utf-8"))
+        token = payload.get("access_token")
+        if not token:
+            raise RuntimeError("metadata server returned no access_token")
+        return str(token)
+
+
+def _query_remote_agent_rest(
+    *,
+    resource_name: str,
+    message: str,
+    user_id: str,
+    project_id: str,
+    location: str,
+) -> Any:
+    """Call Reasoning Engine REST endpoint directly (streamQuery first)."""
+    if not project_id or not location:
+        parsed_project, parsed_location = _extract_project_location_from_resource(resource_name)
+        project_id = project_id or parsed_project
+        location = location or parsed_location
+    if not project_id or not location:
+        raise RuntimeError("Unable to resolve project/location for remote agent query.")
+
+    token = _get_access_token()
+    headers = {
+        "Authorization": f"Bearer {token}",
+        "Content-Type": "application/json; charset=utf-8",
+    }
+
+    # 1) Try streamQuery first. This works for ADK agents that expose stream_query.
+    stream_endpoint = f"https://{location}-aiplatform.googleapis.com/v1/{resource_name}:streamQuery"
+    stream_payload = {
+        "class_method": "stream_query",
+        "input": {
+            "user_id": user_id,
+            "message": message,
+        },
+    }
+    try:
+        req = urllib.request.Request(
+            stream_endpoint,
+            data=json.dumps(stream_payload).encode("utf-8"),
+            headers=headers,
+            method="POST",
+        )
+        with urllib.request.urlopen(req, timeout=60) as resp:
+            raw = resp.read().decode("utf-8")
+            if not raw.strip():
+                return {}
+
+            # streamQuery often returns newline-delimited JSON events.
+            lines = [line.strip() for line in raw.splitlines() if line.strip()]
+            events: list[Any] = []
+            if len(lines) == 1:
+                decoded = json.loads(lines[0])
+                if isinstance(decoded, list):
+                    events = decoded
+                else:
+                    events = [decoded]
+            else:
+                for line in lines:
+                    events.append(json.loads(line))
+
+            text = ""
+            for event in events:
+                candidate = _extract_remote_response_text(event)
+                if candidate:
+                    text = candidate
+
+            return {
+                "events": events,
+                "text": text,
+            }
+    except urllib.error.HTTPError as stream_err:
+        stream_body = ""
+        try:
+            stream_body = stream_err.read().decode("utf-8")
+        except Exception:
+            stream_body = ""
+        logger.warning(
+            "streamQuery failed for %s: HTTP %s %s; fallback to :query",
+            resource_name,
+            stream_err.code,
+            stream_body[:300],
+        )
+
+    # 2) Fallback to query endpoint for engines that expose query method.
+    query_endpoint = f"https://{location}-aiplatform.googleapis.com/v1/{resource_name}:query"
+    query_payload = {
+        "classMethod": "query",
+        "input": {
+            "user_id": user_id,
+            "message": message,
+        },
+    }
+    query_req = urllib.request.Request(
+        query_endpoint,
+        data=json.dumps(query_payload).encode("utf-8"),
+        headers=headers,
+        method="POST",
+    )
+    try:
+        with urllib.request.urlopen(query_req, timeout=60) as resp:
+            raw = resp.read().decode("utf-8")
+            decoded = json.loads(raw) if raw else {}
+            if isinstance(decoded, dict) and "output" in decoded:
+                return decoded.get("output")
+            return decoded
+    except urllib.error.HTTPError as query_err:
+        query_body = ""
+        try:
+            query_body = query_err.read().decode("utf-8")
+        except Exception:
+            query_body = ""
+        raise RuntimeError(
+            f"ReasoningEngine REST query failed: HTTP {query_err.code} {query_body}"
+        ) from query_err
 
 
 def register_remote_agent(
@@ -205,11 +361,24 @@ def call_remote_agent(
         # リモートエージェントを取得
         remote_agent = reasoning_engines.ReasoningEngine(resource_name)
 
-        # クエリを実行
-        response = remote_agent.query(
-            user_id=normalized_user_id,
-            message=normalized_message,
-        )
+        # Prefer SDK query when available; fallback to REST query.
+        if hasattr(remote_agent, "query"):
+            response = remote_agent.query(
+                user_id=normalized_user_id,
+                message=normalized_message,
+            )
+        else:
+            logger.warning(
+                "ReasoningEngine object has no query(); using REST fallback for %s",
+                normalized_agent_id,
+            )
+            response = _query_remote_agent_rest(
+                resource_name=resource_name,
+                message=normalized_message,
+                user_id=normalized_user_id,
+                project_id=project_id or "",
+                location=location or "",
+            )
 
         response_text = _extract_remote_response_text(response)
 
