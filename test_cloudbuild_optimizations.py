@@ -47,6 +47,14 @@ class CloudBuildOptimizationTests(unittest.TestCase):
         self.assertIn('if [ "${DEPLOY_WORKSPACE_EVENTS:-true}" != "true" ]; then', self.content)
         self.assertIn('if [ "${DEPLOY_WEB:-true}" != "true" ]; then', self.content)
 
+    def test_agent_cleanup_has_protected_names_and_force_delete(self):
+        self.assertIn('protected_display_names="test-dialog-agent,SecSys Router Engine Tokyo v2"', self.content)
+        self.assertIn('.startswith("vulnerability-management-agent")', self.content)
+        self.assertIn('?force=true', self.content)
+        self.assertIn('for attempt in 1 2 3 4 5', self.content)
+        self.assertIn('sleep $$((attempt * 2))', self.content)
+        self.assertIn('WARN: failed to delete $$engine_name after retries', self.content)
+
 
 if __name__ == "__main__":
     unittest.main()
