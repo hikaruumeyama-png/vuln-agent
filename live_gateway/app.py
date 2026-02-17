@@ -1,6 +1,7 @@
 import asyncio
 import base64
 import binascii
+from collections import deque
 import hashlib
 import hmac
 import json
@@ -142,6 +143,8 @@ CLEAR_CONTEXT_KEYWORDS = (
 )
 
 logger = logging.getLogger(__name__)
+RECENT_TURNS: dict[str, deque[dict[str, str]]] = {}
+MAX_RECENT_TURNS = 4
 
 HEALTHZ_HEADER_ALLOWLIST = {
     "host",
@@ -183,6 +186,42 @@ def _build_clarification_message() -> str:
         "1) 対象（例: CVE番号 / 製品名 / システム名）\n"
         "2) 知りたい内容（影響範囲 / 優先度 / 対応方法 など）"
     )
+
+
+def _get_recent_turns(user_id: str, max_turns: int = 2) -> list[dict[str, str]]:
+    turns = list(RECENT_TURNS.get(user_id) or [])
+    if not turns:
+        return []
+    return turns[-max_turns:]
+
+
+def _remember_turn(user_id: str, user_prompt: str, assistant_text: str) -> None:
+    if not user_id or not user_prompt.strip():
+        return
+    if user_id not in RECENT_TURNS:
+        RECENT_TURNS[user_id] = deque(maxlen=MAX_RECENT_TURNS)
+    RECENT_TURNS[user_id].append(
+        {
+            "user": user_prompt.strip(),
+            "assistant": (assistant_text or "").strip()[:300],
+        }
+    )
+
+
+def _build_contextual_prompt(original_prompt: str, recent_turns: list[dict[str, str]]) -> str:
+    if not recent_turns:
+        return original_prompt
+    lines: list[str] = ["以下は直近の会話文脈です。必要な範囲で参照してください。"]
+    for idx, turn in enumerate(recent_turns, start=1):
+        user_text = (turn.get("user") or "").strip()
+        assistant_text = (turn.get("assistant") or "").strip()
+        if user_text:
+            lines.append(f"- 直近{idx}件前のユーザー発話: {user_text}")
+        if assistant_text:
+            lines.append(f"- 直近{idx}件前のあなたの回答要約: {assistant_text}")
+    lines.append("")
+    lines.append(f"現在のユーザー発話: {original_prompt}")
+    return "\n".join(lines).strip()
 
 
 def _safe_healthz_headers(request: Request) -> dict[str, str]:
@@ -453,37 +492,42 @@ async def _query_agent(
     client: Client, message: str, websocket: WebSocket, user_id: str,
 ) -> dict[str, Any]:
     request_id = f"req-{uuid.uuid4().hex[:10]}"
+    original_message = message
     if _is_ambiguous_prompt(message):
-        clarification = _build_clarification_message()
-        await _safe_send(websocket, {
-            "type": "agent_activity",
-            "request_id": request_id,
-            "activity": "thinking",
-            "tool": None,
-            "icon": "help-circle",
-            "message": "入力内容を確認中...",
-            "progress": {
-                "total_tool_calls": 0,
-                "completed_tool_calls": 0,
-            },
-        })
-        await _safe_send(websocket, {
-            "type": "agent_activity",
-            "request_id": request_id,
-            "activity": "done",
-            "tool": None,
-            "icon": "check-circle-2",
-            "message": "追加情報待ち",
-            "progress": {
-                "total_tool_calls": 0,
-                "completed_tool_calls": 0,
-            },
-        })
-        return {
-            "type": "agent_response",
-            "request_id": request_id,
-            "text": clarification,
-        }
+        recent_turns = _get_recent_turns(user_id, max_turns=2)
+        if recent_turns:
+            message = _build_contextual_prompt(message, recent_turns)
+        else:
+            clarification = _build_clarification_message()
+            await _safe_send(websocket, {
+                "type": "agent_activity",
+                "request_id": request_id,
+                "activity": "thinking",
+                "tool": None,
+                "icon": "help-circle",
+                "message": "入力内容を確認中...",
+                "progress": {
+                    "total_tool_calls": 0,
+                    "completed_tool_calls": 0,
+                },
+            })
+            await _safe_send(websocket, {
+                "type": "agent_activity",
+                "request_id": request_id,
+                "activity": "done",
+                "tool": None,
+                "icon": "check-circle-2",
+                "message": "追加情報待ち",
+                "progress": {
+                    "total_tool_calls": 0,
+                    "completed_tool_calls": 0,
+                },
+            })
+            return {
+                "type": "agent_response",
+                "request_id": request_id,
+                "text": clarification,
+            }
 
     app_client = client.agent_engines.get(name=AGENT_RESOURCE_NAME)
     chunks: list[str] = []
@@ -627,10 +671,12 @@ async def _query_agent(
         },
     })
 
+    response_text = "".join(chunks).strip()
+    _remember_turn(user_id, original_message, response_text)
     return {
         "type": "agent_response",
         "request_id": request_id,
-        "text": "".join(chunks).strip(),
+        "text": response_text,
     }
 
 

@@ -90,6 +90,24 @@ _EXPORT_SPECS: list[tuple[str, list[str]]] = [
             "save_vulnerability_history_minimal",
         ],
     ),
+    (
+        "orchestration_tools",
+        [
+            "list_predefined_operations",
+            "list_operation_catalog_health",
+            "get_authorized_operations_overview",
+            "decide_execution_mode",
+            "generate_tool_workflow_code",
+            "execute_tool_workflow_plan",
+        ],
+    ),
+    (
+        "config_tools",
+        [
+            "list_known_config_keys",
+            "get_runtime_config_snapshot",
+        ],
+    ),
 ]
 
 

@@ -44,6 +44,10 @@ class ChatWebhookTests(unittest.TestCase):
         _stub_dependencies()
         cls.chat_webhook = _load_module("chat_webhook_test_module", CHAT_WEBHOOK_PATH)
 
+    def setUp(self):
+        if hasattr(self.chat_webhook, "_RECENT_TURNS"):
+            self.chat_webhook._RECENT_TURNS.clear()
+
     def test_clean_chat_text_prefers_argument_text(self):
         text = self.chat_webhook._clean_chat_text(
             {"message": {"argumentText": "  CVEを調べて  ", "text": "@bot 無視される"}}
@@ -83,6 +87,38 @@ class ChatWebhookTests(unittest.TestCase):
         body = json.loads(raw_body)
         self.assertEqual(body["thread"]["name"], "spaces/AAA/threads/BBB")
         self.assertIn("もう少し具体化してください", body["text"])
+
+    def test_ambiguous_prompt_uses_recent_context(self):
+        self.chat_webhook._is_valid_token = lambda event: True
+        captured: list[str] = []
+
+        def _fake_run(prompt, user_id):
+            captured.append(prompt)
+            return f"echo:{user_id}"
+
+        self.chat_webhook._run_agent_query = _fake_run
+
+        first_payload = {
+            "type": "MESSAGE",
+            "user": {"name": "users/111"},
+            "message": {"text": "<users/999> CVE-2026-1234 の影響を確認して", "thread": {"name": "spaces/AAA/threads/BBB"}},
+        }
+        second_payload = {
+            "type": "MESSAGE",
+            "user": {"name": "users/111"},
+            "message": {"text": "<users/999> 先ほどの件で優先度は？", "thread": {"name": "spaces/AAA/threads/BBB"}},
+        }
+
+        _raw_body1, status1, _headers1 = self.chat_webhook.handle_chat_event(_FakeRequest(first_payload))
+        raw_body2, status2, _headers2 = self.chat_webhook.handle_chat_event(_FakeRequest(second_payload))
+
+        self.assertEqual(status1, 200)
+        self.assertEqual(status2, 200)
+        self.assertEqual(len(captured), 2)
+        self.assertIn("直近の会話文脈", captured[1])
+        self.assertIn("CVE-2026-1234 の影響を確認して", captured[1])
+        body2 = json.loads(raw_body2)
+        self.assertIn("echo:111", body2["text"])
 
     def test_handle_chat_event_rejects_invalid_token(self):
         self.chat_webhook._is_valid_token = lambda event: False

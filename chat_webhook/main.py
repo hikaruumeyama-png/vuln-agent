@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+from collections import deque
 import json
 import logging
 import os
@@ -15,6 +16,8 @@ import vertexai
 logger = logging.getLogger(__name__)
 
 _secret_client = None
+_RECENT_TURNS: dict[str, deque[dict[str, str]]] = {}
+_MAX_RECENT_TURNS = 4
 _AMBIGUITY_PRESETS = {
     "strict": {"min_chars_without_context": 6},
     "standard": {"min_chars_without_context": 4},
@@ -310,6 +313,50 @@ def _thread_payload(event: dict[str, Any], text: str) -> dict[str, Any]:
     return payload
 
 
+def _context_key(event: dict[str, Any], user_name: str) -> str:
+    message = event.get("message") or {}
+    thread_name = ((message.get("thread") or {}).get("name") or "").strip()
+    if thread_name:
+        return f"thread:{thread_name}"
+    return f"user:{user_name or 'google-chat-user'}"
+
+
+def _get_recent_turns(key: str, max_turns: int = 2) -> list[dict[str, str]]:
+    turns = list(_RECENT_TURNS.get(key) or [])
+    if not turns:
+        return []
+    return turns[-max_turns:]
+
+
+def _remember_turn(key: str, user_prompt: str, assistant_text: str) -> None:
+    if not key or not user_prompt.strip():
+        return
+    if key not in _RECENT_TURNS:
+        _RECENT_TURNS[key] = deque(maxlen=_MAX_RECENT_TURNS)
+    _RECENT_TURNS[key].append(
+        {
+            "user": user_prompt.strip(),
+            "assistant": (assistant_text or "").strip()[:300],
+        }
+    )
+
+
+def _build_contextual_prompt(original_prompt: str, recent_turns: list[dict[str, str]]) -> str:
+    if not recent_turns:
+        return original_prompt
+    lines: list[str] = ["以下は直近の会話文脈です。必要な範囲で参照してください。"]
+    for idx, turn in enumerate(recent_turns, start=1):
+        user_text = (turn.get("user") or "").strip()
+        assistant_text = (turn.get("assistant") or "").strip()
+        if user_text:
+            lines.append(f"- 直近{idx}件前のユーザー発話: {user_text}")
+        if assistant_text:
+            lines.append(f"- 直近{idx}件前のあなたの回答要約: {assistant_text}")
+    lines.append("")
+    lines.append(f"現在のユーザー発話: {original_prompt}")
+    return "\n".join(lines).strip()
+
+
 @functions_framework.http
 def handle_chat_event(request):
     try:
@@ -337,6 +384,7 @@ def handle_chat_event(request):
     raw_text = str(((event.get("message") or {}).get("text") or "")).strip()
     prompt = _clean_chat_text(event)
     is_gmail_post = _is_gmail_app_message(event)
+    history_key = _context_key(event, user_name)
     if is_gmail_post:
         prompt = (
             "以下はGmailアプリがChatに投稿したメール内容です。"
@@ -348,12 +396,17 @@ def handle_chat_event(request):
         # メンションでもGmail投稿でもない通常メッセージは何もしない。
         return json.dumps({}, ensure_ascii=False), 200, {"Content-Type": "application/json"}
     elif _is_ambiguous_prompt(prompt):
-        return json.dumps(_thread_payload(event, _build_clarification_message()), ensure_ascii=False), 200, {
-            "Content-Type": "application/json"
-        }
+        recent_turns = _get_recent_turns(history_key, max_turns=2)
+        if not recent_turns:
+            return json.dumps(_thread_payload(event, _build_clarification_message()), ensure_ascii=False), 200, {
+                "Content-Type": "application/json"
+            }
+        prompt = _build_contextual_prompt(prompt, recent_turns)
 
     try:
         response_text = _run_agent_query(prompt, user_name)
+        if not is_gmail_post:
+            _remember_turn(history_key, _clean_chat_text(event), response_text)
         return json.dumps(_thread_payload(event, response_text), ensure_ascii=False), 200, {
             "Content-Type": "application/json"
         }

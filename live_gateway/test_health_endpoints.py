@@ -91,7 +91,12 @@ class HealthEndpointTests(unittest.TestCase):
         source = APP_FILE.read_text(encoding="utf-8")
         self.assertIn("def _is_ambiguous_prompt", source)
         self.assertIn("def _build_clarification_message", source)
+        self.assertIn("def _get_recent_turns", source)
+        self.assertIn("def _remember_turn", source)
+        self.assertIn("def _build_contextual_prompt", source)
         self.assertIn("if _is_ambiguous_prompt(message):", source)
+        self.assertIn("recent_turns = _get_recent_turns(user_id, max_turns=2)", source)
+        self.assertIn("message = _build_contextual_prompt(message, recent_turns)", source)
         self.assertIn('"message": "追加情報待ち"', source)
         self.assertIn('AMBIGUITY_PRESET_NAME = (os.environ.get("AMBIGUITY_PRESET") or "standard")', source)
 
