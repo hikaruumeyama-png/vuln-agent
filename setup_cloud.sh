@@ -68,7 +68,9 @@ APIS=(
   gmail.googleapis.com
   sheets.googleapis.com
   chat.googleapis.com
+  workspaceevents.googleapis.com
   bigquery.googleapis.com
+  pubsub.googleapis.com
   cloudbuild.googleapis.com
   cloudfunctions.googleapis.com
   run.googleapis.com
@@ -361,6 +363,8 @@ BQ_SBOM_TABLE_ID=$(_sm_get vuln-agent-bq-sbom-table-id)
 BQ_OWNER_MAPPING_TABLE_ID=$(_sm_get vuln-agent-bq-owner-table-id)
 DEFAULT_CHAT_SPACE_ID=$(_sm_get vuln-agent-chat-space-id)
 BQ_HISTORY_TABLE_ID=$(_sm_get vuln-agent-bq-table-id)
+REMOTE_AGENT_MASTER=$(_sm_get vuln-agent-master-agent-resource-name)
+REMOTE_AGENT_TEST=$(_sm_get vuln-agent-test-dialog-resource-name)
 GCP_PROJECT_ID=${PROJECT_ID}
 GCP_LOCATION=${REGION}
 ENVEOF
@@ -416,15 +420,15 @@ fi
 rm -f agent/.env
 
 # ====================================================
-# 7. Live Gateway / Chat Webhook のデプロイ
+# 7. Live Gateway / Chat Webhook / Workspace Events Webhook のデプロイ
 # ====================================================
-step "7/8: Live Gateway / Chat Webhook をデプロイしています..."
+step "7/8: Live Gateway / Chat Webhook / Workspace Events Webhook をデプロイしています..."
 
 if [[ -n "$AGENT_RESOURCE_NAME" ]]; then
   info "Agent Engine の存在を確認しています..."
   if ! _wait_engine_ready "$AGENT_RESOURCE_NAME"; then
     err "Agent Resource Name が無効です（ReasoningEngine が存在しません）: ${AGENT_RESOURCE_NAME}"
-    err "Live Gateway / Chat Webhook のデプロイを中止します。"
+    err "Live Gateway / Chat Webhook / Workspace Events Webhook のデプロイを中止します。"
     exit 1
   fi
 
@@ -484,8 +488,37 @@ if [[ -n "$AGENT_RESOURCE_NAME" ]]; then
 
   info "Chat API > 構成 のアプリURLに以下を設定してください:"
   info "  ${CHAT_WEBHOOK_URL}"
+
+  # --- Workspace Events Webhook (reaction trigger) ---
+  WORKSPACE_EVENTS_WEBHOOK_FUNCTION="vuln-agent-workspace-events-webhook"
+  info "Workspace Events Webhook を Cloud Functions にデプロイ中..."
+  if ! gcloud functions deploy "$WORKSPACE_EVENTS_WEBHOOK_FUNCTION" \
+    --gen2 \
+    --runtime=python312 \
+    --region="$REGION" \
+    --project="$PROJECT_ID" \
+    --source=workspace_events_webhook \
+    --entry-point=handle_workspace_event \
+    --trigger-http \
+    --allow-unauthenticated \
+    --service-account="$SA_EMAIL" \
+    --update-env-vars="GCP_PROJECT_ID=${PROJECT_ID},GCP_LOCATION=${REGION}" \
+    --remove-env-vars="AGENT_RESOURCE_NAME" \
+    --set-secrets="AGENT_RESOURCE_NAME=vuln-agent-resource-name:latest" \
+    --memory=1024MB \
+    --timeout=540s \
+    --quiet; then
+    err "Workspace Events Webhook のデプロイに失敗しました"
+    exit 1
+  fi
+
+  WORKSPACE_EVENTS_WEBHOOK_URL=$(gcloud functions describe "$WORKSPACE_EVENTS_WEBHOOK_FUNCTION" \
+    --region="$REGION" --project="$PROJECT_ID" --format='value(serviceConfig.uri)')
+  info "Workspace Events Webhook: ${WORKSPACE_EVENTS_WEBHOOK_URL}"
+  info "Workspace Events API の Pub/Sub Push 先として以下URLを設定してください:"
+  info "  ${WORKSPACE_EVENTS_WEBHOOK_URL}"
 else
-  warn "Agent Resource Name が不明のため、Live Gateway / Chat Webhook のデプロイをスキップしました"
+  warn "Agent Resource Name が不明のため、Live Gateway / Chat Webhook / Workspace Events Webhook のデプロイをスキップしました"
 fi
 
 # ====================================================
@@ -513,6 +546,7 @@ echo "  ────────────────────────
 echo "  Agent Engine   : ${AGENT_RESOURCE_NAME:-'(手動確認が必要)'}"
 echo "  Live Gateway   : ${GATEWAY_URL:-'(スキップ)'}"
 echo "  Chat Webhook   : ${CHAT_WEBHOOK_URL:-'(スキップ)'}"
+echo "  WS Events Hook : ${WORKSPACE_EVENTS_WEBHOOK_URL:-'(スキップ)'}"
 echo "  Web UI         : ${WEB_URL}"
 echo ""
 echo "  次のステップ:"
@@ -522,7 +556,9 @@ echo "     ${SA_EMAIL}"
 echo "  2. Google Chat アプリを GCP Console で設定 (Chat API > 構成)"
 echo "  3. Chat アプリを通知先スペースに追加 (スペース設定 > アプリと統合 > アプリを追加)"
 echo "     ※ 未追加の場合 403 権限エラーが発生します"
-echo "  4. Web UI を開いて Live Gateway に接続:"
+echo "  4. Workspace Events API で Chat reaction created/batchCreated を購読し、"
+echo "     Pub/Sub Push の通知先を WS Events Hook に設定"
+echo "  5. Web UI を開いて Live Gateway に接続:"
 echo "     ${WEB_URL}"
 if [[ -n "${GATEWAY_URL:-}" ]]; then
   echo "     Gateway URL: wss://$(echo "$GATEWAY_URL" | sed 's|https://||')/ws"

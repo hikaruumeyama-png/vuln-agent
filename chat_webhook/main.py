@@ -66,6 +66,65 @@ _CLEAR_CONTEXT_KEYWORDS = (
     "メール",
     "製品",
 )
+_COMPLEXITY_KEYWORDS = (
+    "比較",
+    "違い",
+    "優先順位",
+    "トレードオフ",
+    "設計",
+    "アーキテクチャ",
+    "戦略",
+    "根拠",
+    "検証",
+    "段階",
+    "手順",
+    "実装",
+    "移行",
+    "分析",
+    "影響範囲",
+    "原因",
+    "対策",
+    "why",
+    "compare",
+    "trade-off",
+    "architecture",
+    "design",
+    "plan",
+)
+_STRUCTURED_OUTPUT_HINTS = (
+    "表で",
+    "表形式",
+    "箇条書き",
+    "json",
+    "yaml",
+    "手順書",
+    "チェックリスト",
+    "テンプレート",
+    "章立て",
+)
+_MULTI_INTENT_HINTS = (
+    "かつ",
+    "また",
+    "さらに",
+    "加えて",
+    "その上で",
+    "うえで",
+    "and",
+    "also",
+    "then",
+)
+_MODEL_ROUTING_ENABLED = (os.environ.get("MODEL_ROUTING_ENABLED", "true") or "true").strip().lower() in {
+    "1",
+    "true",
+    "yes",
+    "on",
+}
+try:
+    _MODEL_ROUTING_SCORE_THRESHOLD = int((os.environ.get("MODEL_ROUTING_SCORE_THRESHOLD") or "4").strip())
+except Exception:
+    _MODEL_ROUTING_SCORE_THRESHOLD = 4
+if _MODEL_ROUTING_SCORE_THRESHOLD < 1:
+    _MODEL_ROUTING_SCORE_THRESHOLD = 1
 
 
 def _get_secret_client():
@@ -130,11 +189,24 @@ def _sender_info(event: dict[str, Any]) -> dict[str, str]:
 
 def _looks_like_gmail_digest(text: str) -> bool:
     t = text.lower()
-    return (
-        ("subject:" in t and "from:" in t)
-        or ("差出人:" in t and "件名:" in t)
-        or ("gmail" in t and "new email" in t)
-    )
+    signals = 0
+
+    if "from:" in t or "差出人:" in t:
+        signals += 1
+    if "subject:" in t or "件名:" in t:
+        signals += 1
+    if re.search(r"^\[[^\]]+\]", text.strip()):
+        signals += 1
+    if "view message" in t:
+        signals += 1
+    if "to view the full email" in t or "google groups" in t:
+        signals += 1
+    if re.search(r"\bcve-\d{4}-\d{4,7}\b", t):
+        signals += 1
+    if "gmail" in t and "new email" in t:
+        signals += 2
+
+    return signals >= 2
 
 
 def _is_gmail_app_message(event: dict[str, Any]) -> bool:
@@ -184,15 +256,100 @@ def _build_clarification_message() -> str:
     )
 
 
-def _run_agent_query(prompt: str, user_id: str) -> str:
-    project_id = _get_project_id()
-    location = os.environ.get("GCP_LOCATION", "asia-northeast1")
-    agent_name = (
+def _estimate_prompt_complexity(prompt: str) -> dict[str, Any]:
+    text = (prompt or "").strip()
+    normalized = re.sub(r"\s+", " ", text).lower()
+    score = 0
+    reasons: list[str] = []
+
+    if len(normalized) >= 180:
+        score += 2
+        reasons.append("long_input")
+    elif len(normalized) >= 80:
+        score += 1
+        reasons.append("mid_length_input")
+
+    if text.count("\n") >= 3:
+        score += 1
+        reasons.append("multi_line_request")
+
+    cve_count = len(re.findall(r"\bcve-\d{4}-\d{4,7}\b", normalized))
+    if cve_count >= 2:
+        score += 2
+        reasons.append("multiple_cves")
+
+    if sum(1 for token in _MULTI_INTENT_HINTS if token in normalized) >= 2:
+        score += 2
+        reasons.append("multi_intent")
+
+    if any(token in normalized for token in _COMPLEXITY_KEYWORDS):
+        score += 2
+        reasons.append("analysis_or_planning")
+
+    if any(token in normalized for token in _STRUCTURED_OUTPUT_HINTS):
+        score += 1
+        reasons.append("structured_output")
+
+    if normalized.count("?") + normalized.count("？") >= 2:
+        score += 1
+        reasons.append("multi_questions")
+
+    return {
+        "score": score,
+        "tier": "pro" if score >= _MODEL_ROUTING_SCORE_THRESHOLD else "flash",
+        "reasons": reasons,
+        "threshold": _MODEL_ROUTING_SCORE_THRESHOLD,
+    }
+
+
+def _resolve_agent_resource_name(prompt: str) -> tuple[str, dict[str, Any]]:
+    base_resource = (
         (os.environ.get("AGENT_RESOURCE_NAME") or "").strip()
         or _get_config("AGENT_RESOURCE_NAME", "vuln-agent-resource-name", "")
     )
+    flash_resource = (
+        (os.environ.get("AGENT_RESOURCE_NAME_FLASH") or "").strip()
+        or _get_config("AGENT_RESOURCE_NAME_FLASH", "vuln-agent-resource-name-flash", "")
+        or base_resource
+    )
+    pro_resource = (
+        (os.environ.get("AGENT_RESOURCE_NAME_PRO") or "").strip()
+        or _get_config("AGENT_RESOURCE_NAME_PRO", "vuln-agent-resource-name-pro", "")
+        or base_resource
+    )
+
+    if not _MODEL_ROUTING_ENABLED:
+        selected = base_resource or pro_resource or flash_resource
+        return selected, {"routing_enabled": False, "tier": "single", "score": 0, "reasons": ["routing_disabled"]}
+
+    if not flash_resource or not pro_resource:
+        selected = base_resource or pro_resource or flash_resource
+        return selected, {
+            "routing_enabled": False,
+            "tier": "single",
+            "score": 0,
+            "reasons": ["missing_flash_or_pro_resource"],
+        }
+
+    complexity = _estimate_prompt_complexity(prompt)
+    selected = pro_resource if complexity["tier"] == "pro" else flash_resource
+    return selected, {"routing_enabled": True, **complexity}
+
+
+def _run_agent_query(prompt: str, user_id: str) -> str:
+    project_id = _get_project_id()
+    location = os.environ.get("GCP_LOCATION", "asia-northeast1")
+    agent_name, route = _resolve_agent_resource_name(prompt)
     if not project_id or not agent_name:
         raise RuntimeError("GCP_PROJECT_ID and AGENT_RESOURCE_NAME are required")
+    logger.info(
+        "model routing: enabled=%s tier=%s score=%s threshold=%s reasons=%s",
+        route.get("routing_enabled"),
+        route.get("tier"),
+        route.get("score"),
+        route.get("threshold"),
+        ",".join(route.get("reasons", [])),
+    )
 
     vertexai.init(project=project_id, location=location)
     from vertexai import Client
@@ -388,8 +545,20 @@ def handle_chat_event(request):
     if is_gmail_post:
         prompt = (
             "以下はGmailアプリがChatに投稿したメール内容です。"
-            "脆弱性通知として解析し、重要なポイントを簡潔に要約してください。"
-            "CVE/CVSS/影響システム/推奨対応を優先して示し、必要なら担当者通知アクションを実行してください。\n\n"
+            "SIDfm以外のフォーマットを含む可能性があるため、まず脆弱性関連通知かを判定してください。"
+            "脆弱性関連なら、以下の依頼票テンプレートを埋めた形式で出力してください。"
+            "必ずプレーンテキストで、コピペしやすい改行を維持してください。"
+            "不明な値は「要確認」と記載してください。\n\n"
+            "【希望納期】\n"
+            "【大分類】017.脆弱性対応（情シス専用）\n"
+            "【小分類】002.IT基盤チーム\n"
+            "【依頼概要】\n"
+            "【対象の機器/アプリ】\n"
+            "【脆弱性情報（リンク貼り付け）】\n"
+            "【CVSSスコア】\n"
+            "【依頼内容】\n"
+            "【対応完了目標】\n\n"
+            "必要なら上記の後ろに補足として「備考」を1段落だけ追加してください。\n\n"
             f"{raw_text}"
         )
     elif not prompt:

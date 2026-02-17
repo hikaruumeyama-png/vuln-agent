@@ -30,6 +30,8 @@ except ImportError:
 GCP_PROJECT_ID = os.environ.get("GCP_PROJECT_ID")
 GCP_LOCATION = os.environ.get("GCP_LOCATION", "asia-northeast1")
 AGENT_RESOURCE_NAME = os.environ.get("AGENT_RESOURCE_NAME")
+AGENT_RESOURCE_NAME_FLASH = os.environ.get("AGENT_RESOURCE_NAME_FLASH")
+AGENT_RESOURCE_NAME_PRO = os.environ.get("AGENT_RESOURCE_NAME_PRO")
 LIVE_GREETING_TEXT = os.environ.get(
     "LIVE_GREETING_TEXT",
     "こんにちは。脆弱性管理AIエージェントです。ご要望をどうぞ。",
@@ -141,6 +143,65 @@ CLEAR_CONTEXT_KEYWORDS = (
     "メール",
     "製品",
 )
+COMPLEXITY_KEYWORDS = (
+    "比較",
+    "違い",
+    "優先順位",
+    "トレードオフ",
+    "設計",
+    "アーキテクチャ",
+    "戦略",
+    "根拠",
+    "検証",
+    "段階",
+    "手順",
+    "実装",
+    "移行",
+    "分析",
+    "影響範囲",
+    "原因",
+    "対策",
+    "why",
+    "compare",
+    "trade-off",
+    "architecture",
+    "design",
+    "plan",
+)
+STRUCTURED_OUTPUT_HINTS = (
+    "表で",
+    "表形式",
+    "箇条書き",
+    "json",
+    "yaml",
+    "手順書",
+    "チェックリスト",
+    "テンプレート",
+    "章立て",
+)
+MULTI_INTENT_HINTS = (
+    "かつ",
+    "また",
+    "さらに",
+    "加えて",
+    "その上で",
+    "うえで",
+    "and",
+    "also",
+    "then",
+)
+MODEL_ROUTING_ENABLED = (os.environ.get("MODEL_ROUTING_ENABLED", "true") or "true").strip().lower() in {
+    "1",
+    "true",
+    "yes",
+    "on",
+}
+try:
+    MODEL_ROUTING_SCORE_THRESHOLD = int((os.environ.get("MODEL_ROUTING_SCORE_THRESHOLD") or "4").strip())
+except Exception:
+    MODEL_ROUTING_SCORE_THRESHOLD = 4
+if MODEL_ROUTING_SCORE_THRESHOLD < 1:
+    MODEL_ROUTING_SCORE_THRESHOLD = 1
 
 logger = logging.getLogger(__name__)
 RECENT_TURNS: dict[str, deque[dict[str, str]]] = {}
@@ -186,6 +247,75 @@ def _build_clarification_message() -> str:
         "1) 対象（例: CVE番号 / 製品名 / システム名）\n"
         "2) 知りたい内容（影響範囲 / 優先度 / 対応方法 など）"
     )
+
+
+def _estimate_prompt_complexity(prompt: str) -> dict[str, Any]:
+    text = (prompt or "").strip()
+    normalized = " ".join(text.split()).lower()
+    score = 0
+    reasons: list[str] = []
+
+    if len(normalized) >= 180:
+        score += 2
+        reasons.append("long_input")
+    elif len(normalized) >= 80:
+        score += 1
+        reasons.append("mid_length_input")
+
+    if text.count("\n") >= 3:
+        score += 1
+        reasons.append("multi_line_request")
+
+    cve_count = len(re.findall(r"\bcve-\d{4}-\d{4,7}\b", normalized))
+    if cve_count >= 2:
+        score += 2
+        reasons.append("multiple_cves")
+
+    if sum(1 for token in MULTI_INTENT_HINTS if token in normalized) >= 2:
+        score += 2
+        reasons.append("multi_intent")
+
+    if any(token in normalized for token in COMPLEXITY_KEYWORDS):
+        score += 2
+        reasons.append("analysis_or_planning")
+
+    if any(token in normalized for token in STRUCTURED_OUTPUT_HINTS):
+        score += 1
+        reasons.append("structured_output")
+
+    if normalized.count("?") + normalized.count("？") >= 2:
+        score += 1
+        reasons.append("multi_questions")
+
+    return {
+        "score": score,
+        "tier": "pro" if score >= MODEL_ROUTING_SCORE_THRESHOLD else "flash",
+        "reasons": reasons,
+        "threshold": MODEL_ROUTING_SCORE_THRESHOLD,
+    }
+
+
+def _resolve_agent_resource_name(prompt: str) -> tuple[str, dict[str, Any]]:
+    base_resource = (AGENT_RESOURCE_NAME or "").strip()
+    flash_resource = (AGENT_RESOURCE_NAME_FLASH or "").strip() or base_resource
+    pro_resource = (AGENT_RESOURCE_NAME_PRO or "").strip() or base_resource
+
+    if not MODEL_ROUTING_ENABLED:
+        selected = base_resource or pro_resource or flash_resource
+        return selected, {"routing_enabled": False, "tier": "single", "score": 0, "reasons": ["routing_disabled"]}
+
+    if not flash_resource or not pro_resource:
+        selected = base_resource or pro_resource or flash_resource
+        return selected, {
+            "routing_enabled": False,
+            "tier": "single",
+            "score": 0,
+            "reasons": ["missing_flash_or_pro_resource"],
+        }
+
+    complexity = _estimate_prompt_complexity(prompt)
+    selected = pro_resource if complexity["tier"] == "pro" else flash_resource
+    return selected, {"routing_enabled": True, **complexity}
 
 
 def _get_recent_turns(user_id: str, max_turns: int = 2) -> list[dict[str, str]]:
@@ -443,6 +573,57 @@ def _preview_text(value: Any, limit: int = 280) -> str:
     return compact[:limit] + "..."
 
 
+def _extract_a2a_call_text(tool_name: str, args: dict[str, Any]) -> str:
+    if tool_name == "call_remote_agent":
+        return str(args.get("message") or "").strip()
+    if tool_name == "call_master_agent":
+        explicit = str(args.get("message") or "").strip()
+        if explicit:
+            return explicit
+        objective = str(args.get("objective") or "").strip()
+        task_type = str(args.get("task_type") or "").strip()
+        actions = args.get("requested_actions") or []
+        action_text = ""
+        if isinstance(actions, list):
+            values = [str(x).strip() for x in actions if str(x).strip()]
+            if values:
+                action_text = " / ".join(values[:2])
+        if objective and action_text:
+            return f"{objective} ({action_text})"
+        if objective:
+            return objective
+        if task_type:
+            return task_type
+    return ""
+
+
+def _extract_a2a_request_text_from_result(payload: dict[str, Any]) -> str:
+    handoff = payload.get("handoff")
+    if isinstance(handoff, dict):
+        objective = str(handoff.get("objective") or "").strip()
+        task_type = str(handoff.get("task_type") or "").strip()
+        actions = handoff.get("requested_actions") or []
+        action_text = ""
+        if isinstance(actions, list):
+            values = [str(x).strip() for x in actions if str(x).strip()]
+            if values:
+                action_text = "\n".join(f"- {v}" for v in values[:4])
+        lines: list[str] = []
+        if task_type:
+            lines.append(f"種別: {task_type}")
+        if objective:
+            lines.append(f"目的: {objective}")
+        if action_text:
+            lines.append(f"依頼アクション:\n{action_text}")
+        if lines:
+            return "\n".join(lines).strip()
+
+    candidate = str(payload.get("message") or "").strip()
+    if candidate:
+        return candidate
+    return ""
+
+
 async def _safe_send(websocket: WebSocket, data: dict[str, Any]) -> None:
     """Send JSON via WebSocket, silently ignoring disconnection errors."""
     try:
@@ -482,8 +663,13 @@ app.add_middleware(
 
 
 def _init_vertex() -> Client:
-    if not GCP_PROJECT_ID or not AGENT_RESOURCE_NAME:
-        raise RuntimeError("GCP_PROJECT_ID または AGENT_RESOURCE_NAME が未設定です。")
+    has_any_resource = bool(
+        (AGENT_RESOURCE_NAME or "").strip()
+        or (AGENT_RESOURCE_NAME_FLASH or "").strip()
+        or (AGENT_RESOURCE_NAME_PRO or "").strip()
+    )
+    if not GCP_PROJECT_ID or not has_any_resource:
+        raise RuntimeError("GCP_PROJECT_ID と AGENT_RESOURCE_NAME(系) が未設定です。")
     vertexai.init(project=GCP_PROJECT_ID, location=GCP_LOCATION)
     return Client(project=GCP_PROJECT_ID, location=GCP_LOCATION)
 
@@ -529,7 +715,16 @@ async def _query_agent(
                 "text": clarification,
             }
 
-    app_client = client.agent_engines.get(name=AGENT_RESOURCE_NAME)
+    agent_resource_name, route = _resolve_agent_resource_name(original_message)
+    logger.info(
+        "model routing: enabled=%s tier=%s score=%s threshold=%s reasons=%s",
+        route.get("routing_enabled"),
+        route.get("tier"),
+        route.get("score"),
+        route.get("threshold"),
+        ",".join(route.get("reasons", [])),
+    )
+    app_client = client.agent_engines.get(name=agent_resource_name)
     chunks: list[str] = []
     total_tool_calls = 0
     completed_tool_calls = 0
@@ -595,18 +790,15 @@ async def _query_agent(
                             or fc_args.get("target_agent_id")
                             or ("master_agent" if tool_name == "call_master_agent" else "")
                         ).strip()
-                        message_preview = _preview_text(
-                            fc_args.get("message")
-                            or fc_args.get("objective")
-                            or ""
-                        )
+                        request_text = _extract_a2a_call_text(tool_name, fc_args)
                         await _safe_send(websocket, {
                             "type": "a2a_trace",
                             "request_id": request_id,
                             "phase": "call",
                             "tool": tool_name,
                             "agent_id": agent_id,
-                            "message_preview": message_preview,
+                            "message_preview": _preview_text(request_text),
+                            "request_text": request_text,
                             "timestamp": int(time.time()),
                         })
                     continue
@@ -636,6 +828,7 @@ async def _query_agent(
                     if tool_name in {"call_remote_agent", "call_master_agent"}:
                         payload = _as_dict(response_data)
                         agent_id = str(payload.get("agent_id") or "").strip()
+                        request_text = _extract_a2a_request_text_from_result(payload)
                         response_text = (
                             payload.get("response_text")
                             or payload.get("message")
@@ -649,6 +842,8 @@ async def _query_agent(
                             "tool": tool_name,
                             "agent_id": agent_id,
                             "status": status,
+                            "request_text": request_text,
+                            "response_text": str(response_text).strip(),
                             "response_preview": _preview_text(response_text),
                             "timestamp": int(time.time()),
                         })
