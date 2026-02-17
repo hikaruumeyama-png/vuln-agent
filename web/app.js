@@ -753,10 +753,20 @@ function showThinking() {
     <div class="thinking-dots">
       <span></span><span></span><span></span>
     </div>
+    <div class="thinking-status">思考中...</div>
   `;
   messagesArea.appendChild(thinkingBubble);
   messagesArea.scrollTop = messagesArea.scrollHeight;
   renderIcons(thinkingBubble);
+}
+
+function setThinkingStatus(text) {
+  showThinking();
+  if (!thinkingBubble) return;
+  const statusEl = thinkingBubble.querySelector(".thinking-status");
+  if (!statusEl) return;
+  const normalized = String(text || "").trim();
+  statusEl.textContent = normalized || "思考中...";
 }
 
 function hideThinking() {
@@ -766,12 +776,13 @@ function hideThinking() {
   }
 }
 
-// ── Agent Activity Feed ─────────────────────────────────
+// ── Agent Activity Feed / In-chat Thinking ──────────────
 function handleAgentActivity(payload) {
   const { activity, message, icon, status, detail, request_id: requestId, progress } = payload;
 
   if (requestId && currentActivityRequestId && requestId !== currentActivityRequestId) {
     clearActivityFeed();
+    hideThinking();
   }
   if (requestId) {
     currentActivityRequestId = requestId;
@@ -781,7 +792,7 @@ function handleAgentActivity(payload) {
     clearActivityFeed();
     updateActivityHeader(currentActivityRequestId, progress, "Thinking");
     addActivityItem("thinking", icon || "brain", message, true, null);
-    showThinking();
+    setThinkingStatus(message || "思考中...");
     return;
   }
 
@@ -789,12 +800,18 @@ function handleAgentActivity(payload) {
     markThinkingComplete(true);
     updateActivityHeader(currentActivityRequestId, progress, message || "Tool call");
     addActivityItem("tool-call", icon || "wrench", message, true, null);
+    setThinkingStatus(message || "確認中...");
     return;
   }
 
   if (activity === "tool_result") {
     updateActivityHeader(currentActivityRequestId, progress, message || "Tool result");
     markLastToolComplete(status === "success", detail);
+    if (status === "success") {
+      setThinkingStatus(message || "結果を整理中...");
+    } else {
+      setThinkingStatus(detail || message || "エラーを分析中...");
+    }
     return;
   }
 
@@ -803,11 +820,18 @@ function handleAgentActivity(payload) {
     markThinkingComplete(true);
     updateActivityHeader(currentActivityRequestId, progress, "Completed");
     addActivityItem("done", icon || "check-circle-2", message, false, null);
+    hideThinking();
     return;
   }
 }
 
 function clearActivityFeed() {
+  if (!activityFeed) {
+    activityCount = 0;
+    currentActivityRequestId = null;
+    updateActivityHeader(null, null, "Idle");
+    return;
+  }
   activityFeed.innerHTML = "";
   activityCount = 0;
   currentActivityRequestId = null;
@@ -815,6 +839,12 @@ function clearActivityFeed() {
 }
 
 function resetActivityFeed() {
+  if (!activityFeed) {
+    activityCount = 0;
+    currentActivityRequestId = null;
+    updateActivityHeader(null, null, "Idle");
+    return;
+  }
   activityFeed.innerHTML = `
     <div class="activity-empty">
       <i data-lucide="bot" class="empty-icon"></i>
@@ -921,6 +951,7 @@ async function stopAudioCapture(sendLiveStop = false) {
 }
 
 function addActivityItem(type, iconName, labelText, showSpinner, detailText) {
+  if (!activityFeed) return;
   activityCount++;
 
   const emptyEl = activityFeed.querySelector(".activity-empty");
@@ -956,6 +987,7 @@ function addActivityItem(type, iconName, labelText, showSpinner, detailText) {
 }
 
 function markThinkingComplete(success) {
+  if (!activityFeed) return;
   const items = activityFeed.querySelectorAll(".activity-item.activity-thinking");
   const lastItem = items[items.length - 1];
   if (!lastItem) return;
@@ -976,6 +1008,7 @@ function markThinkingComplete(success) {
 }
 
 function markLastToolComplete(success, detailText) {
+  if (!activityFeed) return;
   const items = activityFeed.querySelectorAll(".activity-item.activity-tool-call");
   const lastItem = items[items.length - 1];
   if (!lastItem) return;
@@ -1113,8 +1146,9 @@ registerProcessor("pcm-capture-processor", PcmCaptureProcessor);
 }
 
 // ── Clear Activity Button ───────────────────────────────
-clearActivityButton.addEventListener("click", () => {
+clearActivityButton?.addEventListener("click", () => {
   resetActivityFeed();
+  hideThinking();
 });
 clearA2aTraceButton?.addEventListener("click", () => {
   resetA2aTraceFeed();
@@ -1316,6 +1350,7 @@ connectButton.addEventListener("click", () => {
       if (payload.type === "error") {
         setRequestInFlight(false);
         markThinkingComplete(false);
+        hideThinking();
         showToast(payload.message || "Gateway error", "error");
         updateActivityHeader(currentActivityRequestId, null, "Error");
         appendMessage(payload.message || "Error", "system");
@@ -1353,6 +1388,7 @@ connectButton.addEventListener("click", () => {
     updateHealthMetrics(null);
     setMode("idle");
     updateActivityHeader(currentActivityRequestId, null, "Disconnected");
+    hideThinking();
     appendMessage(
       wasError ? "接続エラーで切断しました。" : manualDisconnectRequested ? "手動で切断しました。" : "切断しました。",
       "system",
@@ -1368,6 +1404,7 @@ connectButton.addEventListener("click", () => {
     hasSocketError = true;
     setRequestInFlight(false);
     markThinkingComplete(false);
+    hideThinking();
     setStatus(false, "Error");
   });
   })();
