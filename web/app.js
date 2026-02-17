@@ -9,6 +9,7 @@ const connectButton = document.getElementById("connect-button");
 const disconnectButton = document.getElementById("disconnect-button");
 const loginButton = document.getElementById("login-button");
 const logoutButton = document.getElementById("logout-button");
+const toggleHistoryButton = document.getElementById("toggle-history");
 const gatewayInput = document.getElementById("gateway-url");
 const chatForm = document.getElementById("chat-form");
 const chatInput = document.getElementById("chat-input");
@@ -28,8 +29,6 @@ const a2aTraceFeed = document.getElementById("a2a-trace-feed");
 const clearA2aTraceButton = document.getElementById("clear-a2a-trace");
 const historyFeed = document.getElementById("history-feed");
 const historyUser = document.getElementById("history-user");
-const clearHistoryButton = document.getElementById("clear-history");
-const newThreadButton = document.getElementById("new-thread");
 const pingLatencyText = document.getElementById("ping-latency");
 const reconnectCountText = document.getElementById("reconnect-count");
 const toastContainer = document.getElementById("toast-container");
@@ -1276,13 +1275,6 @@ clearActivityButton?.addEventListener("click", () => {
 clearA2aTraceButton?.addEventListener("click", () => {
   resetA2aTraceFeed();
 });
-clearHistoryButton?.addEventListener("click", () => {
-  clearHistoryForCurrentUser();
-});
-newThreadButton?.addEventListener("click", () => {
-  createAndSelectNewThread();
-  appendMessage("新しいスレッドを開始しました。", "system");
-});
 historyFeed?.addEventListener("click", (event) => {
   const target = event.target;
   if (!(target instanceof HTMLElement)) return;
@@ -1292,6 +1284,9 @@ historyFeed?.addEventListener("click", (event) => {
   if (!threadId) return;
   selectThread(threadId);
   appendMessage("過去スレッドを読み込みました。このまま会話を再開できます。", "system");
+});
+toggleHistoryButton?.addEventListener("click", () => {
+  document.body.classList.toggle("history-collapsed");
 });
 
 voiceSessionCloseButton.addEventListener("click", async () => {
