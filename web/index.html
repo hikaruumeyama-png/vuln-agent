@@ -65,6 +65,10 @@
             <i data-lucide="log-out"></i>
             <span>Logout</span>
           </button>
+          <button id="toggle-history" class="btn btn-outline" type="button">
+            <i data-lucide="panel-left"></i>
+            <span>History</span>
+          </button>
         </div>
       </section>
 
@@ -76,12 +80,6 @@
             <i data-lucide="history"></i>
             <span>Chat Threads</span>
             <span class="history-user" id="history-user">User: anonymous</span>
-            <button class="btn-icon" id="new-thread" title="New Thread">
-              <i data-lucide="plus"></i>
-            </button>
-            <button class="btn-icon" id="clear-history" title="Clear History">
-              <i data-lucide="x"></i>
-            </button>
           </div>
           <div id="history-feed" class="history-feed">
             <div class="activity-empty">
@@ -136,8 +134,8 @@
           <div class="panel-header">
             <i data-lucide="network"></i>
             <span>A2A Trace</span>
-            <button class="btn-icon" id="clear-a2a-trace" title="Clear A2A Trace">
-              <i data-lucide="x"></i>
+            <button class="btn btn-outline btn-clear" id="clear-a2a-trace" title="Clear A2A Trace">
+              <span>Clear</span>
             </button>
           </div>
           <div id="a2a-trace-feed" class="a2a-trace-feed">
