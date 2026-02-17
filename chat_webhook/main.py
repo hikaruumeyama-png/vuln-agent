@@ -69,6 +69,8 @@ _CLEAR_CONTEXT_KEYWORDS = (
 _ANALYSIS_TRIGGER_WORDS = (
     "確認して",
     "解析して",
+    "解析",
+    "確認",
     "見て",
     "チェックして",
     "analyze",
@@ -304,6 +306,44 @@ def _extract_space_name(event: dict[str, Any], thread_name: str) -> str:
     return ""
 
 
+def _extract_message_text_payload(message: dict[str, Any]) -> str:
+    def _walk(value: Any, out: list[str]) -> None:
+        if value is None:
+            return
+        if isinstance(value, str):
+            text = re.sub(r"\s+", " ", value).strip()
+            if text:
+                out.append(text)
+            return
+        if isinstance(value, list):
+            for item in value:
+                _walk(item, out)
+            return
+        if isinstance(value, dict):
+            for key in (
+                "text",
+                "formattedText",
+                "argumentText",
+                "fallbackText",
+                "title",
+                "subtitle",
+                "name",
+            ):
+                if key in value:
+                    _walk(value.get(key), out)
+            for child_key in ("cardsV2", "cards", "sections", "widgets", "textParagraph"):
+                if child_key in value:
+                    _walk(value.get(child_key), out)
+
+    chunks: list[str] = []
+    _walk(message, chunks)
+    if not chunks:
+        return ""
+    merged = " ".join(chunks)
+    merged = re.sub(r"\s+", " ", merged).strip()
+    return merged[:12000]
+
+
 def _fetch_thread_root_message_text(event: dict[str, Any]) -> str:
     message = event.get("message") or {}
     thread_name = str(((message.get("thread") or {}).get("name") or "")).strip()
@@ -320,6 +360,16 @@ def _fetch_thread_root_message_text(event: dict[str, Any]) -> str:
 
         credentials, _ = google.auth.default(scopes=["https://www.googleapis.com/auth/chat.bot"])
         service = build("chat", "v1", credentials=credentials, cache_discovery=False)
+
+        quoted_name = str((((event.get("message") or {}).get("quotedMessageMetadata") or {}).get("name") or "")).strip()
+        if quoted_name:
+            try:
+                quoted_message = service.spaces().messages().get(name=quoted_name).execute()
+                quoted_text = _extract_message_text_payload(quoted_message if isinstance(quoted_message, dict) else {})
+                if quoted_text:
+                    return quoted_text
+            except Exception:
+                pass
 
         def _list_messages(with_filter: bool) -> list[dict[str, Any]]:
             kwargs: dict[str, Any] = {"parent": space_name, "pageSize": 100}
@@ -345,9 +395,24 @@ def _fetch_thread_root_message_text(event: dict[str, Any]) -> str:
         def _sort_key(msg: dict[str, Any]) -> tuple[str, str]:
             return (str(msg.get("createTime") or ""), str(msg.get("name") or ""))
 
-        root_message = sorted(candidates, key=_sort_key)[0]
-        root_text = str(root_message.get("text") or root_message.get("formattedText") or "").strip()
-        return re.sub(r"\s+", " ", root_text).strip()
+        sorted_candidates = sorted(candidates, key=_sort_key)
+        extracted: list[str] = []
+        for msg in sorted_candidates:
+            if not isinstance(msg, dict):
+                continue
+            text = _extract_message_text_payload(msg)
+            if not text:
+                continue
+            extracted.append(text)
+
+        if not extracted:
+            return ""
+
+        # Prefer substantial root-like text (e.g., Gmail digest/card content).
+        substantial = [t for t in extracted if len(t) >= 30 and not _is_ambiguous_prompt(t)]
+        if substantial:
+            return substantial[0]
+        return extracted[0]
     except Exception as exc:
         logger.warning("Failed to fetch thread root message: %s", exc)
         return ""
