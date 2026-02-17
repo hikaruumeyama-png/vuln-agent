@@ -615,12 +615,30 @@ def _run_agent_query(prompt: str, user_id: str) -> str:
             return ""
         preferred = [x for x in candidates if re.search(r"[^\x00-\x7F]", x) or " " in x or "。" in x]
         selected = preferred if preferred else candidates
-        return "\n".join(selected[:6]).strip()
+        # 以前は6行に制限しており回答が途中で欠けやすかったため、上限を拡大する。
+        return "\n".join(selected[:60]).strip()
+
+    def _trim_response_text(text: str, max_chars: int = 12000) -> str:
+        if len(text) <= max_chars:
+            return text
+        # 文中カットを避けるため、できる限り境界で切る。
+        head = text[:max_chars]
+        cut_points = [
+            head.rfind("\n"),
+            head.rfind("。"),
+            head.rfind(". "),
+            head.rfind("! "),
+            head.rfind("? "),
+        ]
+        cut = max(cut_points)
+        if cut < int(max_chars * 0.6):
+            cut = max_chars
+        return head[:cut].rstrip() + "\n\n(長文のため一部を省略しました)"
 
     result = _normalize_chunks(chunks)
     if not result:
         return "回答を生成できませんでした。もう一度お試しください。"
-    return result[:3500]
+    return _trim_response_text(result)
 
 
 def _thread_payload(event: dict[str, Any], text: str) -> dict[str, Any]:
