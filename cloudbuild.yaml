@@ -192,6 +192,12 @@ steps:
           printf 'bootstrap' | gcloud secrets create vuln-agent-resource-name --data-file=- >/dev/null
         fi
         printf '%s' "$$latest_engine" | gcloud secrets versions add vuln-agent-resource-name --data-file=- >/dev/null
+        if ! gcloud secrets describe vuln-agent-resource-name-flash >/dev/null 2>&1; then
+          printf '%s' "$$latest_engine" | gcloud secrets create vuln-agent-resource-name-flash --data-file=- >/dev/null
+        fi
+        if ! gcloud secrets describe vuln-agent-resource-name-pro >/dev/null 2>&1; then
+          printf '%s' "$$latest_engine" | gcloud secrets create vuln-agent-resource-name-pro --data-file=- >/dev/null
+        fi
 
         retention_count="${_AGENT_ENGINE_RETENTION}"
         if ! [[ "$$retention_count" =~ ^[0-9]+$$ ]] || [ "$$retention_count" -lt 1 ]; then
@@ -239,7 +245,7 @@ steps:
           --source=live_gateway \
           --region=${_REGION} \
           --set-env-vars="GCP_PROJECT_ID=${PROJECT_ID},GCP_LOCATION=${_REGION}" \
-          --update-secrets="AGENT_RESOURCE_NAME=vuln-agent-resource-name:latest,GEMINI_API_KEY=vuln-agent-gemini-api-key:latest" \
+          --update-secrets="AGENT_RESOURCE_NAME=vuln-agent-resource-name:latest,AGENT_RESOURCE_NAME_FLASH=vuln-agent-resource-name-flash:latest,AGENT_RESOURCE_NAME_PRO=vuln-agent-resource-name-pro:latest,GEMINI_API_KEY=vuln-agent-gemini-api-key:latest" \
           --service-account=vuln-agent-sa@${PROJECT_ID}.iam.gserviceaccount.com \
           --allow-unauthenticated \
           --memory=512Mi \
@@ -276,8 +282,8 @@ steps:
           --trigger-http \
           --service-account=vuln-agent-sa@${PROJECT_ID}.iam.gserviceaccount.com \
           --update-env-vars="GCP_PROJECT_ID=${PROJECT_ID},GCP_LOCATION=${_REGION},CHAT_WEBHOOK_VERIFICATION_TOKEN=$$chat_verify_token" \
-          --remove-env-vars="AGENT_RESOURCE_NAME" \
-          --set-secrets="AGENT_RESOURCE_NAME=vuln-agent-resource-name:latest" \
+          --remove-env-vars="AGENT_RESOURCE_NAME,AGENT_RESOURCE_NAME_FLASH,AGENT_RESOURCE_NAME_PRO" \
+          --set-secrets="AGENT_RESOURCE_NAME=vuln-agent-resource-name:latest,AGENT_RESOURCE_NAME_FLASH=vuln-agent-resource-name-flash:latest,AGENT_RESOURCE_NAME_PRO=vuln-agent-resource-name-pro:latest" \
           --memory=1024MB \
           --timeout=540s \
           --quiet
