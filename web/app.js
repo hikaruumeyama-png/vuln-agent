@@ -29,6 +29,7 @@ const clearA2aTraceButton = document.getElementById("clear-a2a-trace");
 const historyFeed = document.getElementById("history-feed");
 const historyUser = document.getElementById("history-user");
 const clearHistoryButton = document.getElementById("clear-history");
+const newThreadButton = document.getElementById("new-thread");
 const pingLatencyText = document.getElementById("ping-latency");
 const reconnectCountText = document.getElementById("reconnect-count");
 const toastContainer = document.getElementById("toast-container");
@@ -50,8 +51,10 @@ const BARGE_IN_POST_PAUSE_MS = 260;
 const MAX_RENDERED_MESSAGES = 200;
 const HEALTH_PING_INTERVAL_MS = 30000;
 const GATEWAY_URL_STORAGE_KEY = "vuln_agent_gateway_url";
-const CHAT_HISTORY_STORAGE_PREFIX = "vuln_agent_chat_history";
-const MAX_HISTORY_ITEMS = 120;
+const CHAT_THREADS_STORAGE_PREFIX = "vuln_agent_chat_threads";
+const CHAT_ACTIVE_THREAD_STORAGE_PREFIX = "vuln_agent_chat_active_thread";
+const MAX_THREADS = 80;
+const MAX_THREAD_MESSAGES = 200;
 const GREETING_UNLOCK_TIMEOUT_MS = 20000;
 const DEFAULT_FIXED_GREETING = "こんにちは。脆弱性管理AIエージェントです。ご要望をどうぞ。";
 
@@ -97,8 +100,10 @@ let ambientNoiseRms = RMS_SILENCE_THRESHOLD;
 let lastPlaybackStartedAt = 0;
 let pendingBargeInResponse = false;
 let authState = { enabled: false, authenticated: true, user: null };
-let historyItems = [];
-let historyStorageKey = "";
+let threadList = [];
+let activeThreadId = "";
+let threadStorageKey = "";
+let activeThreadStorageKey = "";
 
 // ── Utility Functions ───────────────────────────────────
 function escapeHtml(str) {
@@ -453,8 +458,59 @@ function getHistoryUserLabel() {
   return "anonymous";
 }
 
-function getHistoryStorageKey() {
-  return `${CHAT_HISTORY_STORAGE_PREFIX}:${getHistoryUserId()}`;
+function getThreadStorageKey() {
+  return `${CHAT_THREADS_STORAGE_PREFIX}:${getHistoryUserId()}`;
+}
+
+function getActiveThreadStorageKey() {
+  return `${CHAT_ACTIVE_THREAD_STORAGE_PREFIX}:${getHistoryUserId()}`;
+}
+
+function getActiveThread() {
+  return threadList.find((thread) => thread.id === activeThreadId) || null;
+}
+
+function makeThreadTitleFromText(text) {
+  const normalized = String(text || "").trim().replace(/\s+/g, " ");
+  if (!normalized) return "新しいスレッド";
+  return normalized.slice(0, 28);
+}
+
+function createThread(initialText = "") {
+  const nowIso = new Date().toISOString();
+  return {
+    id: `th_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`,
+    title: makeThreadTitleFromText(initialText),
+    createdAt: nowIso,
+    updatedAt: nowIso,
+    messages: [],
+  };
+}
+
+function saveThreadsForCurrentUser() {
+  if (!threadStorageKey) threadStorageKey = getThreadStorageKey();
+  if (!activeThreadStorageKey) activeThreadStorageKey = getActiveThreadStorageKey();
+  const trimmed = threadList.slice(0, MAX_THREADS).map((thread) => ({
+    ...thread,
+    messages: Array.isArray(thread.messages) ? thread.messages.slice(-MAX_THREAD_MESSAGES) : [],
+  }));
+  threadList = trimmed;
+  window.localStorage.setItem(threadStorageKey, JSON.stringify(trimmed));
+  if (activeThreadId) {
+    window.localStorage.setItem(activeThreadStorageKey, activeThreadId);
+  } else {
+    window.localStorage.removeItem(activeThreadStorageKey);
+  }
+}
+
+function ensureActiveThread(createIfMissing = true) {
+  let active = getActiveThread();
+  if (active || !createIfMissing) return active;
+  active = createThread();
+  threadList.unshift(active);
+  activeThreadId = active.id;
+  saveThreadsForCurrentUser();
+  return active;
 }
 
 function renderHistoryFeed() {
@@ -462,85 +518,148 @@ function renderHistoryFeed() {
   if (historyUser) {
     historyUser.textContent = `User: ${getHistoryUserLabel()}`;
   }
-  if (!historyItems.length) {
+  if (!threadList.length) {
     historyFeed.innerHTML = `
       <div class="activity-empty">
         <i data-lucide="history" class="empty-icon"></i>
-        <p>このユーザーのチャット履歴がここに表示されます。</p>
+        <p>このユーザーの過去スレッドがここに表示されます。</p>
       </div>
     `;
     renderIcons(historyFeed);
     return;
   }
   historyFeed.innerHTML = "";
-  for (const entry of historyItems) {
+  for (const thread of threadList) {
     const item = document.createElement("div");
-    const role = entry.role === "user" ? "user" : "agent";
-    const roleText = role === "user" ? "You" : "Agent";
-    const roleIcon = role === "user" ? "user" : "bot";
-    item.className = `history-item ${role}`;
+    const isActive = thread.id === activeThreadId;
+    const lastMessage = Array.isArray(thread.messages) && thread.messages.length
+      ? String(thread.messages[thread.messages.length - 1].text || "")
+      : "";
+    const updatedAt = thread.updatedAt
+      ? new Date(thread.updatedAt).toLocaleString([], { hour: "2-digit", minute: "2-digit", month: "2-digit", day: "2-digit" })
+      : "";
+    item.className = `thread-item ${isActive ? "active" : ""}`;
+    item.dataset.threadId = thread.id;
     item.innerHTML = `
-      <div class="history-item-header">
-        <i data-lucide="${roleIcon}"></i>
-        <span>${escapeHtml(roleText)}</span>
-        <span>${escapeHtml(String(entry.at || ""))}</span>
+      <div class="thread-item-header">
+        <i data-lucide="messages-square"></i>
+        <span>${escapeHtml(updatedAt)}</span>
       </div>
-      <div class="history-item-text">${escapeHtml(String(entry.text || ""))}</div>
+      <div class="thread-item-title">${escapeHtml(String(thread.title || "新しいスレッド"))}</div>
+      <div class="thread-item-preview">${escapeHtml(lastMessage || "メッセージなし")}</div>
+      <div class="thread-item-meta">${(thread.messages || []).length}件</div>
     `;
     historyFeed.appendChild(item);
     renderIcons(item);
   }
-  historyFeed.scrollTop = historyFeed.scrollHeight;
+}
+
+function hydrateChatFromActiveThread() {
+  const active = getActiveThread();
+  hideThinking();
+  messagesArea.innerHTML = "";
+  liveTextBubble = null;
+  liveUserVoiceBubble = null;
+  if (!active || !Array.isArray(active.messages) || !active.messages.length) return;
+  for (const msg of active.messages) {
+    const role = msg.role === "agent" ? "agent" : "user";
+    appendMessage(String(msg.text || ""), role, { persist: false, keepThinking: true });
+  }
 }
 
 function loadHistoryForCurrentUser() {
-  historyStorageKey = getHistoryStorageKey();
+  threadStorageKey = getThreadStorageKey();
+  activeThreadStorageKey = getActiveThreadStorageKey();
   try {
-    const raw = window.localStorage.getItem(historyStorageKey);
-    if (!raw) {
-      historyItems = [];
-      renderHistoryFeed();
-      return;
-    }
-    const parsed = JSON.parse(raw);
-    historyItems = Array.isArray(parsed) ? parsed.slice(-MAX_HISTORY_ITEMS) : [];
+    const rawThreads = window.localStorage.getItem(threadStorageKey);
+    const parsedThreads = rawThreads ? JSON.parse(rawThreads) : [];
+    threadList = Array.isArray(parsedThreads) ? parsedThreads.slice(0, MAX_THREADS) : [];
   } catch {
-    historyItems = [];
+    threadList = [];
   }
+  const storedActive = window.localStorage.getItem(activeThreadStorageKey) || "";
+  activeThreadId = threadList.some((thread) => thread.id === storedActive)
+    ? storedActive
+    : (threadList[0]?.id || "");
+  ensureActiveThread(true);
+  saveThreadsForCurrentUser();
   renderHistoryFeed();
+  hydrateChatFromActiveThread();
 }
 
-function saveHistoryForCurrentUser() {
-  if (!historyStorageKey) {
-    historyStorageKey = getHistoryStorageKey();
+function createAndSelectNewThread(initialText = "") {
+  const next = createThread(initialText);
+  threadList.unshift(next);
+  if (threadList.length > MAX_THREADS) {
+    threadList = threadList.slice(0, MAX_THREADS);
   }
-  window.localStorage.setItem(historyStorageKey, JSON.stringify(historyItems.slice(-MAX_HISTORY_ITEMS)));
+  activeThreadId = next.id;
+  saveThreadsForCurrentUser();
+  renderHistoryFeed();
+  hydrateChatFromActiveThread();
+}
+
+function selectThread(threadId) {
+  if (!threadId) return;
+  if (!threadList.some((thread) => thread.id === threadId)) return;
+  activeThreadId = threadId;
+  saveThreadsForCurrentUser();
+  renderHistoryFeed();
+  hydrateChatFromActiveThread();
+}
+
+function buildThreadContextPrompt(currentMessage) {
+  const active = getActiveThread();
+  if (!active || !Array.isArray(active.messages) || !active.messages.length) {
+    return currentMessage;
+  }
+  const history = active.messages
+    .filter((entry) => entry && (entry.role === "user" || entry.role === "agent") && entry.text)
+    .slice(-10);
+  if (!history.length) return currentMessage;
+  const lines = ["以下は同一スレッドの直近会話です。必要に応じて参照してください。"];
+  for (const entry of history) {
+    const role = entry.role === "agent" ? "Agent" : "User";
+    lines.push(`${role}: ${String(entry.text).trim()}`);
+  }
+  lines.push("");
+  lines.push(`現在のユーザー発話: ${currentMessage}`);
+  return lines.join("\n");
 }
 
 function appendHistoryEntry(role, text) {
   const normalized = String(text || "").trim();
   if (!normalized) return;
   if (role !== "user" && role !== "agent") return;
-  if (historyStorageKey !== getHistoryStorageKey()) {
-    loadHistoryForCurrentUser();
+  const active = ensureActiveThread(true);
+  if (!active) return;
+  const nowIso = new Date().toISOString();
+  if (role === "user" && (!active.messages || active.messages.length === 0)) {
+    active.title = makeThreadTitleFromText(normalized);
   }
-  historyItems.push({
+  active.messages.push({
     role,
     text: normalized.slice(0, 4000),
-    at: formatTime(),
+    at: nowIso,
   });
-  if (historyItems.length > MAX_HISTORY_ITEMS) {
-    historyItems = historyItems.slice(-MAX_HISTORY_ITEMS);
+  if (active.messages.length > MAX_THREAD_MESSAGES) {
+    active.messages = active.messages.slice(-MAX_THREAD_MESSAGES);
   }
-  saveHistoryForCurrentUser();
+  active.updatedAt = nowIso;
+  threadList = [active, ...threadList.filter((thread) => thread.id !== active.id)].slice(0, MAX_THREADS);
+  activeThreadId = active.id;
+  saveThreadsForCurrentUser();
   renderHistoryFeed();
 }
 
 function clearHistoryForCurrentUser() {
-  historyItems = [];
-  historyStorageKey = getHistoryStorageKey();
-  window.localStorage.removeItem(historyStorageKey);
+  if (!activeThreadId) return;
+  threadList = threadList.filter((thread) => thread.id !== activeThreadId);
+  activeThreadId = threadList[0]?.id || "";
+  ensureActiveThread(true);
+  saveThreadsForCurrentUser();
   renderHistoryFeed();
+  hydrateChatFromActiveThread();
 }
 
 function applyAuthState(nextAuthState) {
@@ -637,8 +756,12 @@ function unlockGreetingAndListening(withNotice = true, timeoutFallback = false) 
 }
 
 // ── Chat Messages ───────────────────────────────────────
-function appendMessage(text, type) {
-  hideThinking();
+function appendMessage(text, type, options = {}) {
+  const persist = options.persist !== false;
+  const keepThinking = options.keepThinking === true;
+  if (!keepThinking) {
+    hideThinking();
+  }
 
   const bubble = document.createElement("div");
   bubble.className = `message ${type}`;
@@ -663,7 +786,7 @@ function appendMessage(text, type) {
   pruneMessages();
   messagesArea.scrollTop = messagesArea.scrollHeight;
   renderIcons(bubble);
-  if (type === "user" || type === "agent") {
+  if (persist && (type === "user" || type === "agent")) {
     appendHistoryEntry(type, text);
   }
 }
@@ -1156,6 +1279,20 @@ clearA2aTraceButton?.addEventListener("click", () => {
 clearHistoryButton?.addEventListener("click", () => {
   clearHistoryForCurrentUser();
 });
+newThreadButton?.addEventListener("click", () => {
+  createAndSelectNewThread();
+  appendMessage("新しいスレッドを開始しました。", "system");
+});
+historyFeed?.addEventListener("click", (event) => {
+  const target = event.target;
+  if (!(target instanceof HTMLElement)) return;
+  const item = target.closest(".thread-item");
+  if (!item) return;
+  const threadId = item.getAttribute("data-thread-id");
+  if (!threadId) return;
+  selectThread(threadId);
+  appendMessage("過去スレッドを読み込みました。このまま会話を再開できます。", "system");
+});
 
 voiceSessionCloseButton.addEventListener("click", async () => {
   await stopAudioCapture(true);
@@ -1560,9 +1697,10 @@ chatForm.addEventListener("submit", (event) => {
   const message = chatInput.value.trim();
   if (!message) return;
 
+  const messageForAgent = buildThreadContextPrompt(message);
   appendMessage(message, "user");
   setRequestInFlight(true);
-  socket.send(JSON.stringify({ type: "user_text", text: message }));
+  socket.send(JSON.stringify({ type: "user_text", text: messageForAgent }));
   chatInput.value = "";
   resizeChatInput();
     resetLiveTextBubble();
