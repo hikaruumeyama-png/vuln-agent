@@ -14,6 +14,7 @@ SIDfm の脆弱性通知メールを取り込み、SBOM と突合して担当者
 ## 構成
 - `agent/`: Agent Engine 本体（ツール実装含む）
 - `chat_webhook/`: Google Chat メンション受信Webhook
+- `workspace_events_webhook/`: Google Workspace Events (Chatリアクション) 受信Webhook
 - `live_gateway/`: リアルタイム対話ゲートウェイ（任意）
 - `web/`: Web UI（任意）
 - `test_dialog_agent/`: A2A疎通確認用の最小テスト対話エージェント
@@ -53,6 +54,7 @@ bash setup_cloud.sh
 ```
 
 このスクリプトで API 有効化、必要 Secret 作成、BigQuery テーブル作成、Agent/Live Gateway/Chat Webhook などのデプロイまで実行します。
+また、`vuln-agent-workspace-events-webhook` もデプロイされ、Workspace Events API の Pub/Sub Push 先に利用できます。
 
 ## BigQuery 利用時の必須設定
 `SBOM_DATA_BACKEND=bigquery` の場合、以下 Secret が必要です。
@@ -135,6 +137,7 @@ gcloud builds submit --config cloudbuild.yaml
 gcloud logging read 'resource.type="aiplatform.googleapis.com/ReasoningEngine"' --limit=20
 gcloud run services logs read vuln-agent-live-gateway --region=asia-northeast1 --limit=20
 gcloud functions logs read vuln-agent-chat-webhook --region=asia-northeast1 --limit=20
+gcloud functions logs read vuln-agent-workspace-events-webhook --region=asia-northeast1 --limit=20
 ```
 
 ## ツール一覧（Agent）
@@ -164,6 +167,12 @@ gcloud functions logs read vuln-agent-chat-webhook --region=asia-northeast1 --li
 ## 回答品質を上げる設定
 - モデルは `AGENT_MODEL`（または Secret `vuln-agent-model-name`）で上書き可能  
   例: `gemini-2.5-pro`
+- Chat Webhook / Live Gateway でリクエスト単位にモデルを使い分ける場合:
+  - `AGENT_RESOURCE_NAME_FLASH`（Secret: `vuln-agent-resource-name-flash`）
+  - `AGENT_RESOURCE_NAME_PRO`（Secret: `vuln-agent-resource-name-pro`）
+  - `MODEL_ROUTING_ENABLED=true`（既定）
+  - `MODEL_ROUTING_SCORE_THRESHOLD=4`（推奨）
+- 推奨運用: Flash 側 Agent は `Gemini 3 Flash`、Pro 側 Agent は `Gemini 3 Pro` で別々にデプロイし、上記2つの Resource Name を設定
 - 最新情報が必要な質問は、エージェントが `web_search` / `fetch_web_content` を使って根拠確認して回答します。
 - 通常回答は `結論 / 根拠 / 不確実性 / 次アクション` の固定フォーマットで返すように指示済みです。
 - 大きい依頼に対しては、細粒度ツールを段階的に組み合わせて回答するよう指示済みです。
@@ -182,5 +191,6 @@ gcloud functions logs read vuln-agent-chat-webhook --region=asia-northeast1 --li
 - `docs/SETUP_GMAIL.md`
 - `docs/SETUP_CHAT.md`
 - `docs/SETUP_CHAT_INTERACTIVE.md`
+- `docs/SETUP_WORKSPACE_EVENTS.md`
 - `docs/SETUP_A2A.md`
 - `docs/EXTENSION_SIDEPANEL_BACKLOG.md`（ブラウザ拡張の開発予定）

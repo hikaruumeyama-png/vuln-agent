@@ -1,5 +1,6 @@
 import importlib.util
 import json
+import os
 from pathlib import Path
 import sys
 import types
@@ -47,6 +48,8 @@ class ChatWebhookTests(unittest.TestCase):
     def setUp(self):
         if hasattr(self.chat_webhook, "_RECENT_TURNS"):
             self.chat_webhook._RECENT_TURNS.clear()
+        for key in ("AGENT_RESOURCE_NAME", "AGENT_RESOURCE_NAME_FLASH", "AGENT_RESOURCE_NAME_PRO"):
+            os.environ.pop(key, None)
 
     def test_clean_chat_text_prefers_argument_text(self):
         text = self.chat_webhook._clean_chat_text(
@@ -57,6 +60,21 @@ class ChatWebhookTests(unittest.TestCase):
     def test_clean_chat_text_removes_mentions(self):
         text = self.chat_webhook._clean_chat_text({"message": {"text": "<users/12345> こんにちは"}})
         self.assertEqual(text, "こんにちは")
+
+    def test_is_gmail_app_message_detects_card_style_digest(self):
+        payload = {
+            "message": {
+                "sender": {"displayName": "Notifier", "type": "BOT", "name": "users/abc"},
+                "text": (
+                    "[悪用された脆弱性] Apple複数のバッファオーバーフロー脆弱性\n"
+                    "From: yoshihisa.kamimura@rakus.co.jp\n"
+                    "CVE-2026-20700\n"
+                    "View message\n"
+                    "To view the full email in Google Groups..."
+                ),
+            }
+        }
+        self.assertTrue(self.chat_webhook._is_gmail_app_message(payload))
 
     def test_handle_chat_event_returns_threaded_response(self):
         self.chat_webhook._is_valid_token = lambda event: True
@@ -120,11 +138,61 @@ class ChatWebhookTests(unittest.TestCase):
         body2 = json.loads(raw_body2)
         self.assertIn("echo:111", body2["text"])
 
+    def test_handle_chat_event_processes_card_style_notification(self):
+        self.chat_webhook._is_valid_token = lambda event: True
+        captured: list[str] = []
+
+        def _fake_run(prompt, user_id):
+            captured.append(prompt)
+            return "ok"
+
+        self.chat_webhook._run_agent_query = _fake_run
+        payload = {
+            "type": "MESSAGE",
+            "user": {"name": "users/111"},
+            "message": {
+                "sender": {"displayName": "Notifier", "type": "BOT", "name": "users/abc"},
+                "text": (
+                    "[悪用された脆弱性] Apple複数のバッファオーバーフロー脆弱性\n"
+                    "From: sidfm-notification@rakus.co.jp\n"
+                    "CVE-2026-20700\n"
+                    "View message"
+                ),
+                "thread": {"name": "spaces/AAA/threads/BBB"},
+            },
+        }
+        raw_body, status, _headers = self.chat_webhook.handle_chat_event(_FakeRequest(payload))
+        self.assertEqual(status, 200)
+        self.assertEqual(len(captured), 1)
+        self.assertIn("GmailアプリがChatに投稿したメール内容", captured[0])
+        self.assertIn("【希望納期】", captured[0])
+        self.assertIn("【脆弱性情報（リンク貼り付け）】", captured[0])
+        body = json.loads(raw_body)
+        self.assertEqual(body["text"], "ok")
+
     def test_handle_chat_event_rejects_invalid_token(self):
         self.chat_webhook._is_valid_token = lambda event: False
         payload = {"type": "MESSAGE", "message": {"text": "test"}}
         _raw_body, status, _headers = self.chat_webhook.handle_chat_event(_FakeRequest(payload))
         self.assertEqual(status, 403)
+
+    def test_model_routing_prefers_flash_for_simple_request(self):
+        os.environ["AGENT_RESOURCE_NAME_FLASH"] = "flash-agent"
+        os.environ["AGENT_RESOURCE_NAME_PRO"] = "pro-agent"
+        selected, route = self.chat_webhook._resolve_agent_resource_name("CVE-2026-1234 の影響は？")
+        self.assertEqual(selected, "flash-agent")
+        self.assertEqual(route["tier"], "flash")
+
+    def test_model_routing_prefers_pro_for_complex_request(self):
+        os.environ["AGENT_RESOURCE_NAME_FLASH"] = "flash-agent"
+        os.environ["AGENT_RESOURCE_NAME_PRO"] = "pro-agent"
+        prompt = (
+            "CVE-2026-1111 と CVE-2026-2222 を比較し、影響範囲と対策の優先順位を整理して、"
+            "段階的な実装計画を表形式で示してください。"
+        )
+        selected, route = self.chat_webhook._resolve_agent_resource_name(prompt)
+        self.assertEqual(selected, "pro-agent")
+        self.assertEqual(route["tier"], "pro")
 
 
 if __name__ == "__main__":

@@ -100,6 +100,15 @@ class HealthEndpointTests(unittest.TestCase):
         self.assertIn('"message": "追加情報待ち"', source)
         self.assertIn('AMBIGUITY_PRESET_NAME = (os.environ.get("AMBIGUITY_PRESET") or "standard")', source)
 
+    def test_model_routing_for_flash_pro_exists(self):
+        source = APP_FILE.read_text(encoding="utf-8")
+        self.assertIn("AGENT_RESOURCE_NAME_FLASH", source)
+        self.assertIn("AGENT_RESOURCE_NAME_PRO", source)
+        self.assertIn("MODEL_ROUTING_SCORE_THRESHOLD", source)
+        self.assertIn("def _estimate_prompt_complexity", source)
+        self.assertIn("def _resolve_agent_resource_name", source)
+        self.assertIn("agent_resource_name, route = _resolve_agent_resource_name(original_message)", source)
+
 
 if __name__ == "__main__":
     unittest.main()
