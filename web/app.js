@@ -29,6 +29,7 @@ const a2aTraceFeed = document.getElementById("a2a-trace-feed");
 const clearA2aTraceButton = document.getElementById("clear-a2a-trace");
 const historyFeed = document.getElementById("history-feed");
 const historyUser = document.getElementById("history-user");
+const newThreadButton = document.getElementById("new-thread");
 const pingLatencyText = document.getElementById("ping-latency");
 const reconnectCountText = document.getElementById("reconnect-count");
 const toastContainer = document.getElementById("toast-container");
@@ -1274,6 +1275,10 @@ clearActivityButton?.addEventListener("click", () => {
 });
 clearA2aTraceButton?.addEventListener("click", () => {
   resetA2aTraceFeed();
+});
+newThreadButton?.addEventListener("click", () => {
+  createAndSelectNewThread();
+  appendMessage("新しいスレッドを開始しました。", "system");
 });
 historyFeed?.addEventListener("click", (event) => {
   const target = event.target;
