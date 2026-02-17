@@ -100,6 +100,22 @@ class HealthEndpointTests(unittest.TestCase):
         self.assertIn('"message": "追加情報待ち"', source)
         self.assertIn('AMBIGUITY_PRESET_NAME = (os.environ.get("AMBIGUITY_PRESET") or "standard")', source)
 
+    def test_ui_auth_gate_routes_exist(self):
+        source = APP_FILE.read_text(encoding="utf-8")
+        self.assertIn('@app.get("/login")', source)
+        self.assertIn('@app.get("/app.js")', source)
+        self.assertIn('@app.get("/style.css")', source)
+        self.assertIn("RedirectResponse(url=\"/login\", status_code=302)", source)
+        self.assertIn("def _resolve_ui_file", source)
+
+    def test_chat_audit_logging_exists(self):
+        source = APP_FILE.read_text(encoding="utf-8")
+        self.assertIn("def _audit_chat_event", source)
+        self.assertIn('event="text_request"', source)
+        self.assertIn('event="text_response"', source)
+        self.assertIn('event="voice_request"', source)
+        self.assertIn('event="voice_response"', source)
+
     def test_model_routing_for_flash_pro_exists(self):
         source = APP_FILE.read_text(encoding="utf-8")
         self.assertIn("AGENT_RESOURCE_NAME_FLASH", source)

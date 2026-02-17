@@ -1,0 +1,73 @@
+<!doctype html>
+<html lang="ja">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Vulnerability Agent Login</title>
+    <style>
+      :root {
+        --bg: #0b1020;
+        --panel: #121b33;
+        --border: #24324f;
+        --text: #e2e8f0;
+        --muted: #94a3b8;
+        --primary: #3b82f6;
+      }
+      * { box-sizing: border-box; }
+      body {
+        margin: 0;
+        min-height: 100vh;
+        display: grid;
+        place-items: center;
+        background: radial-gradient(circle at 20% 20%, #1b2a4a 0%, var(--bg) 55%);
+        color: var(--text);
+        font-family: "Inter", "Segoe UI", sans-serif;
+      }
+      .card {
+        width: min(460px, calc(100vw - 32px));
+        background: var(--panel);
+        border: 1px solid var(--border);
+        border-radius: 14px;
+        padding: 24px;
+      }
+      h1 {
+        margin: 0 0 8px 0;
+        font-size: 1.2rem;
+      }
+      p {
+        margin: 0 0 18px 0;
+        color: var(--muted);
+        line-height: 1.6;
+      }
+      .actions { display: flex; gap: 10px; }
+      a {
+        display: inline-block;
+        text-decoration: none;
+        padding: 10px 14px;
+        border-radius: 10px;
+        font-size: 0.95rem;
+      }
+      .primary {
+        background: var(--primary);
+        color: #fff;
+      }
+      .ghost {
+        color: var(--muted);
+        border: 1px solid var(--border);
+      }
+    </style>
+  </head>
+  <body>
+    <main class="card">
+      <h1>ログインが必要です</h1>
+      <p>
+        このアプリは OIDC 認証後に利用できます。<br />
+        Entra ID でサインインして続行してください。
+      </p>
+      <div class="actions">
+        <a class="primary" href="/auth/login?next=/">OIDC ログイン</a>
+        <a class="ghost" href="/auth/me">認証状態を確認</a>
+      </div>
+    </main>
+  </body>
+</html>

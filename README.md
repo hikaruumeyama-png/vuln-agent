@@ -118,7 +118,23 @@ Live Gateway は OIDC 認証を有効化できます（Entra ID 対応）。
 動作:
 - `/auth/login` で Entra ID へリダイレクト
 - `/auth/callback` でログイン完了し、セッションCookieを発行
+- `/`（UI本体）, `/app.js`, `/style.css` は未認証時 `/login` にリダイレクト
 - `/ws` は認証済みセッションがないと接続拒否
+
+段階導入:
+- `OIDC_ENABLED=false`（デフォルト）なら従来どおり未認証でもUIにアクセス可能
+- `OIDC_ENABLED=true` に切り替えた時点でUIとWebSocket保護が有効化
+
+監査ログ（ユーザー別チャット追跡）:
+- Live Gateway は `chat_audit` ログをCloud Loggingへ出力
+- 主要フィールド: `user_sub`, `user_email`, `request_id`, `event`, `message`, `response_text`
+- 例:
+```bash
+gcloud run services logs read vuln-agent-live-gateway \
+  --region=asia-northeast1 \
+  --limit=200 \
+  --filter='textPayload:"chat_audit"'
+```
 
 ## よく使う運用コマンド
 再デプロイ:
