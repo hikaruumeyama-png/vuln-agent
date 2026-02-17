@@ -763,6 +763,12 @@ body.mode-listening .voice-orb.voice-orb-listening .voice-orb-ring {
   padding-right: 4px;
 }
 
+.history-new-thread {
+  width: 100%;
+  justify-content: center;
+  margin-bottom: 10px;
+}
+
 .history-feed::-webkit-scrollbar {
   width: 6px;
 }
@@ -844,6 +850,10 @@ body.history-collapsed .history-panel .panel-header span {
 }
 
 body.history-collapsed .history-feed {
+  display: none;
+}
+
+body.history-collapsed .history-new-thread {
   display: none;
 }
 
