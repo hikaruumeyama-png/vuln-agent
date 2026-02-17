@@ -295,7 +295,7 @@ body {
 .main-content {
   flex: 1;
   display: grid;
-  grid-template-columns: minmax(0, 1fr) 320px 360px;
+  grid-template-columns: 320px minmax(0, 1fr) 360px;
   gap: 16px;
   max-width: 1780px;
   margin: 0 auto;
@@ -437,6 +437,12 @@ body {
 .thinking-message {
   background: var(--bubble-agent);
   padding: 12px 20px;
+}
+
+.thinking-status {
+  margin-top: 6px;
+  font-size: var(--font-xs);
+  color: rgba(255, 255, 255, 0.88);
 }
 
 .thinking-dots {
@@ -709,45 +715,6 @@ body.mode-listening .voice-orb.voice-orb-listening .voice-orb-ring {
   border-color: rgba(34, 197, 94, 0.45);
 }
 
-/* ── Activity Panel ──────────────────────────── */
-.activity-panel {
-  display: flex;
-  flex-direction: column;
-  background: var(--bg-secondary);
-  border-radius: var(--radius-lg);
-  border: 1px solid var(--border-primary);
-  padding: 12px;
-  min-height: 0;
-}
-
-.activity-column {
-  display: flex;
-  flex-direction: column;
-  gap: 12px;
-  min-height: 0;
-}
-
-.activity-feed {
-  flex: 0 0 auto;
-  overflow-y: auto;
-  min-height: 140px;
-  max-height: 34vh;
-  padding-right: 4px;
-}
-
-.activity-feed::-webkit-scrollbar {
-  width: 6px;
-}
-
-.activity-feed::-webkit-scrollbar-track {
-  background: transparent;
-}
-
-.activity-feed::-webkit-scrollbar-thumb {
-  background: var(--border-secondary);
-  border-radius: var(--radius-full);
-}
-
 .a2a-panel {
   display: flex;
   flex-direction: column;
@@ -781,8 +748,8 @@ body.mode-listening .voice-orb.voice-orb-listening .voice-orb-ring {
 .history-feed {
   flex: 1;
   overflow-y: auto;
-  min-height: 220px;
-  max-height: calc(100vh - 340px);
+  min-height: 200px;
+  max-height: calc(100vh - 260px);
   padding-right: 4px;
 }
 
@@ -1215,10 +1182,6 @@ body.mode-listening .voice-orb.voice-orb-listening .voice-orb-ring {
   .messages-area {
     max-height: none;
     min-height: 200px;
-  }
-
-  .activity-feed {
-    max-height: 34vh;
   }
 
   .history-feed {
