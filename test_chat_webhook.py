@@ -203,6 +203,7 @@ class ChatWebhookTests(unittest.TestCase):
     def test_analysis_trigger_without_thread_source_uses_thread_followup_prompt(self):
         self.chat_webhook._is_valid_token = lambda event: True
         self.chat_webhook._fetch_thread_root_message_text = lambda event: ""
+        self.chat_webhook._fetch_latest_ticket_record_from_history = lambda event: {}
         captured: list[str] = []
         self.chat_webhook._run_agent_query = lambda prompt, user_id: (captured.append(prompt) or "ok")
         payload = {
@@ -217,6 +218,31 @@ class ChatWebhookTests(unittest.TestCase):
         self.assertIn("【判断理由】", body["text"])
         self.assertEqual(len(captured), 1)
         self.assertIn("同一スレッド内のフォローアップ依頼", captured[0])
+
+    def test_analysis_trigger_without_thread_source_uses_history_ticket_record(self):
+        self.chat_webhook._is_valid_token = lambda event: True
+        self.chat_webhook._fetch_thread_root_message_text = lambda event: ""
+        self.chat_webhook._fetch_latest_ticket_record_from_history = lambda event: {
+            "incident_id": "123e4567-e89b-12d3-a456-426614174000",
+            "copy_paste_text": "【起票用（コピペ）】\n大分類: 017.脆弱性対応（情シス専用）",
+            "reasoning_text": "【判断理由】\n- 履歴から再利用",
+            "title": "AlmaLinux の脆弱性確認",
+            "vulnerability_id": "CVE-2026-9999",
+        }
+        self.chat_webhook._run_agent_query = lambda prompt, user_id: (_ for _ in ()).throw(
+            AssertionError("Agent should not be called when history fallback is available")
+        )
+        payload = {
+            "type": "MESSAGE",
+            "user": {"name": "users/111"},
+            "message": {"text": "<users/999> 確認して", "thread": {"name": "spaces/AAA/threads/BBB"}},
+        }
+        raw_body, status, _headers = self.chat_webhook.handle_chat_event(_FakeRequest(payload))
+        self.assertEqual(status, 200)
+        body = json.loads(raw_body)
+        self.assertIn("【起票用（コピペ）】", body["text"])
+        self.assertIn("【判断理由】", body["text"])
+        self.assertIn("【管理ID】", body["text"])
 
     def test_correction_prompt_auto_resolves_incident_id_from_thread(self):
         self.chat_webhook._is_valid_token = lambda event: True

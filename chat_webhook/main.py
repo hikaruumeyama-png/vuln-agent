@@ -794,6 +794,87 @@ def _get_cached_thread_root_text(event: dict[str, Any]) -> str:
     return _THREAD_ROOT_CACHE.get(thread_name, "")
 
 
+def _fetch_latest_ticket_record_from_history(event: dict[str, Any]) -> dict[str, str]:
+    table_id = _get_config("BQ_HISTORY_TABLE_ID", "vuln-agent-bq-table-id", "").strip()
+    if not table_id:
+        return {}
+
+    message = event.get("message") or {}
+    thread_name = str(((message.get("thread") or {}).get("name") or "")).strip()
+    space_name = _extract_space_name(event, thread_name)
+
+    try:
+        from google.cloud import bigquery
+
+        project_id = _get_project_id() or None
+        client = bigquery.Client(project=project_id)
+        query = f"""
+            SELECT incident_id, vulnerability_id, title, severity, occurred_at, extra
+            FROM `{table_id}`
+            WHERE source = 'chat_alert'
+            ORDER BY occurred_at DESC
+            LIMIT 30
+        """
+        rows = client.query(query).result()
+        for row in rows:
+            extra_raw = str(getattr(row, "extra", "") or "").strip()
+            if not extra_raw:
+                continue
+            try:
+                extra = json.loads(extra_raw)
+            except Exception:
+                continue
+            if not isinstance(extra, dict):
+                continue
+            row_space = str(extra.get("space_id") or "").strip()
+            if space_name and row_space and row_space != space_name:
+                continue
+            ticket_record = extra.get("ticket_record") or {}
+            if not isinstance(ticket_record, dict):
+                continue
+            copy_text = str(ticket_record.get("copy_paste_text") or "").strip()
+            reasoning_text = str(ticket_record.get("reasoning_text") or "").strip()
+            if not copy_text and not reasoning_text:
+                continue
+            return {
+                "incident_id": str(getattr(row, "incident_id", "") or "").strip(),
+                "copy_paste_text": copy_text,
+                "reasoning_text": reasoning_text,
+                "title": str(getattr(row, "title", "") or "").strip(),
+                "vulnerability_id": str(getattr(row, "vulnerability_id", "") or "").strip(),
+            }
+    except Exception as exc:
+        logger.warning("Failed to fetch latest ticket record from history: %s", exc)
+    return {}
+
+
+def _build_history_ticket_message(record: dict[str, str]) -> str:
+    copy_text = str(record.get("copy_paste_text") or "").strip()
+    reasoning_text = str(record.get("reasoning_text") or "").strip()
+    incident_id = str(record.get("incident_id") or "").strip()
+    title = str(record.get("title") or "").strip()
+    vuln_id = str(record.get("vulnerability_id") or "").strip()
+
+    sections: list[str] = []
+    if copy_text:
+        sections.append(copy_text)
+    if reasoning_text:
+        sections.append(reasoning_text)
+
+    if not sections:
+        return ""
+    if incident_id:
+        sections.append(f"【管理ID】\n{incident_id}")
+    if title or vuln_id:
+        lines = ["【参照元】", "スレッド読取に失敗したため履歴から補完しました。"]
+        if vuln_id:
+            lines.append(f"- 脆弱性ID: {vuln_id}")
+        if title:
+            lines.append(f"- 件名: {title}")
+        sections.append("\n".join(lines))
+    return "\n\n".join(sections).strip()
+
+
 def _get_recent_turns(key: str, max_turns: int = 2) -> list[dict[str, str]]:
     turns = list(_RECENT_TURNS.get(key) or [])
     if not turns:
@@ -922,6 +1003,9 @@ def handle_chat_event(request):
                         resolved_incident = candidate
                         break
             if not resolved_incident:
+                history_ticket = _fetch_latest_ticket_record_from_history(event)
+                resolved_incident = str(history_ticket.get("incident_id") or "").strip()
+            if not resolved_incident:
                 return json.dumps(
                     _thread_payload(
                         event,
@@ -959,6 +1043,13 @@ def handle_chat_event(request):
             message = event.get("message") or {}
             thread_name = ((message.get("thread") or {}).get("name") or "").strip()
             if thread_name:
+                history_ticket = _fetch_latest_ticket_record_from_history(event)
+                history_message = _build_history_ticket_message(history_ticket)
+                if history_message:
+                    _remember_turn(history_key, _clean_chat_text(event), history_message)
+                    return json.dumps(_thread_payload(event, history_message), ensure_ascii=False), 200, {
+                        "Content-Type": "application/json"
+                    }
                 recent_turns = _get_recent_turns(history_key, max_turns=2)
                 if recent_turns:
                     contextual = _build_contextual_prompt(prompt, recent_turns)
