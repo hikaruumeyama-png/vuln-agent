@@ -78,6 +78,7 @@ TOOL_DISPLAY_MAP: dict[str, dict[str, str]] = {
     "log_vulnerability_history": {"label": "脆弱性履歴を記録中",         "icon": "database"},
     "register_remote_agent":    {"label": "リモートエージェントを登録中",  "icon": "link"},
     "call_remote_agent":        {"label": "リモートエージェントを呼出中",  "icon": "link"},
+    "call_remote_agent_conversation_loop": {"label": "リモート会話ループを実行中", "icon": "messages-square"},
     "list_registered_agents":   {"label": "登録済エージェントを取得中",    "icon": "link"},
     "create_jira_ticket_request": {"label": "Jiraチケットを作成中",      "icon": "clipboard"},
     "create_approval_request":  {"label": "承認リクエストを作成中",       "icon": "check-circle"},
@@ -635,6 +636,17 @@ def _preview_text(value: Any, limit: int = 280) -> str:
 def _extract_a2a_call_text(tool_name: str, args: dict[str, Any]) -> str:
     if tool_name == "call_remote_agent":
         return str(args.get("message") or "").strip()
+    if tool_name == "call_remote_agent_conversation_loop":
+        initial_message = str(args.get("initial_message") or "").strip()
+        if initial_message:
+            return initial_message
+        fallback_message = str(args.get("message") or "").strip()
+        if fallback_message:
+            return fallback_message
+        goal = str(args.get("goal") or "").strip()
+        if goal:
+            return goal
+        return ""
     if tool_name == "call_master_agent":
         explicit = str(args.get("message") or "").strip()
         if explicit:
@@ -681,6 +693,29 @@ def _extract_a2a_request_text_from_result(payload: dict[str, Any]) -> str:
     if candidate:
         return candidate
     return ""
+
+
+def _extract_a2a_loop_transcript(payload: dict[str, Any]) -> list[dict[str, str]]:
+    transcript = payload.get("transcript")
+    if not isinstance(transcript, list):
+        return []
+
+    turns: list[dict[str, str]] = []
+    for idx, item in enumerate(transcript, start=1):
+        if not isinstance(item, dict):
+            continue
+        request_text = str(item.get("sent_message") or item.get("message") or "").strip()
+        response_text = str(item.get("response_text") or item.get("message") or "").strip()
+        turn_status = str(item.get("status") or "").strip().lower() or "success"
+        turns.append(
+            {
+                "turn": str(item.get("turn") or idx),
+                "request_text": request_text,
+                "response_text": response_text,
+                "status": "error" if turn_status == "error" else "success",
+            }
+        )
+    return turns
 
 
 async def _safe_send(websocket: WebSocket, data: dict[str, Any]) -> None:
@@ -788,6 +823,56 @@ async def _query_agent(
     total_tool_calls = 0
     completed_tool_calls = 0
 
+    def _harvest_text(obj: Any) -> None:
+        if obj is None:
+            return
+        if isinstance(obj, str):
+            text = obj.strip()
+            if text:
+                chunks.append(text)
+            return
+        if isinstance(obj, dict):
+            text = obj.get("text")
+            if isinstance(text, str) and text.strip():
+                chunks.append(text.strip())
+            for value in obj.values():
+                _harvest_text(value)
+            return
+        if isinstance(obj, (list, tuple, set)):
+            for item in obj:
+                _harvest_text(item)
+            return
+        if hasattr(obj, "text"):
+            value = getattr(obj, "text", "")
+            if isinstance(value, str) and value.strip():
+                chunks.append(value.strip())
+        if hasattr(obj, "model_dump"):
+            try:
+                _harvest_text(obj.model_dump())
+            except Exception:
+                pass
+        elif hasattr(obj, "__dict__"):
+            _harvest_text(vars(obj))
+
+    def _normalize_chunks(raw_chunks: list[str]) -> str:
+        seen: set[str] = set()
+        lines: list[str] = []
+        noise = {"model", "TEXT", "STOP", "ON_DEMAND", "sent", "user"}
+        for raw in raw_chunks:
+            for line in str(raw).splitlines():
+                text = line.strip()
+                if not text or text in seen or text in noise:
+                    continue
+                if text.startswith("spaces/"):
+                    continue
+                seen.add(text)
+                lines.append(text)
+        if not lines:
+            return ""
+        preferred = [x for x in lines if re.search(r"[^\x00-\x7F]", x) or " " in x or "。" in x]
+        selected = preferred if preferred else lines
+        return "\n".join(selected[:8]).strip()
+
     await _safe_send(websocket, {
         "type": "agent_activity",
         "request_id": request_id,
@@ -804,12 +889,17 @@ async def _query_agent(
     async for event in app_client.async_stream_query(user_id=user_id, message=message):
         logger.debug("Agent event type: %s", type(event))
 
+        direct_text = getattr(event, "text", "")
+        if isinstance(direct_text, str) and direct_text.strip():
+            chunks.append(direct_text.strip())
+
         if isinstance(event, dict):
             content = event.get("content")
         else:
             content = getattr(event, "content", None)
 
         if not content:
+            _harvest_text(event)
             continue
 
         if isinstance(content, dict):
@@ -843,7 +933,11 @@ async def _query_agent(
                             "completed_tool_calls": completed_tool_calls,
                         },
                     })
-                    if tool_name in {"call_remote_agent", "call_master_agent"}:
+                    if tool_name in {
+                        "call_remote_agent",
+                        "call_master_agent",
+                        "call_remote_agent_conversation_loop",
+                    }:
                         agent_id = str(
                             fc_args.get("agent_id")
                             or fc_args.get("target_agent_id")
@@ -884,7 +978,11 @@ async def _query_agent(
                             "completed_tool_calls": completed_tool_calls,
                         },
                     })
-                    if tool_name in {"call_remote_agent", "call_master_agent"}:
+                    if tool_name in {
+                        "call_remote_agent",
+                        "call_master_agent",
+                        "call_remote_agent_conversation_loop",
+                    }:
                         payload = _as_dict(response_data)
                         agent_id = str(payload.get("agent_id") or "").strip()
                         request_text = _extract_a2a_request_text_from_result(payload)
@@ -906,11 +1004,40 @@ async def _query_agent(
                             "response_preview": _preview_text(response_text),
                             "timestamp": int(time.time()),
                         })
+                        if tool_name == "call_remote_agent_conversation_loop":
+                            for turn in _extract_a2a_loop_transcript(payload):
+                                await _safe_send(websocket, {
+                                    "type": "a2a_trace",
+                                    "request_id": request_id,
+                                    "phase": "call",
+                                    "tool": tool_name,
+                                    "agent_id": agent_id,
+                                    "status": turn["status"],
+                                    "request_text": turn["request_text"],
+                                    "message_preview": _preview_text(turn["request_text"]),
+                                    "turn": turn["turn"],
+                                    "timestamp": int(time.time()),
+                                })
+                                await _safe_send(websocket, {
+                                    "type": "a2a_trace",
+                                    "request_id": request_id,
+                                    "phase": "result",
+                                    "tool": tool_name,
+                                    "agent_id": agent_id,
+                                    "status": turn["status"],
+                                    "request_text": turn["request_text"],
+                                    "response_text": turn["response_text"],
+                                    "response_preview": _preview_text(turn["response_text"]),
+                                    "turn": turn["turn"],
+                                    "timestamp": int(time.time()),
+                                })
                     continue
 
             txt = getattr(part, "text", None)
             if txt:
                 chunks.append(txt)
+
+        _harvest_text(event)
 
     await _safe_send(websocket, {
         "type": "agent_activity",
@@ -925,7 +1052,9 @@ async def _query_agent(
         },
     })
 
-    response_text = "".join(chunks).strip()
+    response_text = _normalize_chunks(chunks)
+    if not response_text:
+        response_text = "回答を生成できませんでした。もう一度お試しください。"
     _remember_turn(user_id, original_message, response_text)
     return {
         "type": "agent_response",
