@@ -365,13 +365,35 @@ def _contains_vulnerability_signal(text: str) -> bool:
     return False
 
 
+def _contains_specific_vuln_signal(text: str) -> bool:
+    t = (text or "").lower()
+    if not t:
+        return False
+    if re.search(r"\bcve-\d{4}-\d{4,7}\b", t):
+        return True
+    if "cvss" in t:
+        return True
+    if "sid.softek.jp" in t or "nvd.nist.gov" in t:
+        return True
+    if "https://" in t or "http://" in t:
+        return True
+    return False
+
+
+def _contains_manual_ticket_trigger(text: str) -> bool:
+    normalized = re.sub(r"\s+", " ", (text or "").strip()).lower()
+    if not normalized:
+        return False
+    return any(token in normalized for token in _MANUAL_TICKET_TRIGGER_WORDS)
+
+
 def _is_manual_ticket_generation_prompt(prompt: str) -> bool:
     normalized = re.sub(r"\s+", " ", (prompt or "").strip()).lower()
     if not normalized:
         return False
-    if not any(token in normalized for token in _MANUAL_TICKET_TRIGGER_WORDS):
+    if not _contains_manual_ticket_trigger(normalized):
         return False
-    return _contains_vulnerability_signal(prompt) or len(prompt) >= 120
+    return _contains_specific_vuln_signal(prompt) or len(prompt) >= 120
 
 
 def _requests_thread_root_context(prompt: str) -> bool:
@@ -488,6 +510,19 @@ def _extract_message_text_payload(message: dict[str, Any]) -> str:
     merged = " ".join(chunks)
     merged = re.sub(r"\s+", " ", merged).strip()
     return merged[:12000]
+
+
+def _fetch_quoted_message_text(event: dict[str, Any]) -> str:
+    quoted_name = str((((event.get("message") or {}).get("quotedMessageMetadata") or {}).get("name") or "")).strip()
+    if not quoted_name:
+        return ""
+    try:
+        service = _get_chat_service()
+        quoted_message = service.spaces().messages().get(name=quoted_name).execute()
+        return _extract_message_text_payload(quoted_message if isinstance(quoted_message, dict) else {})
+    except Exception as exc:
+        logger.warning("Failed to fetch quoted message text: %s", exc)
+        return ""
 
 
 def _fetch_thread_root_message_text(event: dict[str, Any]) -> str:
@@ -1130,6 +1165,45 @@ def _build_backfill_guidance_message() -> str:
     )
 
 
+def _strip_manual_command_lines(text: str) -> str:
+    if not text:
+        return ""
+    lines = [ln.strip() for ln in text.splitlines() if ln.strip()]
+    kept: list[str] = []
+    for line in lines:
+        lowered = line.lower()
+        if any(token in lowered for token in _MANUAL_TICKET_TRIGGER_WORDS):
+            continue
+        if line in {"確認して", "確認", "解析して"}:
+            continue
+        kept.append(line)
+    return "\n".join(kept).strip()
+
+
+def _resolve_manual_backfill_source_text(event: dict[str, Any], raw_body_text: str) -> str:
+    candidate = _strip_manual_command_lines(raw_body_text)
+    if _contains_specific_vuln_signal(candidate):
+        return candidate
+    quoted = _fetch_quoted_message_text(event)
+    if _contains_specific_vuln_signal(quoted):
+        return quoted
+    return ""
+
+
+def _is_low_quality_ticket_output(text: str) -> bool:
+    body = (text or "").strip()
+    if not body:
+        return True
+    if "【起票用（コピペ）】" not in body:
+        return True
+    if "詳細: 要確認" not in body:
+        return False
+    weak_phrases = ("承知", "了解", "テンプレート", "以下に", "作成します")
+    if any(phrase in body for phrase in weak_phrases) and not _contains_specific_vuln_signal(body):
+        return True
+    return False
+
+
 def _format_ticket_like_response(text: str) -> str:
     body = (text or "").strip()
     if not body:
@@ -1187,6 +1261,7 @@ def handle_chat_event(request):
     history_key = _context_key(event, user_name)
     prefer_ticket_format = False
     save_ticket_history = False
+    manual_backfill_mode = False
     raw_body_text = _strip_mentions_preserve_lines(raw_text)
     if is_gmail_post:
         _remember_thread_root_text(event, raw_text)
@@ -1194,10 +1269,20 @@ def handle_chat_event(request):
         prefer_ticket_format = True
         save_ticket_history = True
     elif _is_manual_ticket_generation_prompt(raw_body_text):
-        _remember_thread_root_text(event, raw_body_text)
-        prompt = _build_vulnerability_ticket_prompt(raw_body_text)
+        manual_source = _resolve_manual_backfill_source_text(event, raw_body_text)
+        if not manual_source:
+            return json.dumps(_thread_payload(event, _build_backfill_guidance_message()), ensure_ascii=False), 200, {
+                "Content-Type": "application/json"
+            }
+        _remember_thread_root_text(event, manual_source)
+        prompt = _build_vulnerability_ticket_prompt(manual_source)
         prefer_ticket_format = True
         save_ticket_history = True
+        manual_backfill_mode = True
+    elif _contains_manual_ticket_trigger(raw_body_text):
+        return json.dumps(_thread_payload(event, _build_backfill_guidance_message()), ensure_ascii=False), 200, {
+            "Content-Type": "application/json"
+        }
     elif _is_correction_prompt(prompt):
         if _extract_incident_id(prompt):
             pass
@@ -1284,6 +1369,10 @@ def handle_chat_event(request):
         response_text = _run_agent_query(prompt, history_key)
         if prefer_ticket_format:
             response_text = _format_ticket_like_response(response_text)
+            if manual_backfill_mode and _is_low_quality_ticket_output(response_text):
+                return json.dumps(_thread_payload(event, _build_backfill_guidance_message()), ensure_ascii=False), 200, {
+                    "Content-Type": "application/json"
+                }
             if save_ticket_history:
                 _save_ticket_record_to_history(event, response_text, source="chat_webhook_manual")
         _remember_turn(history_key, _clean_chat_text(event), response_text)

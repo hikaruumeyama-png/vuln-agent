@@ -271,6 +271,44 @@ class ChatWebhookTests(unittest.TestCase):
         body = json.loads(raw_body)
         self.assertIn("【起票用（コピペ）】", body["text"])
 
+    def test_manual_ticket_generation_prompt_returns_guidance_when_source_missing(self):
+        self.chat_webhook._is_valid_token = lambda event: True
+        self.chat_webhook._is_gmail_app_message = lambda event: False
+        self.chat_webhook._fetch_quoted_message_text = lambda event: ""
+        self.chat_webhook._run_agent_query = lambda prompt, user_id: (_ for _ in ()).throw(
+            AssertionError("Agent should not be called when source body is missing")
+        )
+        payload = {
+            "type": "MESSAGE",
+            "user": {"name": "users/111"},
+            "message": {
+                "text": "<users/999> この内容で起票用を作成して",
+                "thread": {"name": "spaces/AAA/threads/BBB"},
+            },
+        }
+        raw_body, status, _headers = self.chat_webhook.handle_chat_event(_FakeRequest(payload))
+        self.assertEqual(status, 200)
+        body = json.loads(raw_body)
+        self.assertIn("初回取り込みが未完了", body["text"])
+
+    def test_manual_ticket_generation_prompt_returns_guidance_for_low_quality_output(self):
+        self.chat_webhook._is_valid_token = lambda event: True
+        self.chat_webhook._is_gmail_app_message = lambda event: False
+        self.chat_webhook._save_ticket_record_to_history = lambda event, response_text, source="": None
+        self.chat_webhook._run_agent_query = lambda prompt, user_id: "はい、承知いたしました。テンプレートを作成します。"
+        payload = {
+            "type": "MESSAGE",
+            "user": {"name": "users/111"},
+            "message": {
+                "text": "<users/999> CVE-2026-1234\nhttps://sid.softek.jp/filter/sinfo/62989\nこの内容で起票用を作成して",
+                "thread": {"name": "spaces/AAA/threads/BBB"},
+            },
+        }
+        raw_body, status, _headers = self.chat_webhook.handle_chat_event(_FakeRequest(payload))
+        self.assertEqual(status, 200)
+        body = json.loads(raw_body)
+        self.assertIn("この内容で起票用を作成して", body["text"])
+
     def test_correction_prompt_auto_resolves_incident_id_from_thread(self):
         self.chat_webhook._is_valid_token = lambda event: True
         self.chat_webhook._fetch_thread_root_message_text = lambda event: (
