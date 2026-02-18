@@ -465,9 +465,20 @@ def _fetch_thread_root_message_text(event: dict[str, Any]) -> str:
             kwargs: dict[str, Any] = {"parent": space_name, "pageSize": 100}
             if with_filter:
                 kwargs["filter"] = f'thread.name="{thread_name}"'
-            response = service.spaces().messages().list(**kwargs).execute()
-            messages = response.get("messages") or []
-            return [m for m in messages if isinstance(m, dict)]
+            all_messages: list[dict[str, Any]] = []
+            page_token = ""
+            page_limit = 5
+            for _ in range(page_limit):
+                req = dict(kwargs)
+                if page_token:
+                    req["pageToken"] = page_token
+                response = service.spaces().messages().list(**req).execute()
+                messages = response.get("messages") or []
+                all_messages.extend([m for m in messages if isinstance(m, dict)])
+                page_token = str(response.get("nextPageToken") or "").strip()
+                if not page_token:
+                    break
+            return all_messages
 
         try:
             messages = _list_messages(with_filter=True)
@@ -498,7 +509,23 @@ def _fetch_thread_root_message_text(event: dict[str, Any]) -> str:
         if not extracted:
             return ""
 
-        # Prefer substantial root-like text (e.g., Gmail digest/card content).
+        def _looks_like_vuln_context(text: str) -> bool:
+            t = (text or "").lower()
+            if _looks_like_gmail_digest(text):
+                return True
+            if "cve-" in t or "cvss" in t:
+                return True
+            if "sid.softek.jp" in t or "nvd.nist.gov" in t:
+                return True
+            if "【起票用（コピペ）】" in text:
+                return True
+            return False
+
+        vuln_like = [t for t in extracted if _looks_like_vuln_context(t)]
+        if vuln_like:
+            return vuln_like[0]
+
+        # Prefer substantial root-like text.
         substantial = [t for t in extracted if len(t) >= 30 and not _is_ambiguous_prompt(t)]
         if substantial:
             return substantial[0]
@@ -781,7 +808,7 @@ def _remember_turn(key: str, user_prompt: str, assistant_text: str) -> None:
         _RECENT_TURNS[key] = deque(maxlen=_MAX_RECENT_TURNS)
     _RECENT_TURNS[key].append(
         {
-            "user": user_prompt.strip(),
+            "user": user_prompt.strip()[:1200],
             "assistant": (assistant_text or "").strip()[:300],
         }
     )
@@ -810,10 +837,41 @@ def _build_thread_followup_prompt(user_prompt: str) -> str:
         "確認質問は返さず、分析結果を出力してください。"
         "情報不足の項目は必ず「要確認」と明記してください。\n\n"
         "出力要件:\n"
-        "- まず結論を提示\n"
-        "- 根拠を簡潔に提示\n"
-        "- 起票に使える具体項目（対象/優先度/対応方針）を提示\n\n"
+        "- Markdown表は使わない\n"
+        "- 見出しは必ず次の2つだけを使う\n"
+        "  1) 【起票用（コピペ）】\n"
+        "  2) 【判断理由】\n"
+        "- 【起票用（コピペ）】は次の4項目を固定順で出力\n"
+        "  大分類 / 小分類 / 依頼概要 / 詳細\n"
+        "- 値が特定できない項目は「要確認」\n\n"
         f"ユーザー依頼: {user_prompt}"
+    )
+
+
+def _format_ticket_like_response(text: str) -> str:
+    body = (text or "").strip()
+    if not body:
+        return body
+    has_copy = "【起票用（コピペ）】" in body
+    has_reason = "【判断理由】" in body
+    if has_copy and has_reason:
+        return body
+
+    lines = [ln.strip() for ln in body.splitlines() if ln.strip()]
+    noise_prefixes = ("```", "###", "|", ":---", "---")
+    summary_candidates = [ln for ln in lines if not ln.startswith(noise_prefixes)]
+    summary = " / ".join(summary_candidates[:3]) if summary_candidates else "要確認"
+    summary = re.sub(r"\s+", " ", summary).strip()[:220]
+
+    return (
+        "【起票用（コピペ）】\n"
+        "大分類: 017.脆弱性対応（情シス専用）\n"
+        "小分類: 002.IT基盤チーム\n"
+        f"依頼概要: {summary or '要確認'}\n"
+        "詳細: 要確認\n\n"
+        "【判断理由】\n"
+        "- スレッド文脈が不足していたため、不足項目を「要確認」で補完\n"
+        "- 元のAI出力をChat向け固定フォーマットに整形"
     )
 
 
@@ -845,9 +903,11 @@ def handle_chat_event(request):
     prompt = _clean_chat_text(event)
     is_gmail_post = _is_gmail_app_message(event)
     history_key = _context_key(event, user_name)
+    prefer_ticket_format = False
     if is_gmail_post:
         _remember_thread_root_text(event, raw_text)
         prompt = _build_vulnerability_ticket_prompt(raw_text)
+        prefer_ticket_format = True
     elif _is_correction_prompt(prompt):
         if _extract_incident_id(prompt):
             pass
@@ -881,6 +941,7 @@ def handle_chat_event(request):
         if root_text:
             if _looks_like_gmail_digest(root_text):
                 prompt = _build_vulnerability_ticket_prompt(root_text)
+                prefer_ticket_format = True
             else:
                 prompt = _build_thread_root_analysis_prompt(prompt, root_text)
         else:
@@ -893,11 +954,18 @@ def handle_chat_event(request):
             root_text = _get_cached_thread_root_text(event)
         if root_text:
             prompt = _build_vulnerability_ticket_prompt(root_text)
+            prefer_ticket_format = True
         else:
             message = event.get("message") or {}
             thread_name = ((message.get("thread") or {}).get("name") or "").strip()
             if thread_name:
-                prompt = _build_thread_followup_prompt(prompt)
+                recent_turns = _get_recent_turns(history_key, max_turns=2)
+                if recent_turns:
+                    contextual = _build_contextual_prompt(prompt, recent_turns)
+                    prompt = _build_thread_followup_prompt(contextual)
+                else:
+                    prompt = _build_thread_followup_prompt(prompt)
+                prefer_ticket_format = True
             else:
                 return json.dumps(_thread_payload(event, _build_clarification_message()), ensure_ascii=False), 200, {
                     "Content-Type": "application/json"
@@ -912,8 +980,9 @@ def handle_chat_event(request):
 
     try:
         response_text = _run_agent_query(prompt, history_key)
-        if not is_gmail_post:
-            _remember_turn(history_key, _clean_chat_text(event), response_text)
+        if prefer_ticket_format:
+            response_text = _format_ticket_like_response(response_text)
+        _remember_turn(history_key, _clean_chat_text(event), response_text)
         return json.dumps(_thread_payload(event, response_text), ensure_ascii=False), 200, {
             "Content-Type": "application/json"
         }

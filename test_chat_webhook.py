@@ -168,7 +168,8 @@ class ChatWebhookTests(unittest.TestCase):
         self.assertIn("【希望納期】", captured[0])
         self.assertIn("【脆弱性情報（リンク貼り付け）】", captured[0])
         body = json.loads(raw_body)
-        self.assertEqual(body["text"], "ok")
+        self.assertIn("【起票用（コピペ）】", body["text"])
+        self.assertIn("【判断理由】", body["text"])
 
     def test_analysis_trigger_uses_thread_root_message(self):
         self.chat_webhook._is_valid_token = lambda event: True
@@ -196,7 +197,8 @@ class ChatWebhookTests(unittest.TestCase):
         self.assertIn("【希望納期】", captured[0])
         self.assertIn("sidfm-notification@rakus.co.jp", captured[0])
         body = json.loads(raw_body)
-        self.assertEqual(body["text"], "ok")
+        self.assertIn("【起票用（コピペ）】", body["text"])
+        self.assertIn("【判断理由】", body["text"])
 
     def test_analysis_trigger_without_thread_source_uses_thread_followup_prompt(self):
         self.chat_webhook._is_valid_token = lambda event: True
@@ -211,7 +213,8 @@ class ChatWebhookTests(unittest.TestCase):
         raw_body, status, _headers = self.chat_webhook.handle_chat_event(_FakeRequest(payload))
         self.assertEqual(status, 200)
         body = json.loads(raw_body)
-        self.assertEqual(body["text"], "ok")
+        self.assertIn("【起票用（コピペ）】", body["text"])
+        self.assertIn("【判断理由】", body["text"])
         self.assertEqual(len(captured), 1)
         self.assertIn("同一スレッド内のフォローアップ依頼", captured[0])
 
@@ -242,6 +245,17 @@ class ChatWebhookTests(unittest.TestCase):
         self.assertIn("incident_id: 123e4567-e89b-12d3-a456-426614174000", captured[0])
         body = json.loads(raw_body)
         self.assertEqual(body["text"], "修正保存しました")
+
+    def test_format_ticket_like_response_converts_table_style_output(self):
+        raw = (
+            "### 起票用項目案\n"
+            "|項目|内容|\n"
+            "|:--|:--|\n"
+            "|大分類|017.脆弱性対応（情シス専用）|\n"
+        )
+        formatted = self.chat_webhook._format_ticket_like_response(raw)
+        self.assertIn("【起票用（コピペ）】", formatted)
+        self.assertIn("【判断理由】", formatted)
 
     def test_correction_prompt_without_incident_id_returns_guidance(self):
         self.chat_webhook._is_valid_token = lambda event: True
