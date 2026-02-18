@@ -312,6 +312,132 @@ class ChatToolsTests(unittest.TestCase):
         self.assertIn("【CVSSスコア】\n不明", text)
         self.assertIn("【依頼内容】\n手順Aを実施してください。", text)
 
+    def test_evaluate_deadline_policy_returns_structured_result(self):
+        result = self.chat_tools._evaluate_deadline_policy(
+            severity="緊急",
+            cvss_score=9.1,
+            resource_type="public",
+            exploit_confirmed=True,
+            exploit_code_public=True,
+            now=date(2026, 2, 15),
+        )
+        self.assertEqual(result["status"], "decided")
+        self.assertEqual(result["rule_id"], "R1")
+        self.assertEqual(result["due_date"], "2026/2/20")
+        self.assertEqual(result["decision_level"], "確定")
+        self.assertEqual(result["missing_fields"], [])
+
+    def test_evaluate_deadline_policy_source_name_allowlist(self):
+        result = self.chat_tools._evaluate_deadline_policy(
+            severity="高",
+            cvss_score=8.1,
+            resource_type="",
+            source_name="Fortigate",
+            now=date(2026, 2, 15),
+        )
+        self.assertEqual(result["rule_id"], "R2")
+        self.assertEqual(result["resource_classification"]["type"], "public")
+        self.assertEqual(
+            result["resource_classification"]["matched_by"],
+            "source_name_allowlist",
+        )
+
+    def test_evaluate_deadline_policy_fallback_marks_missing_cvss(self):
+        result = self.chat_tools._evaluate_deadline_policy(
+            severity="中",
+            cvss_score=None,
+            resource_type="internal",
+            now=date(2026, 2, 15),
+        )
+        self.assertEqual(result["rule_id"], "FALLBACK_SEVERITY")
+        self.assertEqual(result["decision_level"], "暫定")
+        self.assertIn("cvss_score", result["missing_fields"])
+
+    def test_build_ticket_record_for_almalinux_maps_it_team(self):
+        record = self.chat_tools._build_ticket_record(
+            title="AlmaLinux の脆弱性確認及び該当バージョンの対応願い",
+            affected_systems=["Almalinux9"],
+            description=None,
+            remediation=None,
+            source_name="",
+            body_text="",
+        )
+        self.assertEqual(record["major_category"], "017.脆弱性対応（情シス専用）")
+        self.assertEqual(record["minor_category"], "定例脆弱性対応")
+        self.assertEqual(record["detail"], "002.IT基盤チーム")
+        self.assertIn("AlmaLinux", record["request_summary"])
+        self.assertIn("【起票用（コピペ）】", record["copy_paste_text"])
+        self.assertIn("大分類:", record["copy_paste_text"])
+        self.assertIn("【判断理由】", record["reasoning_text"])
+        self.assertTrue(isinstance(record["reasons"], list))
+        self.assertEqual(record["needs_review"], False)
+
+    def test_build_ticket_record_for_penetration_maps_subcategory(self):
+        record = self.chat_tools._build_ticket_record(
+            title="【ペネトレ対応】ドメイン管理者運用変更",
+            affected_systems=[],
+            description="ペネトレーションテストの対応",
+            remediation=None,
+            source_name="",
+            body_text="",
+        )
+        self.assertEqual(record["minor_category"], "ペネトレ指摘対応")
+        self.assertTrue(record["request_summary"].startswith("【ペネトレ対応】"))
+        self.assertIn("ペネトレ関連キーワード", record["reasoning_text"])
+
+    def test_build_ticket_record_flags_attachment_reference_for_review(self):
+        record = self.chat_tools._build_ticket_record(
+            title="Amazon Linux の脆弱性確認",
+            affected_systems=["Amazon Linux"],
+            description=None,
+            remediation=None,
+            source_name="",
+            body_text="詳細情報は添付ファイル参照",
+        )
+        self.assertEqual(record["needs_review"], True)
+        self.assertIn("添付参照のみ", record["anomalies"])
+        self.assertIn("要レビュー: yes", record["reasoning_text"])
+
+    def test_build_ticket_record_for_ios_maps_pc_team(self):
+        record = self.chat_tools._build_ticket_record(
+            title="Apple iOS のアップグレード",
+            affected_systems=["iOS"],
+            description=None,
+            remediation=None,
+            source_name="",
+            body_text="",
+        )
+        self.assertEqual(record["detail"], "001.PCチーム")
+        self.assertEqual(record["minor_category"], "定例脆弱性対応")
+
+    def test_compose_chat_alert_text_includes_ticket_sections(self):
+        ticket_record = {
+            "copy_paste_text": "【起票用（コピペ）】\n大分類: 017.脆弱性対応（情シス専用）",
+            "reasoning_text": "【判断理由】\n- 小分類判定: 通常の脆弱性対応パターン",
+        }
+        text = self.chat_tools._compose_chat_alert_text(
+            base_text="【対応完了目標】\n2026/2/20",
+            ticket_record=ticket_record,
+            owners=["a@example.com"],
+            include_ticket_sections=True,
+        )
+        self.assertIn("【起票用（コピペ）】", text)
+        self.assertIn("【判断理由】", text)
+        self.assertIn("<a@example.com>", text)
+
+    def test_compose_chat_alert_text_can_skip_ticket_sections(self):
+        ticket_record = {
+            "copy_paste_text": "【起票用（コピペ）】\nX",
+            "reasoning_text": "【判断理由】\nY",
+        }
+        text = self.chat_tools._compose_chat_alert_text(
+            base_text="base",
+            ticket_record=ticket_record,
+            owners=None,
+            include_ticket_sections=False,
+        )
+        self.assertEqual(text, "base")
+
 
 if __name__ == "__main__":
     unittest.main()

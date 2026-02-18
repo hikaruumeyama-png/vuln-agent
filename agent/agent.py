@@ -62,6 +62,7 @@ from .tools import (
     get_nvd_cvss_summary,
     list_osv_vulnerability_ids,
     save_vulnerability_history_minimal,
+    save_ticket_review_result,
     list_predefined_operations,
     list_operation_catalog_health,
     get_authorized_operations_overview,
@@ -104,14 +105,14 @@ AGENT_INSTRUCTION = """あなたは脆弱性管理を専門とするセキュリ
 パターンマッチングは「より具体的なパターンを優先」します。
 例: `pkg:maven/org.apache.logging.*` は `pkg:maven/*` より優先されます。
 
-## 優先度判定基準
+## 対応完了目標判定基準（社内方針）
 
-| 優先度 | 条件 | 対応期限 |
-|--------|------|----------|
-| 緊急 | CVSS 9.0以上、または既に悪用確認 | 24時間以内 |
-| 高 | CVSS 7.0-8.9、リモート攻撃可能 | 3日以内 |
-| 中 | CVSS 4.0-6.9 | 1週間以内 |
-| 低 | CVSS 4.0未満 | 1ヶ月以内 |
+| 条件 | 対応期限 |
+|------|----------|
+| CVSS 9.0以上 + 公開リソース + 悪用実績あり + エクスプロイトコード公開 | 5営業日以内 |
+| CVSS 8.0以上 + 公開リソース | 10営業日以内 |
+| CVSS 8.0以上 + 内部リソース | 3か月以内 |
+| 上記以外 | 重大度別の標準期限（緊急/高/中/低） |
 
 ## 処理フロー（スキャン実行時）
 
@@ -131,6 +132,7 @@ AGENT_INSTRUCTION = """あなたは脆弱性管理を専門とするセキュリ
 - 「脆弱性スキャンを実行して」→ SIDfmメールをチェック
 - 「担当者マッピングを確認して」→ `get_owner_mapping` で現在の設定を表示
 - 「SBOMの内容を教えて」→ `get_sbom_contents` で一覧を提示（未依頼の追加処理はしない）
+- 「起票内容を修正して保存して」→ `save_ticket_review_result` でレビュー結果を履歴保存
 
 ### SBOMの細粒度ツール
 - `list_sbom_package_types`: type 一覧
@@ -298,6 +300,7 @@ def create_vulnerability_agent() -> Agent:
         FunctionTool(get_nvd_cvss_summary),
         FunctionTool(list_osv_vulnerability_ids),
         FunctionTool(save_vulnerability_history_minimal),
+        FunctionTool(save_ticket_review_result),
         # Orchestration Tools
         FunctionTool(list_predefined_operations),
         FunctionTool(list_operation_catalog_health),

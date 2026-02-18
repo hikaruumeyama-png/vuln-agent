@@ -36,7 +36,10 @@ def _stub_dependency_modules() -> None:
     sys.modules["chat_tools"] = chat_tools
 
     history_tools = types.ModuleType("history_tools")
-    history_tools.log_vulnerability_history = lambda **kwargs: {"status": "saved", "incident_id": "x"}
+    history_tools._last_kwargs = {}
+    history_tools.log_vulnerability_history = (
+        lambda **kwargs: history_tools._last_kwargs.update(kwargs) or {"status": "saved", "incident_id": kwargs.get("incident_id", "x"), "table_id": "proj.ds.history"}
+    )
     sys.modules["history_tools"] = history_tools
 
     a2a_tools = types.ModuleType("a2a_tools")
@@ -119,6 +122,39 @@ class GranularToolsTests(unittest.TestCase):
         result = self.mod.list_osv_vulnerability_ids("PyPI", "requests")
         self.assertEqual(result["count"], 2)
         self.assertEqual(result["vulnerability_ids"], ["OSV-1", "OSV-2"])
+
+    def test_save_ticket_review_result(self):
+        result = self.mod.save_ticket_review_result(
+            incident_id="inc-1",
+            vulnerability_id="CVE-2026-0001",
+            title="AlmaLinux の脆弱性対応",
+            severity="高",
+            affected_systems=["Almalinux9"],
+            final_major_category="017.脆弱性対応（情シス専用）",
+            final_minor_category="定例脆弱性対応",
+            final_request_summary="AlmaLinux の脆弱性確認及び該当バージョンの対応願い",
+            final_detail="002.IT基盤チーム",
+            reviewer="tester@example.com",
+            correction_reason="誤分類修正",
+            ai_ticket_record={"detail": "001.PCチーム"},
+        )
+        self.assertEqual(result["status"], "saved")
+        self.assertIn("【起票用（コピペ）】", result["copy_paste_text"])
+        self.assertEqual(result["final_ticket_record"]["detail"], "002.IT基盤チーム")
+
+    def test_save_ticket_review_result_requires_final_fields(self):
+        result = self.mod.save_ticket_review_result(
+            incident_id="inc-1",
+            vulnerability_id="CVE-2026-0001",
+            title="x",
+            severity="高",
+            affected_systems=["a"],
+            final_major_category="",
+            final_minor_category="定例脆弱性対応",
+            final_request_summary="x",
+            final_detail="002.IT基盤チーム",
+        )
+        self.assertEqual(result["status"], "error")
 
 
 if __name__ == "__main__":
