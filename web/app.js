@@ -30,6 +30,7 @@ const clearA2aTraceButton = document.getElementById("clear-a2a-trace");
 const historyFeed = document.getElementById("history-feed");
 const historyUser = document.getElementById("history-user");
 const newThreadButton = document.getElementById("new-thread");
+const featureToolbar = document.getElementById("feature-toolbar");
 const pingLatencyText = document.getElementById("ping-latency");
 const reconnectCountText = document.getElementById("reconnect-count");
 const toastContainer = document.getElementById("toast-container");
@@ -542,8 +543,13 @@ function renderHistoryFeed() {
     item.dataset.threadId = thread.id;
     item.innerHTML = `
       <div class="thread-item-header">
-        <i data-lucide="messages-square"></i>
-        <span>${escapeHtml(updatedAt)}</span>
+        <div class="thread-item-time">
+          <i data-lucide="messages-square"></i>
+          <span>${escapeHtml(updatedAt)}</span>
+        </div>
+        <button class="thread-delete-btn" type="button" title="Delete thread" aria-label="Delete thread">
+          <i data-lucide="trash-2"></i>
+        </button>
       </div>
       <div class="thread-item-title">${escapeHtml(String(thread.title || "新しいスレッド"))}</div>
       <div class="thread-item-preview">${escapeHtml(lastMessage || "メッセージなし")}</div>
@@ -594,6 +600,19 @@ function createAndSelectNewThread(initialText = "") {
     threadList = threadList.slice(0, MAX_THREADS);
   }
   activeThreadId = next.id;
+  saveThreadsForCurrentUser();
+  renderHistoryFeed();
+  hydrateChatFromActiveThread();
+}
+
+function deleteThread(threadId) {
+  if (!threadId) return;
+  if (!threadList.some((thread) => thread.id === threadId)) return;
+  threadList = threadList.filter((thread) => thread.id !== threadId);
+  if (activeThreadId === threadId) {
+    activeThreadId = threadList[0]?.id || "";
+  }
+  ensureActiveThread(true);
   saveThreadsForCurrentUser();
   renderHistoryFeed();
   hydrateChatFromActiveThread();
@@ -1283,12 +1302,32 @@ newThreadButton?.addEventListener("click", () => {
 historyFeed?.addEventListener("click", (event) => {
   const target = event.target;
   if (!(target instanceof HTMLElement)) return;
+  const deleteButton = target.closest(".thread-delete-btn");
+  if (deleteButton) {
+    const ownerItem = deleteButton.closest(".thread-item");
+    const ownerThreadId = ownerItem?.getAttribute("data-thread-id");
+    if (!ownerThreadId) return;
+    deleteThread(ownerThreadId);
+    appendMessage("スレッドを削除しました。", "system");
+    return;
+  }
   const item = target.closest(".thread-item");
   if (!item) return;
   const threadId = item.getAttribute("data-thread-id");
   if (!threadId) return;
   selectThread(threadId);
   appendMessage("過去スレッドを読み込みました。このまま会話を再開できます。", "system");
+});
+featureToolbar?.addEventListener("click", (event) => {
+  const target = event.target;
+  if (!(target instanceof HTMLElement)) return;
+  const button = target.closest(".feature-action-btn");
+  if (!button) return;
+  const prompt = button.getAttribute("data-prompt");
+  if (!prompt) return;
+  chatInput.value = prompt;
+  resizeChatInput();
+  chatInput.focus();
 });
 toggleHistoryButton?.addEventListener("click", () => {
   document.body.classList.toggle("history-collapsed");

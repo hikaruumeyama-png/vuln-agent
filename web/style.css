@@ -367,6 +367,42 @@ body.history-collapsed .main-content {
   padding-right: 4px;
 }
 
+.feature-toolbar {
+  display: flex;
+  gap: 8px;
+  overflow-x: auto;
+  padding: 0 0 10px;
+  margin-bottom: 6px;
+  border-bottom: 1px solid var(--border-primary);
+}
+
+.feature-toolbar::-webkit-scrollbar {
+  height: 6px;
+}
+
+.feature-toolbar::-webkit-scrollbar-thumb {
+  background: var(--border-secondary);
+  border-radius: var(--radius-full);
+}
+
+.feature-action-btn {
+  border: 1px solid var(--border-secondary);
+  background: #12203a;
+  color: #dbeafe;
+  border-radius: var(--radius-full);
+  padding: 6px 12px;
+  font-size: var(--font-xs);
+  font-family: var(--font-family);
+  white-space: nowrap;
+  cursor: pointer;
+  transition: background var(--transition-fast), border-color var(--transition-fast);
+}
+
+.feature-action-btn:hover {
+  background: #16325f;
+  border-color: #4f8cff;
+}
+
 .messages-area::-webkit-scrollbar {
   width: 6px;
 }
@@ -819,10 +855,41 @@ body.mode-listening .voice-orb.voice-orb-listening .voice-orb-ring {
 .thread-item-header {
   display: flex;
   align-items: center;
-  gap: 6px;
+  justify-content: space-between;
   font-size: var(--font-xs);
   color: var(--text-secondary);
   margin-bottom: 4px;
+}
+
+.thread-item-time {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.thread-delete-btn {
+  border: 1px solid transparent;
+  background: transparent;
+  color: var(--text-muted);
+  border-radius: var(--radius-sm);
+  width: 24px;
+  height: 24px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  transition: background var(--transition-fast), color var(--transition-fast), border-color var(--transition-fast);
+}
+
+.thread-delete-btn i {
+  width: 13px;
+  height: 13px;
+}
+
+.thread-delete-btn:hover {
+  color: #fecaca;
+  background: rgba(239, 68, 68, 0.15);
+  border-color: rgba(239, 68, 68, 0.35);
 }
 
 .thread-item-title {
@@ -1261,6 +1328,10 @@ body.history-collapsed .history-new-thread {
   .messages-area {
     max-height: none;
     min-height: 200px;
+  }
+
+  .feature-toolbar {
+    margin-bottom: 8px;
   }
 
   .history-feed {
