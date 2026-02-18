@@ -16,7 +16,9 @@ import vertexai
 logger = logging.getLogger(__name__)
 
 _secret_client = None
+_chat_service_client = None
 _RECENT_TURNS: dict[str, deque[dict[str, str]]] = {}
+_THREAD_ROOT_CACHE: dict[str, str] = {}
 _MAX_RECENT_TURNS = 4
 _AMBIGUITY_PRESETS = {
     "strict": {"min_chars_without_context": 6},
@@ -159,6 +161,38 @@ def _get_secret_client():
 
         _secret_client = secretmanager.SecretManagerServiceClient()
     return _secret_client
+
+
+def _get_chat_service():
+    global _chat_service_client
+    if _chat_service_client is not None:
+        return _chat_service_client
+
+    from googleapiclient.discovery import build
+
+    scopes = [
+        "https://www.googleapis.com/auth/chat.bot",
+        "https://www.googleapis.com/auth/chat.messages.readonly",
+    ]
+    sa_json = _get_config("CHAT_SA_CREDENTIALS_JSON", "vuln-agent-chat-sa-key", "")
+    if sa_json:
+        try:
+            from google.oauth2 import service_account
+
+            sa_info = json.loads(sa_json)
+            credentials = service_account.Credentials.from_service_account_info(sa_info, scopes=scopes)
+            _chat_service_client = build("chat", "v1", credentials=credentials, cache_discovery=False)
+            logger.info("Thread fetch uses Chat app SA credentials from secret")
+            return _chat_service_client
+        except Exception as exc:
+            logger.warning("Failed to init Chat service from SA secret: %s", exc)
+
+    import google.auth
+
+    credentials, _ = google.auth.default(scopes=scopes)
+    _chat_service_client = build("chat", "v1", credentials=credentials, cache_discovery=False)
+    logger.warning("Thread fetch uses ADC fallback credentials")
+    return _chat_service_client
 
 
 def _get_project_id() -> str:
@@ -415,11 +449,7 @@ def _fetch_thread_root_message_text(event: dict[str, Any]) -> str:
         return ""
 
     try:
-        import google.auth
-        from googleapiclient.discovery import build
-
-        credentials, _ = google.auth.default(scopes=["https://www.googleapis.com/auth/chat.bot"])
-        service = build("chat", "v1", credentials=credentials, cache_discovery=False)
+        service = _get_chat_service()
 
         quoted_name = str((((event.get("message") or {}).get("quotedMessageMetadata") or {}).get("name") or "")).strip()
         if quoted_name:
@@ -718,6 +748,25 @@ def _context_key(event: dict[str, Any], user_name: str) -> str:
     return f"user:{user_name or 'google-chat-user'}"
 
 
+def _remember_thread_root_text(event: dict[str, Any], text: str) -> None:
+    message = event.get("message") or {}
+    thread_name = ((message.get("thread") or {}).get("name") or "").strip()
+    if not thread_name:
+        return
+    normalized = re.sub(r"\s+", " ", (text or "").strip())
+    if not normalized:
+        return
+    _THREAD_ROOT_CACHE[thread_name] = normalized[:12000]
+
+
+def _get_cached_thread_root_text(event: dict[str, Any]) -> str:
+    message = event.get("message") or {}
+    thread_name = ((message.get("thread") or {}).get("name") or "").strip()
+    if not thread_name:
+        return ""
+    return _THREAD_ROOT_CACHE.get(thread_name, "")
+
+
 def _get_recent_turns(key: str, max_turns: int = 2) -> list[dict[str, str]]:
     turns = list(_RECENT_TURNS.get(key) or [])
     if not turns:
@@ -783,6 +832,7 @@ def handle_chat_event(request):
     is_gmail_post = _is_gmail_app_message(event)
     history_key = _context_key(event, user_name)
     if is_gmail_post:
+        _remember_thread_root_text(event, raw_text)
         prompt = _build_vulnerability_ticket_prompt(raw_text)
     elif _is_correction_prompt(prompt):
         if _extract_incident_id(prompt):
@@ -812,6 +862,8 @@ def handle_chat_event(request):
         return json.dumps({}, ensure_ascii=False), 200, {"Content-Type": "application/json"}
     elif _is_analysis_trigger_prompt(prompt) and _requests_thread_root_context(prompt):
         root_text = _fetch_thread_root_message_text(event)
+        if not root_text:
+            root_text = _get_cached_thread_root_text(event)
         if root_text:
             if _looks_like_gmail_digest(root_text):
                 prompt = _build_vulnerability_ticket_prompt(root_text)
@@ -823,6 +875,8 @@ def handle_chat_event(request):
             }
     elif _is_analysis_trigger_prompt(prompt) and _is_ambiguous_prompt(prompt):
         root_text = _fetch_thread_root_message_text(event)
+        if not root_text:
+            root_text = _get_cached_thread_root_text(event)
         if root_text:
             prompt = _build_vulnerability_ticket_prompt(root_text)
         else:
