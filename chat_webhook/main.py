@@ -4,10 +4,12 @@ from __future__ import annotations
 
 import asyncio
 from collections import deque
+from datetime import datetime, timezone
 import json
 import logging
 import os
 import re
+import uuid
 from typing import Any
 
 import functions_framework
@@ -78,6 +80,16 @@ _ANALYSIS_TRIGGER_WORDS = (
     "analyze",
     "analyse",
     "check",
+)
+_MANUAL_TICKET_TRIGGER_WORDS = (
+    "この内容で",
+    "この本文で",
+    "起票用",
+    "起票",
+    "作成して",
+    "作って",
+    "貼り付け",
+    "コピペ",
 )
 _THREAD_ROOT_REFERENCE_WORDS = (
     "スレッド元",
@@ -247,6 +259,14 @@ def _clean_chat_text(event: dict[str, Any]) -> str:
     return re.sub(r"\s+", " ", text).strip()
 
 
+def _strip_mentions_preserve_lines(raw_text: str) -> str:
+    if not raw_text:
+        return ""
+    text = re.sub(r"<users/[^>]+>", "", raw_text)
+    lines = [line.strip() for line in text.splitlines()]
+    return "\n".join(lines).strip()
+
+
 def _sender_info(event: dict[str, Any]) -> dict[str, str]:
     sender = ((event.get("message") or {}).get("sender") or {})
     return {
@@ -330,6 +350,28 @@ def _is_analysis_trigger_prompt(prompt: str) -> bool:
     if not normalized:
         return False
     return any(word in normalized for word in _ANALYSIS_TRIGGER_WORDS)
+
+
+def _contains_vulnerability_signal(text: str) -> bool:
+    t = (text or "").lower()
+    if not t:
+        return False
+    if "cve-" in t or "cvss" in t:
+        return True
+    if "sid.softek.jp" in t or "nvd.nist.gov" in t:
+        return True
+    if "脆弱性" in text or "対象の機器/アプリ" in text:
+        return True
+    return False
+
+
+def _is_manual_ticket_generation_prompt(prompt: str) -> bool:
+    normalized = re.sub(r"\s+", " ", (prompt or "").strip()).lower()
+    if not normalized:
+        return False
+    if not any(token in normalized for token in _MANUAL_TICKET_TRIGGER_WORDS):
+        return False
+    return _contains_vulnerability_signal(prompt) or len(prompt) >= 120
 
 
 def _requests_thread_root_context(prompt: str) -> bool:
@@ -819,13 +861,63 @@ def _fetch_latest_ticket_record_from_history(event: dict[str, Any]) -> dict[str,
         project_id = _get_project_id() or None
         client = bigquery.Client(project=project_id)
         query = f"""
-            SELECT incident_id, vulnerability_id, title, severity, occurred_at, extra
+            SELECT incident_id, vulnerability_id, title, severity, occurred_at, extra, source
+            FROM `{table_id}`
+            WHERE source IN ('chat_alert', 'chat_webhook_manual', 'human_review')
+              AND (@thread_name = '' OR JSON_VALUE(extra, '$.thread_name') = @thread_name)
+            ORDER BY occurred_at DESC
+            LIMIT 50
+        """
+        job_config = bigquery.QueryJobConfig(
+            query_parameters=[
+                bigquery.ScalarQueryParameter("thread_name", "STRING", thread_name),
+            ]
+        )
+        rows = client.query(query, job_config=job_config).result()
+        for row in rows:
+            extra_raw = str(getattr(row, "extra", "") or "").strip()
+            if not extra_raw:
+                continue
+            try:
+                extra = json.loads(extra_raw)
+            except Exception:
+                continue
+            if not isinstance(extra, dict):
+                continue
+            row_thread = str(extra.get("thread_name") or "").strip()
+            row_space = str(extra.get("space_id") or "").strip()
+            if thread_name and row_thread and row_thread != thread_name:
+                continue
+            if space_name and row_space and row_space != space_name:
+                continue
+            ticket_record = extra.get("ticket_record") or {}
+            if not ticket_record and isinstance(extra.get("review"), dict):
+                ticket_record = (extra.get("review") or {}).get("final_ticket_record") or {}
+            if not isinstance(ticket_record, dict):
+                continue
+            copy_text = str(ticket_record.get("copy_paste_text") or "").strip()
+            reasoning_text = str(ticket_record.get("reasoning_text") or "").strip()
+            if not copy_text and not reasoning_text:
+                continue
+            return {
+                "incident_id": str(getattr(row, "incident_id", "") or "").strip(),
+                "copy_paste_text": copy_text,
+                "reasoning_text": reasoning_text,
+                "title": str(getattr(row, "title", "") or "").strip(),
+                "vulnerability_id": str(getattr(row, "vulnerability_id", "") or "").strip(),
+            }
+
+        # Backward-compatible fallback: old records without thread_name.
+        if not thread_name:
+            return {}
+        query_space = f"""
+            SELECT incident_id, vulnerability_id, title, severity, occurred_at, extra, source
             FROM `{table_id}`
             WHERE source = 'chat_alert'
             ORDER BY occurred_at DESC
-            LIMIT 30
+            LIMIT 50
         """
-        rows = client.query(query).result()
+        rows = client.query(query_space).result()
         for row in rows:
             extra_raw = str(getattr(row, "extra", "") or "").strip()
             if not extra_raw:
@@ -885,6 +977,95 @@ def _build_history_ticket_message(record: dict[str, str]) -> str:
     return "\n\n".join(sections).strip()
 
 
+def _extract_ticket_sections(text: str) -> tuple[str, str]:
+    body = (text or "").strip()
+    if not body:
+        return "", ""
+    copy_marker = "【起票用（コピペ）】"
+    reason_marker = "【判断理由】"
+    incident_marker = "【管理ID】"
+
+    copy_text = ""
+    reasoning_text = ""
+    copy_idx = body.find(copy_marker)
+    reason_idx = body.find(reason_marker)
+    incident_idx = body.find(incident_marker)
+
+    if copy_idx >= 0:
+        copy_end = len(body)
+        if reason_idx > copy_idx:
+            copy_end = reason_idx
+        elif incident_idx > copy_idx:
+            copy_end = incident_idx
+        copy_text = body[copy_idx:copy_end].strip()
+    if reason_idx >= 0:
+        reason_end = len(body)
+        if incident_idx > reason_idx:
+            reason_end = incident_idx
+        reasoning_text = body[reason_idx:reason_end].strip()
+    return copy_text, reasoning_text
+
+
+def _save_ticket_record_to_history(event: dict[str, Any], response_text: str, source: str = "chat_webhook_manual") -> None:
+    table_id = _get_config("BQ_HISTORY_TABLE_ID", "vuln-agent-bq-table-id", "").strip()
+    if not table_id:
+        return
+    copy_text, reasoning_text = _extract_ticket_sections(response_text)
+    if not copy_text and not reasoning_text:
+        return
+    try:
+        from google.cloud import bigquery
+    except Exception:
+        return
+
+    message = event.get("message") or {}
+    thread_name = str(((message.get("thread") or {}).get("name") or "")).strip()
+    space_name = _extract_space_name(event, thread_name)
+    incident_id = _extract_incident_id(response_text) or str(uuid.uuid4())
+    vuln_match = re.search(r"\bCVE-\d{4}-\d{4,7}\b", response_text, flags=re.IGNORECASE)
+    vulnerability_id = (vuln_match.group(0).upper() if vuln_match else "").strip()
+    if not vulnerability_id:
+        seed = re.sub(r"[^A-Za-z0-9]", "", thread_name)[-16:] or "UNKNOWN"
+        vulnerability_id = f"THREAD-{seed}"
+
+    summary = "Chat follow-up ticket"
+    for line in copy_text.splitlines():
+        if "依頼概要" in line and ":" in line:
+            summary = line.split(":", 1)[1].strip() or summary
+            break
+
+    extra = {
+        "space_id": space_name,
+        "thread_name": thread_name,
+        "ticket_record": {
+            "copy_paste_text": copy_text,
+            "reasoning_text": reasoning_text,
+        },
+    }
+    row = {
+        "incident_id": incident_id,
+        "vulnerability_id": vulnerability_id,
+        "title": summary[:500],
+        "severity": "要確認",
+        "affected_systems": "[]",
+        "cvss_score": None,
+        "description": None,
+        "remediation": None,
+        "owners": "[]",
+        "status": "notified",
+        "occurred_at": datetime.now(timezone.utc).isoformat(),
+        "source": source,
+        "extra": json.dumps(extra, ensure_ascii=False),
+    }
+    try:
+        client = bigquery.Client(project=_get_project_id() or None)
+        errors = client.insert_rows_json(table_id, [row])
+        if errors:
+            logger.warning("Failed to save ticket record to history: %s", errors)
+    except Exception as exc:
+        logger.warning("Failed to save ticket record to history: %s", exc)
+
+
 def _get_recent_turns(key: str, max_turns: int = 2) -> list[dict[str, str]]:
     turns = list(_RECENT_TURNS.get(key) or [])
     if not turns:
@@ -936,6 +1117,16 @@ def _build_thread_followup_prompt(user_prompt: str) -> str:
         "  大分類 / 小分類 / 依頼概要 / 詳細\n"
         "- 値が特定できない項目は「要確認」\n\n"
         f"ユーザー依頼: {user_prompt}"
+    )
+
+
+def _build_backfill_guidance_message() -> str:
+    return (
+        "このスレッドは初回取り込みが未完了のため、過去通知を復元できませんでした。\n"
+        "次の形式で同一スレッドに貼り付けてください。\n\n"
+        "1) 元の脆弱性通知本文（CVE/URLを含む）を貼り付け\n"
+        "2) 最後に「この内容で起票用を作成して」と送信\n\n"
+        "取り込み後は「確認して」だけで再表示できます。"
     )
 
 
@@ -995,10 +1186,18 @@ def handle_chat_event(request):
     is_gmail_post = _is_gmail_app_message(event)
     history_key = _context_key(event, user_name)
     prefer_ticket_format = False
+    save_ticket_history = False
+    raw_body_text = _strip_mentions_preserve_lines(raw_text)
     if is_gmail_post:
         _remember_thread_root_text(event, raw_text)
         prompt = _build_vulnerability_ticket_prompt(raw_text)
         prefer_ticket_format = True
+        save_ticket_history = True
+    elif _is_manual_ticket_generation_prompt(raw_body_text):
+        _remember_thread_root_text(event, raw_body_text)
+        prompt = _build_vulnerability_ticket_prompt(raw_body_text)
+        prefer_ticket_format = True
+        save_ticket_history = True
     elif _is_correction_prompt(prompt):
         if _extract_incident_id(prompt):
             pass
@@ -1065,7 +1264,9 @@ def handle_chat_event(request):
                     contextual = _build_contextual_prompt(prompt, recent_turns)
                     prompt = _build_thread_followup_prompt(contextual)
                 else:
-                    prompt = _build_thread_followup_prompt(prompt)
+                    return json.dumps(_thread_payload(event, _build_backfill_guidance_message()), ensure_ascii=False), 200, {
+                        "Content-Type": "application/json"
+                    }
                 prefer_ticket_format = True
             else:
                 return json.dumps(_thread_payload(event, _build_clarification_message()), ensure_ascii=False), 200, {
@@ -1083,6 +1284,8 @@ def handle_chat_event(request):
         response_text = _run_agent_query(prompt, history_key)
         if prefer_ticket_format:
             response_text = _format_ticket_like_response(response_text)
+            if save_ticket_history:
+                _save_ticket_record_to_history(event, response_text, source="chat_webhook_manual")
         _remember_turn(history_key, _clean_chat_text(event), response_text)
         return json.dumps(_thread_payload(event, response_text), ensure_ascii=False), 200, {
             "Content-Type": "application/json"

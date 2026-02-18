@@ -204,8 +204,9 @@ class ChatWebhookTests(unittest.TestCase):
         self.chat_webhook._is_valid_token = lambda event: True
         self.chat_webhook._fetch_thread_root_message_text = lambda event: ""
         self.chat_webhook._fetch_latest_ticket_record_from_history = lambda event: {}
-        captured: list[str] = []
-        self.chat_webhook._run_agent_query = lambda prompt, user_id: (captured.append(prompt) or "ok")
+        self.chat_webhook._run_agent_query = lambda prompt, user_id: (_ for _ in ()).throw(
+            AssertionError("Agent should not be called when no backfill context is available")
+        )
         payload = {
             "type": "MESSAGE",
             "user": {"name": "users/111"},
@@ -214,10 +215,8 @@ class ChatWebhookTests(unittest.TestCase):
         raw_body, status, _headers = self.chat_webhook.handle_chat_event(_FakeRequest(payload))
         self.assertEqual(status, 200)
         body = json.loads(raw_body)
-        self.assertIn("【起票用（コピペ）】", body["text"])
-        self.assertIn("【判断理由】", body["text"])
-        self.assertEqual(len(captured), 1)
-        self.assertIn("同一スレッド内のフォローアップ依頼", captured[0])
+        self.assertIn("初回取り込みが未完了", body["text"])
+        self.assertIn("この内容で起票用を作成して", body["text"])
 
     def test_analysis_trigger_without_thread_source_uses_history_ticket_record(self):
         self.chat_webhook._is_valid_token = lambda event: True
@@ -243,6 +242,34 @@ class ChatWebhookTests(unittest.TestCase):
         self.assertIn("【起票用（コピペ）】", body["text"])
         self.assertIn("【判断理由】", body["text"])
         self.assertIn("【管理ID】", body["text"])
+
+    def test_manual_ticket_generation_prompt_builds_ticket_and_saves_history(self):
+        self.chat_webhook._is_valid_token = lambda event: True
+        self.chat_webhook._is_gmail_app_message = lambda event: False
+        captured: list[str] = []
+        saved: list[str] = []
+
+        def _fake_run(prompt, user_id):
+            captured.append(prompt)
+            return "【起票用（コピペ）】\n大分類: 017.脆弱性対応（情シス専用）\n\n【判断理由】\n- test"
+
+        self.chat_webhook._run_agent_query = _fake_run
+        self.chat_webhook._save_ticket_record_to_history = lambda event, response_text, source="": saved.append(source)
+        payload = {
+            "type": "MESSAGE",
+            "user": {"name": "users/111"},
+            "message": {
+                "text": "<users/999> CVE-2026-1234 の通知本文です。\nhttps://sid.softek.jp/filter/sinfo/62989\nこの内容で起票用を作成して",
+                "thread": {"name": "spaces/AAA/threads/BBB"},
+            },
+        }
+        raw_body, status, _headers = self.chat_webhook.handle_chat_event(_FakeRequest(payload))
+        self.assertEqual(status, 200)
+        self.assertEqual(len(captured), 1)
+        self.assertIn("【希望納期】", captured[0])
+        self.assertEqual(saved, ["chat_webhook_manual"])
+        body = json.loads(raw_body)
+        self.assertIn("【起票用（コピペ）】", body["text"])
 
     def test_correction_prompt_auto_resolves_incident_id_from_thread(self):
         self.chat_webhook._is_valid_token = lambda event: True
