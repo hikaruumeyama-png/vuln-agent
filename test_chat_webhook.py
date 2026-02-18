@@ -88,7 +88,7 @@ class ChatWebhookTests(unittest.TestCase):
         self.assertEqual(status, 200)
         body = json.loads(raw_body)
         self.assertEqual(body["thread"]["name"], "spaces/AAA/threads/BBB")
-        self.assertIn("echo:CVE-2026-1234 の影響を確認して:111", body["text"])
+        self.assertIn("echo:CVE-2026-1234 の影響を確認して:thread:spaces/AAA/threads/BBB", body["text"])
 
     def test_handle_chat_event_returns_clarification_for_ambiguous_prompt(self):
         self.chat_webhook._is_valid_token = lambda event: True
@@ -136,7 +136,7 @@ class ChatWebhookTests(unittest.TestCase):
         self.assertIn("直近の会話文脈", captured[1])
         self.assertIn("CVE-2026-1234 の影響を確認して", captured[1])
         body2 = json.loads(raw_body2)
-        self.assertIn("echo:111", body2["text"])
+        self.assertIn("echo:thread:spaces/AAA/threads/BBB", body2["text"])
 
     def test_handle_chat_event_processes_card_style_notification(self):
         self.chat_webhook._is_valid_token = lambda event: True
@@ -198,12 +198,11 @@ class ChatWebhookTests(unittest.TestCase):
         body = json.loads(raw_body)
         self.assertEqual(body["text"], "ok")
 
-    def test_analysis_trigger_without_thread_source_returns_clarification(self):
+    def test_analysis_trigger_without_thread_source_uses_thread_followup_prompt(self):
         self.chat_webhook._is_valid_token = lambda event: True
         self.chat_webhook._fetch_thread_root_message_text = lambda event: ""
-        self.chat_webhook._run_agent_query = lambda prompt, user_id: (_ for _ in ()).throw(
-            AssertionError("Agent should not be called without thread source for ambiguous trigger")
-        )
+        captured: list[str] = []
+        self.chat_webhook._run_agent_query = lambda prompt, user_id: (captured.append(prompt) or "ok")
         payload = {
             "type": "MESSAGE",
             "user": {"name": "users/111"},
@@ -212,7 +211,9 @@ class ChatWebhookTests(unittest.TestCase):
         raw_body, status, _headers = self.chat_webhook.handle_chat_event(_FakeRequest(payload))
         self.assertEqual(status, 200)
         body = json.loads(raw_body)
-        self.assertIn("もう少し具体化してください", body["text"])
+        self.assertEqual(body["text"], "ok")
+        self.assertEqual(len(captured), 1)
+        self.assertIn("同一スレッド内のフォローアップ依頼", captured[0])
 
     def test_correction_prompt_auto_resolves_incident_id_from_thread(self):
         self.chat_webhook._is_valid_token = lambda event: True

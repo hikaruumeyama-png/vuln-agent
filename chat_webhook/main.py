@@ -803,6 +803,15 @@ def _build_contextual_prompt(original_prompt: str, recent_turns: list[dict[str, 
     return "\n".join(lines).strip()
 
 
+def _build_thread_followup_prompt(user_prompt: str) -> str:
+    return (
+        "以下は同一スレッド内のフォローアップ依頼です。"
+        "このスレッドの直前文脈を前提に解析してください。"
+        "根拠不足の場合は不足点を明記してください。\n\n"
+        f"ユーザー依頼: {user_prompt}"
+    )
+
+
 @functions_framework.http
 def handle_chat_event(request):
     try:
@@ -880,9 +889,14 @@ def handle_chat_event(request):
         if root_text:
             prompt = _build_vulnerability_ticket_prompt(root_text)
         else:
-            return json.dumps(_thread_payload(event, _build_clarification_message()), ensure_ascii=False), 200, {
-                "Content-Type": "application/json"
-            }
+            message = event.get("message") or {}
+            thread_name = ((message.get("thread") or {}).get("name") or "").strip()
+            if thread_name:
+                prompt = _build_thread_followup_prompt(prompt)
+            else:
+                return json.dumps(_thread_payload(event, _build_clarification_message()), ensure_ascii=False), 200, {
+                    "Content-Type": "application/json"
+                }
     elif _is_ambiguous_prompt(prompt):
         recent_turns = _get_recent_turns(history_key, max_turns=2)
         if not recent_turns:
@@ -892,7 +906,7 @@ def handle_chat_event(request):
         prompt = _build_contextual_prompt(prompt, recent_turns)
 
     try:
-        response_text = _run_agent_query(prompt, user_name)
+        response_text = _run_agent_query(prompt, history_key)
         if not is_gmail_post:
             _remember_turn(history_key, _clean_chat_text(event), response_text)
         return json.dumps(_thread_payload(event, response_text), ensure_ascii=False), 200, {
