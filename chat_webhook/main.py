@@ -175,12 +175,22 @@ def _get_chat_service():
         "https://www.googleapis.com/auth/chat.messages.readonly",
     ]
     sa_json = _get_config("CHAT_SA_CREDENTIALS_JSON", "vuln-agent-chat-sa-key", "")
+    delegated_user = _get_config("CHAT_DELEGATED_USER", "vuln-agent-chat-delegated-user", "")
     if sa_json:
         try:
             from google.oauth2 import service_account
 
             sa_info = json.loads(sa_json)
             credentials = service_account.Credentials.from_service_account_info(sa_info, scopes=scopes)
+            if delegated_user:
+                # Chat message read is user-data scope; use domain-wide delegation when configured.
+                credentials = credentials.with_subject(delegated_user)
+                logger.info("Thread fetch uses delegated user auth: %s", delegated_user)
+            else:
+                logger.warning(
+                    "CHAT_DELEGATED_USER is not configured. "
+                    "ListMessages may fail with insufficient scopes in app auth mode."
+                )
             _chat_service_client = build("chat", "v1", credentials=credentials, cache_discovery=False)
             logger.info("Thread fetch uses Chat app SA credentials from secret")
             return _chat_service_client
