@@ -30,7 +30,6 @@ const clearA2aTraceButton = document.getElementById("clear-a2a-trace");
 const historyFeed = document.getElementById("history-feed");
 const historyUser = document.getElementById("history-user");
 const newThreadButton = document.getElementById("new-thread");
-const featureToolbar = document.getElementById("feature-toolbar");
 const pingLatencyText = document.getElementById("ping-latency");
 const reconnectCountText = document.getElementById("reconnect-count");
 const toastContainer = document.getElementById("toast-container");
@@ -1317,17 +1316,6 @@ historyFeed?.addEventListener("click", (event) => {
   if (!threadId) return;
   selectThread(threadId);
   appendMessage("過去スレッドを読み込みました。このまま会話を再開できます。", "system");
-});
-featureToolbar?.addEventListener("click", (event) => {
-  const target = event.target;
-  if (!(target instanceof HTMLElement)) return;
-  const button = target.closest(".feature-action-btn");
-  if (!button) return;
-  const prompt = button.getAttribute("data-prompt");
-  if (!prompt) return;
-  chatInput.value = prompt;
-  resizeChatInput();
-  chatInput.focus();
 });
 toggleHistoryButton?.addEventListener("click", () => {
   document.body.classList.toggle("history-collapsed");
