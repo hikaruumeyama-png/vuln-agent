@@ -1204,6 +1204,27 @@ def _is_low_quality_ticket_output(text: str) -> bool:
     return False
 
 
+def _has_ticket_sections(text: str) -> bool:
+    body = (text or "").strip()
+    return "【起票用（コピペ）】" in body and "【判断理由】" in body
+
+
+def _is_manual_ticket_output_usable(text: str) -> bool:
+    body = (text or "").strip()
+    if not body:
+        return False
+    if not _has_ticket_sections(body):
+        return False
+    if _is_low_quality_ticket_output(body):
+        return False
+    required_lines = ("大分類:", "小分類:", "依頼概要:", "詳細:")
+    if not all(token in body for token in required_lines):
+        return False
+    if "小分類: 要確認" in body and "依頼概要: 要確認" in body and "詳細: 要確認" in body:
+        return False
+    return True
+
+
 def _format_ticket_like_response(text: str) -> str:
     body = (text or "").strip()
     if not body:
@@ -1367,14 +1388,15 @@ def handle_chat_event(request):
 
     try:
         response_text = _run_agent_query(prompt, history_key)
-        if prefer_ticket_format:
-            response_text = _format_ticket_like_response(response_text)
-            if manual_backfill_mode and _is_low_quality_ticket_output(response_text):
+        if manual_backfill_mode:
+            if not _is_manual_ticket_output_usable(response_text):
                 return json.dumps(_thread_payload(event, _build_backfill_guidance_message()), ensure_ascii=False), 200, {
                     "Content-Type": "application/json"
                 }
             if save_ticket_history:
                 _save_ticket_record_to_history(event, response_text, source="chat_webhook_manual")
+        elif prefer_ticket_format:
+            response_text = _format_ticket_like_response(response_text)
         _remember_turn(history_key, _clean_chat_text(event), response_text)
         return json.dumps(_thread_payload(event, response_text), ensure_ascii=False), 200, {
             "Content-Type": "application/json"

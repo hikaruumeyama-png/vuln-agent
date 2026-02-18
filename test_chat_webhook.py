@@ -251,7 +251,15 @@ class ChatWebhookTests(unittest.TestCase):
 
         def _fake_run(prompt, user_id):
             captured.append(prompt)
-            return "【起票用（コピペ）】\n大分類: 017.脆弱性対応（情シス専用）\n\n【判断理由】\n- test"
+            return (
+                "【起票用（コピペ）】\n"
+                "大分類: 017.脆弱性対応（情シス専用）\n"
+                "小分類: 002.IT基盤チーム\n"
+                "依頼概要: AlmaLinux の脆弱性確認及び該当バージョンの対応願い\n"
+                "詳細: 002.IT基盤チーム\n\n"
+                "【判断理由】\n"
+                "- CVEとURLを検知"
+            )
 
         self.chat_webhook._run_agent_query = _fake_run
         self.chat_webhook._save_ticket_record_to_history = lambda event, response_text, source="": saved.append(source)
