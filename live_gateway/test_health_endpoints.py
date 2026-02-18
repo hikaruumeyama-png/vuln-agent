@@ -83,7 +83,7 @@ class HealthEndpointTests(unittest.TestCase):
     def test_gateway_emits_a2a_trace_events(self):
         source = APP_FILE.read_text(encoding="utf-8")
         self.assertIn('"type": "a2a_trace"', source)
-        self.assertIn('if tool_name in {"call_remote_agent", "call_master_agent"}', source)
+        self.assertIn('"call_remote_agent_conversation_loop"', source)
         self.assertIn('"phase": "call"', source)
         self.assertIn('"phase": "result"', source)
 
