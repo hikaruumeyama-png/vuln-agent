@@ -806,8 +806,13 @@ def _build_contextual_prompt(original_prompt: str, recent_turns: list[dict[str, 
 def _build_thread_followup_prompt(user_prompt: str) -> str:
     return (
         "以下は同一スレッド内のフォローアップ依頼です。"
-        "このスレッドの直前文脈を前提に解析してください。"
-        "根拠不足の場合は不足点を明記してください。\n\n"
+        "対象は『このスレッドで直前に扱った脆弱性通知』に固定してください。"
+        "確認質問は返さず、分析結果を出力してください。"
+        "情報不足の項目は必ず「要確認」と明記してください。\n\n"
+        "出力要件:\n"
+        "- まず結論を提示\n"
+        "- 根拠を簡潔に提示\n"
+        "- 起票に使える具体項目（対象/優先度/対応方針）を提示\n\n"
         f"ユーザー依頼: {user_prompt}"
     )
 
