@@ -84,6 +84,13 @@ _THREAD_ROOT_REFERENCE_WORDS = (
     "上のメッセージ",
     "前のメッセージ",
 )
+_CORRECTION_TRIGGER_WORDS = (
+    "変更して",
+    "修正して",
+    "直して",
+    "更新して",
+)
+_INCIDENT_ID_PATTERN = re.compile(r"\bincident_id[:=\s]*([0-9a-fA-F\-]{8,})\b", re.IGNORECASE)
 _COMPLEXITY_KEYWORDS = (
     "比較",
     "違い",
@@ -316,6 +323,35 @@ def _build_thread_root_analysis_prompt(user_prompt: str, root_text: str) -> str:
         "不明点は推測せず「要確認」と明記してください。\n\n"
         f"ユーザー指示:\n{user_prompt}\n\n"
         f"スレッド元メッセージ:\n{root_text}"
+    )
+
+
+def _is_correction_prompt(prompt: str) -> bool:
+    normalized = re.sub(r"\s+", " ", (prompt or "").strip()).lower()
+    if not normalized:
+        return False
+    return any(token in normalized for token in _CORRECTION_TRIGGER_WORDS)
+
+
+def _extract_incident_id(text: str) -> str:
+    raw = (text or "").strip()
+    if not raw:
+        return ""
+    match = _INCIDENT_ID_PATTERN.search(raw)
+    if not match:
+        return ""
+    return str(match.group(1) or "").strip()
+
+
+def _build_review_prompt_with_incident_id(user_prompt: str, incident_id: str) -> str:
+    return (
+        "以下は起票内容の修正依頼です。"
+        "同一スレッドで解決した incident_id を必ず使用して更新してください。\n"
+        "保存には save_ticket_review_result を使ってください。"
+        "ユーザーが指定した変更点だけ反映し、未指定項目は現在値を維持してください。"
+        "最後に更新後の【起票用（コピペ）】を返してください。\n\n"
+        f"incident_id: {incident_id}\n"
+        f"ユーザー依頼: {user_prompt}"
     )
 
 
@@ -748,6 +784,29 @@ def handle_chat_event(request):
     history_key = _context_key(event, user_name)
     if is_gmail_post:
         prompt = _build_vulnerability_ticket_prompt(raw_text)
+    elif _is_correction_prompt(prompt):
+        if _extract_incident_id(prompt):
+            pass
+        else:
+            root_text = _fetch_thread_root_message_text(event)
+            resolved_incident = _extract_incident_id(root_text)
+            if not resolved_incident:
+                recent_turns = _get_recent_turns(history_key, max_turns=2)
+                for turn in reversed(recent_turns):
+                    candidate = _extract_incident_id(turn.get("assistant", ""))
+                    if candidate:
+                        resolved_incident = candidate
+                        break
+            if not resolved_incident:
+                return json.dumps(
+                    _thread_payload(
+                        event,
+                        "このスレッドから incident_id を特定できませんでした。"
+                        " 直近の通知に含まれる【管理ID】を指定して再度「修正して」と依頼してください。",
+                    ),
+                    ensure_ascii=False,
+                ), 200, {"Content-Type": "application/json"}
+            prompt = _build_review_prompt_with_incident_id(prompt, resolved_incident)
     elif not prompt:
         # メンションでもGmail投稿でもない通常メッセージは何もしない。
         return json.dumps({}, ensure_ascii=False), 200, {"Content-Type": "application/json"}

@@ -89,6 +89,7 @@ _EXPORT_SPECS: list[tuple[str, list[str]]] = [
             "get_nvd_cvss_summary",
             "list_osv_vulnerability_ids",
             "save_vulnerability_history_minimal",
+            "save_ticket_review_result",
         ],
     ),
     (

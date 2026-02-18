@@ -237,3 +237,78 @@ def save_vulnerability_history_minimal(
         severity=severity,
         affected_systems=affected_systems,
     )
+
+
+def save_ticket_review_result(
+    incident_id: str,
+    vulnerability_id: str,
+    title: str,
+    severity: str,
+    affected_systems: list[str],
+    final_major_category: str,
+    final_minor_category: str,
+    final_request_summary: str,
+    final_detail: str,
+    reviewer: str = "",
+    correction_reason: str = "",
+    ai_ticket_record: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    """
+    人手レビュー結果を履歴として追記保存する。
+
+    既存レコードの更新ではなく、同一 incident_id に reviewed イベントを追加する運用を想定。
+    """
+    iid = (incident_id or "").strip()
+    if not iid:
+        return {"status": "error", "message": "incident_id は必須です。"}
+
+    final_record = {
+        "major_category": (final_major_category or "").strip(),
+        "minor_category": (final_minor_category or "").strip(),
+        "request_summary": (final_request_summary or "").strip(),
+        "detail": (final_detail or "").strip(),
+    }
+    if not all(final_record.values()):
+        return {
+            "status": "error",
+            "message": (
+                "final_major_category, final_minor_category, "
+                "final_request_summary, final_detail は必須です。"
+            ),
+        }
+
+    review_payload = {
+        "review": {
+            "reviewer": (reviewer or "").strip(),
+            "correction_reason": (correction_reason or "").strip(),
+            "final_ticket_record": final_record,
+        },
+        "ai_ticket_record": ai_ticket_record or {},
+    }
+    result = log_vulnerability_history(
+        vulnerability_id=vulnerability_id,
+        title=title,
+        severity=severity,
+        affected_systems=affected_systems,
+        status="reviewed",
+        incident_id=iid,
+        source="human_review",
+        extra=review_payload,
+    )
+    if result.get("status") != "saved":
+        return result
+
+    copy_paste_text = (
+        "【起票用（コピペ）】\n"
+        f"大分類: {final_record['major_category']}\n"
+        f"小分類: {final_record['minor_category']}\n"
+        f"依頼概要: {final_record['request_summary']}\n"
+        f"詳細: {final_record['detail']}"
+    )
+    return {
+        "status": "saved",
+        "incident_id": iid,
+        "table_id": result.get("table_id"),
+        "final_ticket_record": final_record,
+        "copy_paste_text": copy_paste_text,
+    }
