@@ -1474,17 +1474,91 @@ def _is_auto_ticket_output_usable(text: str) -> bool:
         return False
     if "依頼概要:" not in body or "詳細:" not in body:
         return False
-    weak_summary = ("はい、承知", "以下に", "テンプレート", "作成します")
+    weak_summary = (
+        "はい、承知",
+        "承知いたしました",
+        "ご依頼のメール内容",
+        "判断しました",
+        "以下に",
+        "テンプレート",
+        "作成します",
+    )
     for line in body.splitlines():
         if not line.strip().startswith("依頼概要:"):
             continue
         summary = line.split(":", 1)[1].strip()
         if any(w in summary for w in weak_summary):
             return False
+        if len(summary) < 10:
+            return False
+        if "脆弱性" not in summary and "ペネトレ" not in summary and "アップグレード" not in summary:
+            return False
     return True
 
 
-def _format_ticket_like_response(text: str) -> str:
+def _infer_request_summary_from_source(source_text: str) -> str:
+    text = (source_text or "").strip()
+    if not text:
+        return "脆弱性確認及び該当バージョンの対応依頼"
+    lower = text.lower()
+    product_patterns = [
+        (r"almalinux", "AlmaLinux"),
+        (r"fortios|fortigate", "FortiOS"),
+        (r"cisco\s*asa", "Cisco ASA"),
+        (r"amazon\s*linux", "Amazon Linux"),
+        (r"lanscope", "LANSCOPE"),
+        (r"\bios\b|iphone", "Apple iOS"),
+        (r"windows", "Windows"),
+    ]
+    for pattern, name in product_patterns:
+        if re.search(pattern, lower):
+            if name == "Apple iOS":
+                return "Apple iOS のアップグレード依頼"
+            return f"{name} の脆弱性確認及び該当バージョンの対応依頼"
+    return "脆弱性確認及び該当バージョンの対応依頼"
+
+
+def _repair_ticket_summary_if_needed(text: str, source_text: str = "") -> str:
+    body = (text or "").strip()
+    if not body:
+        return body
+    lines = body.splitlines()
+    summary_idx = -1
+    summary = ""
+    for i, raw in enumerate(lines):
+        line = raw.strip()
+        if not line.startswith("依頼概要:"):
+            continue
+        summary_idx = i
+        summary = line.split(":", 1)[1].strip()
+        break
+    if summary_idx < 0:
+        return body
+
+    weak_summary_tokens = (
+        "はい、承知",
+        "承知いたしました",
+        "ご依頼のメール内容",
+        "判断しました",
+        "以下に",
+        "テンプレート",
+        "作成します",
+    )
+    needs_repair = (
+        not summary
+        or len(summary) < 10
+        or any(token in summary for token in weak_summary_tokens)
+        or ("脆弱性" not in summary and "ペネトレ" not in summary and "アップグレード" not in summary)
+    )
+    if not needs_repair:
+        return body
+
+    repaired = _infer_request_summary_from_source(source_text)
+    lines[summary_idx] = f"依頼概要: {repaired}"
+    return "\n".join(lines).strip()
+
+
+def _format_ticket_like_response(text: str, source_text: str = "") -> str:
     body = (text or "").strip()
     if not body:
         return body
@@ -1493,21 +1567,22 @@ def _format_ticket_like_response(text: str) -> str:
     has_copy = "【起票用（コピペ）】" in body
     has_reason = "【判断理由】" in body
     if has_copy and has_reason:
-        return body
+        return _repair_ticket_summary_if_needed(body, source_text)
 
     lines = [ln.strip() for ln in body.splitlines() if ln.strip()]
     noise_prefixes = ("```", "###", "|", ":---", "---")
     summary_candidates = [
         ln for ln in lines if not ln.startswith(noise_prefixes) and not _looks_like_internal_artifact(ln)
     ]
-    summary = " / ".join(summary_candidates[:3]) if summary_candidates else "要確認"
+    summary = " / ".join(summary_candidates[:3]) if summary_candidates else ""
     summary = re.sub(r"\s+", " ", summary).strip()[:220]
+    summary = _repair_ticket_summary_if_needed(f"依頼概要: {summary}", source_text).split(":", 1)[1].strip()
 
     return (
         "【起票用（コピペ）】\n"
         "大分類: 017.脆弱性対応（情シス専用）\n"
         "小分類: 002.IT基盤チーム\n"
-        f"依頼概要: {summary or '要確認'}\n"
+        f"依頼概要: {summary or _infer_request_summary_from_source(source_text)}\n"
         "詳細: 要確認\n\n"
         "【判断理由】\n"
         "- スレッド文脈が不足していたため、不足項目を「要確認」で補完\n"
@@ -1619,7 +1694,7 @@ def _process_message_event(event: dict[str, Any], user_name: str) -> str | None:
         if not _is_auto_ticket_output_usable(response_text):
             if is_gmail_post and not _contains_specific_vuln_signal(source_text_for_quality):
                 return _build_low_quality_ticket_message()
-            response_text = _format_ticket_like_response(response_text)
+            response_text = _format_ticket_like_response(response_text, source_text_for_quality)
     _remember_turn(history_key, _clean_chat_text(event), response_text)
     return response_text
 

@@ -390,6 +390,21 @@ class ChatWebhookTests(unittest.TestCase):
         formatted = self.chat_webhook._format_ticket_like_response(raw)
         self.assertIn("根拠情報が不足", formatted)
 
+    def test_format_ticket_like_response_repairs_conversational_summary(self):
+        raw = (
+            "【起票用（コピペ）】\n"
+            "大分類: 017.脆弱性対応（情シス専用）\n"
+            "小分類: 002.IT基盤チーム\n"
+            "依頼概要: はい、承知いたしました。 / ご依頼のメール内容は脆弱性関連の通知と判断しました。\n"
+            "詳細: 要確認\n\n"
+            "【判断理由】\n"
+            "- スレッド文脈が不足していたため、不足項目を「要確認」で補完\n"
+        )
+        source = "AlmaLinux9\nhttps://sid.softek.jp/filter/sinfo/62989\nCVSS 8.8"
+        formatted = self.chat_webhook._format_ticket_like_response(raw, source)
+        self.assertIn("依頼概要: AlmaLinux の脆弱性確認及び該当バージョンの対応依頼", formatted)
+        self.assertNotIn("承知いたしました", formatted)
+
     def test_correction_prompt_without_incident_id_returns_guidance(self):
         self.chat_webhook._is_valid_token = lambda event: True
         self.chat_webhook._fetch_thread_root_message_text = lambda event: ""
