@@ -376,6 +376,11 @@ class ChatWebhookTests(unittest.TestCase):
         self.assertIn("【起票用（コピペ）】", formatted)
         self.assertIn("【判断理由】", formatted)
 
+    def test_format_ticket_like_response_rejects_internal_artifact_noise(self):
+        raw = "gemini-2.5-pro / <ctrl42> / tool_code"
+        formatted = self.chat_webhook._format_ticket_like_response(raw)
+        self.assertIn("根拠情報が不足", formatted)
+
     def test_correction_prompt_without_incident_id_returns_guidance(self):
         self.chat_webhook._is_valid_token = lambda event: True
         self.chat_webhook._fetch_thread_root_message_text = lambda event: ""

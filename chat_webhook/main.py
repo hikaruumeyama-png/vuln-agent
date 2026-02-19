@@ -707,6 +707,28 @@ def _resolve_agent_resource_name(prompt: str) -> tuple[str, dict[str, Any]]:
     return selected, {"routing_enabled": True, **complexity}
 
 
+def _looks_like_internal_artifact(text: str) -> bool:
+    t = (text or "").strip()
+    if not t:
+        return False
+    lowered = t.lower()
+    bad_tokens = (
+        "gemini-",
+        "tool_code",
+        "tool code",
+        "tool_name",
+        "on_demand",
+        "<ctrl",
+        "function_call",
+        "assistant_response",
+    )
+    if any(token in lowered for token in bad_tokens):
+        return True
+    if re.search(r"<[^>]{2,32}>", t):
+        return True
+    return False
+
+
 def _run_agent_query(prompt: str, user_id: str) -> str:
     project_id = _get_project_id()
     location = os.environ.get("GCP_LOCATION", "asia-northeast1")
@@ -799,6 +821,8 @@ def _run_agent_query(prompt: str, user_id: str) -> str:
 
     def _is_noise_line(line: str) -> bool:
         if not line:
+            return True
+        if _looks_like_internal_artifact(line):
             return True
         if line in {"model", "TEXT", "STOP", "ON_DEMAND", "sent", "user"}:
             return True
@@ -1302,6 +1326,8 @@ def _is_auto_ticket_output_usable(text: str) -> bool:
     body = (text or "").strip()
     if not body:
         return False
+    if _looks_like_internal_artifact(body):
+        return False
     if not _has_ticket_sections(body):
         return False
     if _is_low_quality_ticket_output(body):
@@ -1322,6 +1348,8 @@ def _format_ticket_like_response(text: str) -> str:
     body = (text or "").strip()
     if not body:
         return body
+    if _looks_like_internal_artifact(body):
+        return _build_low_quality_ticket_message()
     has_copy = "【起票用（コピペ）】" in body
     has_reason = "【判断理由】" in body
     if has_copy and has_reason:
@@ -1329,7 +1357,9 @@ def _format_ticket_like_response(text: str) -> str:
 
     lines = [ln.strip() for ln in body.splitlines() if ln.strip()]
     noise_prefixes = ("```", "###", "|", ":---", "---")
-    summary_candidates = [ln for ln in lines if not ln.startswith(noise_prefixes)]
+    summary_candidates = [
+        ln for ln in lines if not ln.startswith(noise_prefixes) and not _looks_like_internal_artifact(ln)
+    ]
     summary = " / ".join(summary_candidates[:3]) if summary_candidates else "要確認"
     summary = re.sub(r"\s+", " ", summary).strip()[:220]
 
