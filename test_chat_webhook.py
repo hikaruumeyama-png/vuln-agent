@@ -404,6 +404,10 @@ class ChatWebhookTests(unittest.TestCase):
         formatted = self.chat_webhook._format_ticket_like_response(raw, source)
         self.assertIn("依頼概要: AlmaLinux の脆弱性確認及び該当バージョンの対応依頼", formatted)
         self.assertNotIn("承知いたしました", formatted)
+        self.assertIn("【対象の機器/アプリ】", formatted)
+        self.assertIn("https://sid.softek.jp/filter/sinfo/62989", formatted)
+        self.assertIn("【判断理由】", formatted)
+        self.assertIn("通知本文から対象製品を抽出", formatted)
 
     def test_correction_prompt_without_incident_id_returns_guidance(self):
         self.chat_webhook._is_valid_token = lambda event: True

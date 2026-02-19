@@ -1518,6 +1518,119 @@ def _infer_request_summary_from_source(source_text: str) -> str:
     return "脆弱性確認及び該当バージョンの対応依頼"
 
 
+def _extract_source_facts(source_text: str) -> dict[str, Any]:
+    text = (source_text or "").strip()
+    lowered = text.lower()
+    links = re.findall(r"https?://[^\s)>\]]+", text)
+    sid_links = [u for u in links if "sid.softek.jp" in u]
+    vuln_links = sid_links if sid_links else links
+
+    products: list[str] = []
+    if "almalinux" in lowered:
+        versions = sorted({m.group(1) for m in re.finditer(r"almalinux\s*([0-9]{1,2})", lowered)})
+        if versions:
+            products.extend([f"AlmaLinux{v}" for v in versions])
+        else:
+            products.append("AlmaLinux")
+    if re.search(r"fortios|fortigate", lowered):
+        products.append("FortiOS")
+    if re.search(r"cisco\s*asa", lowered):
+        products.append("Cisco ASA")
+    if re.search(r"amazon\s*linux", lowered):
+        products.append("Amazon Linux")
+    if re.search(r"\bios\b|iphone", lowered):
+        products.append("Apple iOS")
+    if not products:
+        products.append("要確認")
+    products = list(dict.fromkeys(products))
+
+    scores: list[float] = []
+    for m in re.finditer(r"(?:cvss(?:v3)?[:\s]*)\s*(10(?:\.0)?|[0-9](?:\.[0-9])?)", lowered):
+        try:
+            scores.append(float(m.group(1)))
+        except Exception:
+            pass
+    if not scores:
+        # SIDfm一覧の "8.8 AlmaLinux ..." のような記法を拾う。
+        for m in re.finditer(r"\b(10(?:\.0)?|[0-9]\.[0-9])\b", text):
+            try:
+                value = float(m.group(1))
+                if 0.0 <= value <= 10.0:
+                    scores.append(value)
+            except Exception:
+                pass
+    unique_scores = sorted(set(scores), reverse=True)
+    max_score = unique_scores[0] if unique_scores else None
+
+    return {
+        "products": products,
+        "vuln_links": vuln_links[:20],
+        "scores": unique_scores[:10],
+        "max_score": max_score,
+    }
+
+
+def _infer_ticket_detail_from_source(source_text: str) -> str:
+    facts = _extract_source_facts(source_text)
+    product_line = "\n".join(facts["products"]) if facts["products"] else "要確認"
+    links = facts["vuln_links"] or ["要確認"]
+    links_line = "\n".join(links)
+    if facts["scores"]:
+        max_score = facts["max_score"]
+        scores_text = ", ".join(f"{s:.1f}" for s in facts["scores"])
+        cvss_line = f"最大 {max_score:.1f}（通知内: {scores_text}）"
+    else:
+        cvss_line = "要確認"
+    return (
+        "【対象の機器/アプリ】\n"
+        f"{product_line}\n\n"
+        "【脆弱性情報】\n"
+        f"{links_line}\n\n"
+        "【CVSSスコア】\n"
+        f"{cvss_line}\n\n"
+        "【依頼内容】\n"
+        "上記脆弱性情報をご確認いただき、該当バージョンの場合はアップデート対応をお願いします。\n"
+        "対応を実施した場合は対象ホスト名（または対象端末）をご共有ください。\n\n"
+        "【対応完了目標】\n"
+        "要確認"
+    )
+
+
+def _infer_reasoning_from_source(source_text: str) -> str:
+    facts = _extract_source_facts(source_text)
+    product_text = " / ".join(facts["products"]) if facts["products"] else "要確認"
+    links_count = len(facts["vuln_links"])
+    if facts["scores"]:
+        scores_text = ", ".join(f"{s:.1f}" for s in facts["scores"])
+    else:
+        scores_text = "要確認"
+    return (
+        "【判断理由】\n"
+        f"- 通知本文から対象製品を抽出: {product_text}\n"
+        f"- 参照URLを抽出: {links_count}件\n"
+        f"- CVSSを抽出: {scores_text}\n"
+        "- 通知本文に対応完了目標の明記がないため、対応完了目標は「要確認」"
+    )
+
+
+def _is_summary_low_quality(summary: str) -> bool:
+    weak_summary_tokens = (
+        "はい、承知",
+        "承知いたしました",
+        "ご依頼のメール内容",
+        "判断しました",
+        "以下に",
+        "テンプレート",
+        "作成します",
+    )
+    return (
+        (not summary)
+        or len(summary) < 10
+        or any(token in summary for token in weak_summary_tokens)
+        or ("脆弱性" not in summary and "ペネトレ" not in summary and "アップグレード" not in summary)
+    )
+
+
 def _repair_ticket_summary_if_needed(text: str, source_text: str = "") -> str:
     body = (text or "").strip()
     if not body:
@@ -1535,27 +1648,41 @@ def _repair_ticket_summary_if_needed(text: str, source_text: str = "") -> str:
     if summary_idx < 0:
         return body
 
-    weak_summary_tokens = (
-        "はい、承知",
-        "承知いたしました",
-        "ご依頼のメール内容",
-        "判断しました",
-        "以下に",
-        "テンプレート",
-        "作成します",
-    )
-    needs_repair = (
-        not summary
-        or len(summary) < 10
-        or any(token in summary for token in weak_summary_tokens)
-        or ("脆弱性" not in summary and "ペネトレ" not in summary and "アップグレード" not in summary)
-    )
+    needs_repair = _is_summary_low_quality(summary)
     if not needs_repair:
         return body
 
     repaired = _infer_request_summary_from_source(source_text)
     lines[summary_idx] = f"依頼概要: {repaired}"
     return "\n".join(lines).strip()
+
+
+def _should_rebuild_ticket_text(body: str) -> bool:
+    if "詳細: 要確認" in body:
+        return True
+    if "スレッド文脈が不足" in body and "要確認" in body:
+        return True
+    summary = ""
+    for raw in body.splitlines():
+        line = raw.strip()
+        if line.startswith("依頼概要:"):
+            summary = line.split(":", 1)[1].strip()
+            break
+    return _is_summary_low_quality(summary)
+
+
+def _build_ticket_text_from_source(source_text: str) -> str:
+    summary = _infer_request_summary_from_source(source_text)
+    detail = _infer_ticket_detail_from_source(source_text)
+    reasoning = _infer_reasoning_from_source(source_text)
+    return (
+        "【起票用（コピペ）】\n"
+        "大分類: 017.脆弱性対応（情シス専用）\n"
+        "小分類: 002.IT基盤チーム\n"
+        f"依頼概要: {summary}\n"
+        f"詳細:\n{detail}\n\n"
+        f"{reasoning}"
+    ).strip()
 
 
 def _format_ticket_like_response(text: str, source_text: str = "") -> str:
@@ -1567,7 +1694,10 @@ def _format_ticket_like_response(text: str, source_text: str = "") -> str:
     has_copy = "【起票用（コピペ）】" in body
     has_reason = "【判断理由】" in body
     if has_copy and has_reason:
-        return _repair_ticket_summary_if_needed(body, source_text)
+        repaired = _repair_ticket_summary_if_needed(body, source_text)
+        if _should_rebuild_ticket_text(repaired):
+            return _build_ticket_text_from_source(source_text)
+        return repaired
 
     lines = [ln.strip() for ln in body.splitlines() if ln.strip()]
     noise_prefixes = ("```", "###", "|", ":---", "---")
@@ -1576,18 +1706,19 @@ def _format_ticket_like_response(text: str, source_text: str = "") -> str:
     ]
     summary = " / ".join(summary_candidates[:3]) if summary_candidates else ""
     summary = re.sub(r"\s+", " ", summary).strip()[:220]
-    summary = _repair_ticket_summary_if_needed(f"依頼概要: {summary}", source_text).split(":", 1)[1].strip()
+    if _is_summary_low_quality(summary):
+        return _build_ticket_text_from_source(source_text)
 
+    detail = _infer_ticket_detail_from_source(source_text)
+    reasoning = _infer_reasoning_from_source(source_text)
     return (
         "【起票用（コピペ）】\n"
         "大分類: 017.脆弱性対応（情シス専用）\n"
         "小分類: 002.IT基盤チーム\n"
-        f"依頼概要: {summary or _infer_request_summary_from_source(source_text)}\n"
-        "詳細: 要確認\n\n"
-        "【判断理由】\n"
-        "- スレッド文脈が不足していたため、不足項目を「要確認」で補完\n"
-        "- 元のAI出力をChat向け固定フォーマットに整形"
-    )
+        f"依頼概要: {summary}\n"
+        f"詳細:\n{detail}\n\n"
+        f"{reasoning}"
+    ).strip()
 
 
 def _process_message_event(event: dict[str, Any], user_name: str) -> str | None:
