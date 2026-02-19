@@ -31,8 +31,9 @@ def _load_module(name: str, path: Path):
 
 
 class _FakeRequest:
-    def __init__(self, payload):
+    def __init__(self, payload, headers=None):
         self._payload = payload
+        self.headers = headers or {}
 
     def get_json(self, silent=True):
         _ = silent
@@ -512,6 +513,28 @@ class ChatWebhookTests(unittest.TestCase):
     def test_contains_specific_vuln_signal_does_not_accept_generic_url_only(self):
         text = "To view the full email in Google Groups, select View message. https://groups.google.com/"
         self.assertFalse(self.chat_webhook._contains_specific_vuln_signal(text))
+
+    def test_cloud_tasks_internal_request_processes_and_posts_final_message(self):
+        self.chat_webhook._is_valid_token = lambda event: (_ for _ in ()).throw(
+            AssertionError("token validation should be bypassed for Cloud Tasks internal request")
+        )
+        sent: list[str] = []
+        self.chat_webhook._process_message_event = lambda event, user_name: "FINAL_FROM_TASK"
+        self.chat_webhook._send_message_to_thread = lambda event, text: sent.append(text)
+        payload = {
+            "_internal_async_task": True,
+            "user_name": "111",
+            "chat_event": {
+                "type": "MESSAGE",
+                "user": {"name": "users/111"},
+                "message": {"text": "<users/999> 確認して", "thread": {"name": "spaces/AAA/threads/BBB"}},
+            },
+        }
+        headers = {"X-CloudTasks-TaskName": "projects/p/locations/l/queues/q/tasks/t1"}
+        raw_body, status, _headers = self.chat_webhook.handle_chat_event(_FakeRequest(payload, headers=headers))
+        self.assertEqual(status, 200)
+        self.assertEqual(json.loads(raw_body)["status"], "ok")
+        self.assertEqual(sent, ["FINAL_FROM_TASK"])
 
 
 if __name__ == "__main__":

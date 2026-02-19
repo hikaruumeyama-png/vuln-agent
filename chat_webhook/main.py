@@ -6,6 +6,7 @@ import asyncio
 from collections import deque
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timezone
+import hashlib
 import json
 import logging
 import os
@@ -955,6 +956,8 @@ def _register_async_event_once(event: dict[str, Any]) -> bool:
 
 
 def _submit_async_job(event: dict[str, Any], user_name: str) -> None:
+    if _enqueue_async_task(event, user_name):
+        return
     global _ASYNC_WORKER_POOL
     try:
         _ASYNC_WORKER_POOL.submit(_run_async_message_processing, event, user_name)
@@ -963,6 +966,84 @@ def _submit_async_job(event: dict[str, Any], user_name: str) -> None:
         # Worker pool can be in shutdown state during instance lifecycle transitions.
         _ASYNC_WORKER_POOL = ThreadPoolExecutor(max_workers=4, thread_name_prefix="chat-webhook-worker")
         _ASYNC_WORKER_POOL.submit(_run_async_message_processing, event, user_name)
+
+
+def _get_async_task_target_url() -> str:
+    explicit = (os.environ.get("CHAT_ASYNC_TASK_TARGET_URL") or "").strip()
+    if explicit:
+        return explicit
+    project_id = _get_project_id()
+    region = (os.environ.get("CHAT_ASYNC_TASKS_LOCATION") or os.environ.get("GCP_LOCATION") or "asia-northeast1").strip()
+    service = (os.environ.get("K_SERVICE") or "vuln-agent-chat-webhook").strip()
+    if not project_id or not region or not service:
+        return ""
+    return f"https://{region}-{project_id}.cloudfunctions.net/{service}"
+
+
+def _enqueue_async_task(event: dict[str, Any], user_name: str) -> bool:
+    if not _is_async_response_enabled():
+        return False
+    try:
+        from google.cloud import tasks_v2
+        from google.api_core.exceptions import AlreadyExists
+    except Exception as exc:
+        logger.warning("Cloud Tasks libraries unavailable; fallback to in-process async: %s", exc)
+        return False
+
+    project_id = _get_project_id()
+    location = (os.environ.get("CHAT_ASYNC_TASKS_LOCATION") or os.environ.get("GCP_LOCATION") or "asia-northeast1").strip()
+    queue_id = (os.environ.get("CHAT_ASYNC_TASKS_QUEUE") or "vuln-agent-chat-async").strip()
+    target_url = _get_async_task_target_url()
+    if not project_id or not location or not queue_id or not target_url:
+        logger.warning("Async task enqueue skipped: missing project/location/queue/target_url")
+        return False
+
+    try:
+        client = tasks_v2.CloudTasksClient()
+
+        parent = client.queue_path(project_id, location, queue_id)
+        payload = {
+            "_internal_async_task": True,
+            "chat_event": event,
+            "user_name": user_name,
+        }
+        body = json.dumps(payload, ensure_ascii=False).encode("utf-8")
+        task: dict[str, Any] = {
+            "http_request": {
+                "http_method": tasks_v2.HttpMethod.POST,
+                "url": target_url,
+                "headers": {"Content-Type": "application/json"},
+                "body": body,
+            }
+        }
+
+        message_name = str(((event.get("message") or {}).get("name") or "")).strip()
+        if message_name:
+            digest = hashlib.sha1(message_name.encode("utf-8")).hexdigest()[:24]
+            task_id = f"msg-{digest}"
+            task["name"] = client.task_path(project_id, location, queue_id, task_id)
+
+        client.create_task(parent=parent, task=task)
+        logger.info("Enqueued async processing task to Cloud Tasks queue=%s", queue_id)
+        return True
+    except AlreadyExists:
+        logger.info("Skipped duplicate async task enqueue for same message")
+        return True
+    except Exception as exc:
+        logger.warning("Failed to enqueue async task; fallback to in-process async: %s", exc)
+        return False
+
+
+def _is_cloud_tasks_request(request: Any, event: dict[str, Any]) -> bool:
+    if not isinstance(event, dict):
+        return False
+    if not bool(event.get("_internal_async_task")):
+        return False
+    headers = getattr(request, "headers", None)
+    if headers is None:
+        return False
+    task_name = str(headers.get("X-CloudTasks-TaskName") or "").strip()
+    return bool(task_name)
 
 
 def _send_message_to_thread(event: dict[str, Any], text: str) -> None:
@@ -1566,6 +1647,26 @@ def handle_chat_event(request):
 
     if not event:
         return json.dumps({"text": "Invalid request"}), 400, {"Content-Type": "application/json"}
+
+    if _is_cloud_tasks_request(request, event):
+        chat_event = event.get("chat_event") if isinstance(event.get("chat_event"), dict) else {}
+        user_name = str(event.get("user_name") or "google-chat-user")
+        if not chat_event:
+            return json.dumps({"status": "ignored", "reason": "missing chat_event"}, ensure_ascii=False), 200, {
+                "Content-Type": "application/json"
+            }
+        try:
+            response_text = _process_message_event(chat_event, user_name)
+            if response_text:
+                _send_message_to_thread(chat_event, response_text)
+            return json.dumps({"status": "ok"}, ensure_ascii=False), 200, {"Content-Type": "application/json"}
+        except Exception as exc:
+            logger.exception("Failed to process Cloud Tasks async request: %s", exc)
+            try:
+                _send_message_to_thread(chat_event, f"処理中にエラーが発生しました: {exc}")
+            except Exception:
+                pass
+            return json.dumps({"status": "error"}, ensure_ascii=False), 200, {"Content-Type": "application/json"}
 
     if not _is_valid_token(event):
         return json.dumps({"text": "Unauthorized"}), 403, {"Content-Type": "application/json"}

@@ -4,3 +4,4 @@ google-cloud-secret-manager>=2.20.0
 google-api-python-client>=2.149.0
 google-auth>=2.35.0
 google-cloud-bigquery>=3.30.0
+google-cloud-tasks>=2.16.0
