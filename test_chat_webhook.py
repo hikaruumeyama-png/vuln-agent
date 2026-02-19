@@ -44,6 +44,8 @@ class ChatWebhookTests(unittest.TestCase):
     def setUpClass(cls):
         _stub_dependencies()
         cls.chat_webhook = _load_module("chat_webhook_test_module", CHAT_WEBHOOK_PATH)
+        cls._orig_process_message_event = cls.chat_webhook._process_message_event
+        cls._orig_send_message_to_thread = cls.chat_webhook._send_message_to_thread
 
     def setUp(self):
         if hasattr(self.chat_webhook, "_RECENT_TURNS"):
@@ -51,6 +53,8 @@ class ChatWebhookTests(unittest.TestCase):
         for key in ("AGENT_RESOURCE_NAME", "AGENT_RESOURCE_NAME_FLASH", "AGENT_RESOURCE_NAME_PRO"):
             os.environ.pop(key, None)
         os.environ.pop("CHAT_ASYNC_RESPONSE_ENABLED", None)
+        self.chat_webhook._process_message_event = type(self)._orig_process_message_event
+        self.chat_webhook._send_message_to_thread = type(self)._orig_send_message_to_thread
 
     def test_clean_chat_text_prefers_argument_text(self):
         text = self.chat_webhook._clean_chat_text(
@@ -424,16 +428,12 @@ class ChatWebhookTests(unittest.TestCase):
         self.assertEqual(selected, "pro-agent")
         self.assertEqual(route["tier"], "pro")
 
-    def test_async_mode_returns_thinking_message_and_queues_worker(self):
+    def test_async_mode_sends_thinking_and_final_messages(self):
         os.environ["CHAT_ASYNC_RESPONSE_ENABLED"] = "true"
         self.chat_webhook._is_valid_token = lambda event: True
-        submitted: list[tuple] = []
-
-        class _FakePool:
-            def submit(self, fn, event, user_name):
-                submitted.append((fn, user_name, event.get("type")))
-
-        self.chat_webhook._ASYNC_WORKER_POOL = _FakePool()
+        sent: list[str] = []
+        self.chat_webhook._send_message_to_thread = lambda event, text: sent.append(text)
+        self.chat_webhook._process_message_event = lambda event, user_name: "FINAL"
         payload = {
             "type": "MESSAGE",
             "user": {"name": "users/111"},
@@ -441,9 +441,10 @@ class ChatWebhookTests(unittest.TestCase):
         }
         raw_body, status, _headers = self.chat_webhook.handle_chat_event(_FakeRequest(payload))
         self.assertEqual(status, 200)
-        body = json.loads(raw_body)
-        self.assertIn("思考中です", body["text"])
-        self.assertEqual(len(submitted), 1)
+        self.assertEqual(json.loads(raw_body), {})
+        self.assertEqual(len(sent), 2)
+        self.assertIn("思考中です", sent[0])
+        self.assertEqual(sent[1], "FINAL")
 
     def test_async_mode_skips_non_actionable_bot_messages(self):
         os.environ["CHAT_ASYNC_RESPONSE_ENABLED"] = "true"

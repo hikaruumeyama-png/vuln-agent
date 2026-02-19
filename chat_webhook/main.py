@@ -1527,12 +1527,23 @@ def handle_chat_event(request):
     if _is_async_response_enabled():
         if not _is_message_actionable(event):
             return json.dumps({}, ensure_ascii=False), 200, {"Content-Type": "application/json"}
-        if _register_async_event_once(event):
-            _ASYNC_WORKER_POOL.submit(_run_async_message_processing, event, user_name)
-        return json.dumps(
-            _thread_payload(event, "思考中です。分析が完了したらこのスレッドに結果を送信します。"),
-            ensure_ascii=False,
-        ), 200, {"Content-Type": "application/json"}
+        if not _register_async_event_once(event):
+            return json.dumps({}, ensure_ascii=False), 200, {"Content-Type": "application/json"}
+        try:
+            _send_message_to_thread(event, "思考中です。分析が完了したらこのスレッドに結果を送信します。")
+        except Exception as exc:
+            logger.warning("Failed to send thinking message: %s", exc)
+        try:
+            response_text = _process_message_event(event, user_name)
+            if response_text:
+                _send_message_to_thread(event, response_text)
+        except Exception as exc:
+            logger.exception("Failed to handle async-inline event: %s", exc)
+            try:
+                _send_message_to_thread(event, f"処理中にエラーが発生しました: {exc}")
+            except Exception:
+                pass
+        return json.dumps({}, ensure_ascii=False), 200, {"Content-Type": "application/json"}
 
     try:
         response_text = _process_message_event(event, user_name)
