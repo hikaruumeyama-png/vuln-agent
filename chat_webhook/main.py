@@ -1653,20 +1653,24 @@ def _extract_source_facts(source_text: str) -> dict[str, Any]:
     products = list(dict.fromkeys(products))
 
     scores: list[float] = []
-    for m in re.finditer(r"(?:cvss(?:v3)?[:\s]*)\s*(10(?:\.0)?|[0-9](?:\.[0-9])?)", lowered):
-        try:
-            scores.append(float(m.group(1)))
-        except Exception:
-            pass
-    if not scores:
-        # SIDfm一覧の "8.8 AlmaLinux ..." のような記法を拾う。
-        for m in re.finditer(r"\b(10(?:\.0)?|[0-9]\.[0-9])\b", text):
+    entry_scores = [float(e.get("cvss")) for e in entries if isinstance(e.get("cvss"), (int, float))]
+    if entry_scores:
+        scores.extend(entry_scores)
+    else:
+        for m in re.finditer(r"(?:cvss(?:v3)?[:\s]*)\s*(10(?:\.0)?|[0-9](?:\.[0-9])?)", lowered):
             try:
-                value = float(m.group(1))
-                if 0.0 <= value <= 10.0:
-                    scores.append(value)
+                scores.append(float(m.group(1)))
             except Exception:
                 pass
+        if not scores:
+            # SIDfm一覧の "8.8 AlmaLinux ..." のような記法を拾う。
+            for m in re.finditer(r"\b(10(?:\.0)?|[0-9]\.[0-9])\b", text):
+                try:
+                    value = float(m.group(1))
+                    if 0.0 <= value <= 10.0:
+                        scores.append(value)
+                except Exception:
+                    pass
     unique_scores = sorted(set(scores), reverse=True)
     max_score = unique_scores[0] if unique_scores else None
 
