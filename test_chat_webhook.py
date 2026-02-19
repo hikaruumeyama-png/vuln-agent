@@ -50,6 +50,7 @@ class ChatWebhookTests(unittest.TestCase):
             self.chat_webhook._RECENT_TURNS.clear()
         for key in ("AGENT_RESOURCE_NAME", "AGENT_RESOURCE_NAME_FLASH", "AGENT_RESOURCE_NAME_PRO"):
             os.environ.pop(key, None)
+        os.environ.pop("CHAT_ASYNC_RESPONSE_ENABLED", None)
 
     def test_clean_chat_text_prefers_argument_text(self):
         text = self.chat_webhook._clean_chat_text(
@@ -417,6 +418,46 @@ class ChatWebhookTests(unittest.TestCase):
         selected, route = self.chat_webhook._resolve_agent_resource_name(prompt)
         self.assertEqual(selected, "pro-agent")
         self.assertEqual(route["tier"], "pro")
+
+    def test_async_mode_returns_thinking_message_and_queues_worker(self):
+        os.environ["CHAT_ASYNC_RESPONSE_ENABLED"] = "true"
+        self.chat_webhook._is_valid_token = lambda event: True
+        submitted: list[tuple] = []
+
+        class _FakePool:
+            def submit(self, fn, event, user_name):
+                submitted.append((fn, user_name, event.get("type")))
+
+        self.chat_webhook._ASYNC_WORKER_POOL = _FakePool()
+        payload = {
+            "type": "MESSAGE",
+            "user": {"name": "users/111"},
+            "message": {"text": "<users/999> 確認して", "thread": {"name": "spaces/AAA/threads/BBB"}},
+        }
+        raw_body, status, _headers = self.chat_webhook.handle_chat_event(_FakeRequest(payload))
+        self.assertEqual(status, 200)
+        body = json.loads(raw_body)
+        self.assertIn("思考中です", body["text"])
+        self.assertEqual(len(submitted), 1)
+
+    def test_async_mode_skips_non_actionable_bot_messages(self):
+        os.environ["CHAT_ASYNC_RESPONSE_ENABLED"] = "true"
+        self.chat_webhook._is_valid_token = lambda event: True
+        self.chat_webhook._ASYNC_WORKER_POOL = type("P", (), {"submit": lambda *args, **kwargs: (_ for _ in ()).throw(
+            AssertionError("submit should not be called")
+        )})()
+        payload = {
+            "type": "MESSAGE",
+            "user": {"name": "users/111"},
+            "message": {
+                "sender": {"displayName": "脆弱性管理エージェント", "type": "BOT", "name": "users/app"},
+                "text": "",
+                "thread": {"name": "spaces/AAA/threads/BBB"},
+            },
+        }
+        raw_body, status, _headers = self.chat_webhook.handle_chat_event(_FakeRequest(payload))
+        self.assertEqual(status, 200)
+        self.assertEqual(json.loads(raw_body), {})
 
 
 if __name__ == "__main__":

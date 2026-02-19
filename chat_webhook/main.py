@@ -4,11 +4,13 @@ from __future__ import annotations
 
 import asyncio
 from collections import deque
+from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timezone
 import json
 import logging
 import os
 import re
+import threading
 import uuid
 from typing import Any
 
@@ -21,6 +23,9 @@ _secret_client = None
 _chat_service_client = None
 _RECENT_TURNS: dict[str, deque[dict[str, str]]] = {}
 _THREAD_ROOT_CACHE: dict[str, str] = {}
+_ASYNC_WORKER_POOL = ThreadPoolExecutor(max_workers=4, thread_name_prefix="chat-webhook-worker")
+_ASYNC_EVENT_LOCK = threading.Lock()
+_ASYNC_EVENT_SEEN: dict[str, float] = {}
 _MAX_RECENT_TURNS = 4
 _AMBIGUITY_PRESETS = {
     "strict": {"min_chars_without_context": 6},
@@ -854,6 +859,64 @@ def _thread_payload(event: dict[str, Any], text: str) -> dict[str, Any]:
     return payload
 
 
+def _is_async_response_enabled() -> bool:
+    return (os.environ.get("CHAT_ASYNC_RESPONSE_ENABLED", "false") or "false").strip().lower() in {
+        "1",
+        "true",
+        "yes",
+        "on",
+    }
+
+
+def _is_message_actionable(event: dict[str, Any]) -> bool:
+    message = event.get("message") or {}
+    sender = (message.get("sender") or {})
+    sender_type = str(sender.get("type") or "").upper()
+    if sender_type == "BOT" and not _is_gmail_app_message(event):
+        return False
+
+    raw_text = str(message.get("text") or "").strip()
+    prompt = _clean_chat_text(event)
+    if _is_gmail_app_message(event):
+        return True
+    if raw_text and prompt:
+        return True
+    return False
+
+
+def _register_async_event_once(event: dict[str, Any]) -> bool:
+    message_name = str(((event.get("message") or {}).get("name") or "")).strip()
+    if not message_name:
+        return True
+    now = datetime.now(timezone.utc).timestamp()
+    ttl_sec = 900
+    with _ASYNC_EVENT_LOCK:
+        stale = [k for k, ts in _ASYNC_EVENT_SEEN.items() if now - ts > ttl_sec]
+        for key in stale:
+            _ASYNC_EVENT_SEEN.pop(key, None)
+        if message_name in _ASYNC_EVENT_SEEN:
+            return False
+        _ASYNC_EVENT_SEEN[message_name] = now
+    return True
+
+
+def _send_message_to_thread(event: dict[str, Any], text: str) -> None:
+    payload = _thread_payload(event, text)
+    thread_name = str(((payload.get("thread") or {}).get("name") or "")).strip()
+    space_name = _extract_space_name(event, thread_name)
+    if not space_name:
+        return
+    service = _get_chat_service()
+    body: dict[str, Any] = {"text": str(payload.get("text") or "")}
+    if thread_name:
+        body["thread"] = {"name": thread_name}
+    service.spaces().messages().create(
+        parent=space_name,
+        body=body,
+        messageReplyOption="REPLY_MESSAGE_FALLBACK_TO_NEW_THREAD",
+    ).execute()
+
+
 def _context_key(event: dict[str, Any], user_name: str) -> str:
     message = event.get("message") or {}
     thread_name = ((message.get("thread") or {}).get("name") or "").strip()
@@ -1282,6 +1345,131 @@ def _format_ticket_like_response(text: str) -> str:
     )
 
 
+def _process_message_event(event: dict[str, Any], user_name: str) -> str | None:
+    raw_text = str(((event.get("message") or {}).get("text") or "")).strip()
+    prompt = _clean_chat_text(event)
+    is_gmail_post = _is_gmail_app_message(event)
+    history_key = _context_key(event, user_name)
+    prefer_ticket_format = False
+    save_ticket_history = False
+    manual_backfill_mode = False
+    raw_body_text = _strip_mentions_preserve_lines(raw_text)
+    source_text_for_quality = ""
+    if is_gmail_post:
+        message_payload_text = _extract_message_text_payload((event.get("message") or {}))
+        source_text_for_quality = message_payload_text or raw_text
+        _remember_thread_root_text(event, source_text_for_quality)
+        prompt = _build_vulnerability_ticket_prompt(source_text_for_quality)
+        prefer_ticket_format = True
+        save_ticket_history = True
+    elif _is_manual_ticket_generation_prompt(raw_body_text):
+        manual_source = _resolve_manual_backfill_source_text(event, raw_body_text)
+        if not manual_source:
+            return _build_backfill_guidance_message()
+        source_text_for_quality = manual_source
+        _remember_thread_root_text(event, manual_source)
+        prompt = _build_vulnerability_ticket_prompt(manual_source)
+        prefer_ticket_format = True
+        save_ticket_history = True
+        manual_backfill_mode = True
+    elif _contains_manual_ticket_trigger(raw_body_text):
+        return _build_backfill_guidance_message()
+    elif _is_correction_prompt(prompt):
+        if _extract_incident_id(prompt):
+            pass
+        else:
+            root_text = _fetch_thread_root_message_text(event)
+            resolved_incident = _extract_incident_id(root_text)
+            if not resolved_incident:
+                recent_turns = _get_recent_turns(history_key, max_turns=2)
+                for turn in reversed(recent_turns):
+                    candidate = _extract_incident_id(turn.get("assistant", ""))
+                    if candidate:
+                        resolved_incident = candidate
+                        break
+            if not resolved_incident:
+                history_ticket = _fetch_latest_ticket_record_from_history(event)
+                resolved_incident = str(history_ticket.get("incident_id") or "").strip()
+            if not resolved_incident:
+                return (
+                    "このスレッドから incident_id を特定できませんでした。"
+                    " 直近の通知に含まれる【管理ID】を指定して再度「修正して」と依頼してください。"
+                )
+            prompt = _build_review_prompt_with_incident_id(prompt, resolved_incident)
+    elif not prompt:
+        return None
+    elif _is_analysis_trigger_prompt(prompt) and _requests_thread_root_context(prompt):
+        root_text = _fetch_thread_root_message_text(event)
+        if not root_text:
+            root_text = _get_cached_thread_root_text(event)
+        if root_text:
+            if _looks_like_gmail_digest(root_text):
+                prompt = _build_vulnerability_ticket_prompt(root_text)
+                prefer_ticket_format = True
+            else:
+                prompt = _build_thread_root_analysis_prompt(prompt, root_text)
+        else:
+            return _build_clarification_message()
+    elif _is_analysis_trigger_prompt(prompt) and _is_ambiguous_prompt(prompt):
+        root_text = _fetch_thread_root_message_text(event)
+        if not root_text:
+            root_text = _get_cached_thread_root_text(event)
+        if root_text:
+            prompt = _build_vulnerability_ticket_prompt(root_text)
+            prefer_ticket_format = True
+        else:
+            message = event.get("message") or {}
+            thread_name = ((message.get("thread") or {}).get("name") or "").strip()
+            if thread_name:
+                history_ticket = _fetch_latest_ticket_record_from_history(event)
+                history_message = _build_history_ticket_message(history_ticket)
+                if history_message:
+                    _remember_turn(history_key, _clean_chat_text(event), history_message)
+                    return history_message
+                recent_turns = _get_recent_turns(history_key, max_turns=2)
+                if recent_turns:
+                    contextual = _build_contextual_prompt(prompt, recent_turns)
+                    prompt = _build_thread_followup_prompt(contextual)
+                else:
+                    return _build_backfill_guidance_message()
+                prefer_ticket_format = True
+            else:
+                return _build_clarification_message()
+    elif _is_ambiguous_prompt(prompt):
+        recent_turns = _get_recent_turns(history_key, max_turns=2)
+        if not recent_turns:
+            return _build_clarification_message()
+        prompt = _build_contextual_prompt(prompt, recent_turns)
+
+    response_text = _run_agent_query(prompt, history_key)
+    if manual_backfill_mode:
+        if not _is_manual_ticket_output_usable(response_text):
+            return _build_backfill_guidance_message()
+        if save_ticket_history:
+            _save_ticket_record_to_history(event, response_text, source="chat_webhook_manual")
+    elif prefer_ticket_format:
+        if not _is_auto_ticket_output_usable(response_text):
+            if is_gmail_post and not _contains_specific_vuln_signal(source_text_for_quality):
+                return _build_low_quality_ticket_message()
+            response_text = _format_ticket_like_response(response_text)
+    _remember_turn(history_key, _clean_chat_text(event), response_text)
+    return response_text
+
+
+def _run_async_message_processing(event: dict[str, Any], user_name: str) -> None:
+    try:
+        text = _process_message_event(event, user_name)
+        if not text:
+            return
+        _send_message_to_thread(event, text)
+    except Exception as exc:
+        logger.exception("Failed async chat processing: %s", exc)
+        try:
+            _send_message_to_thread(event, f"処理中にエラーが発生しました: {exc}")
+        except Exception:
+            pass
+
+
 @functions_framework.http
 def handle_chat_event(request):
     try:
@@ -1306,137 +1494,20 @@ def handle_chat_event(request):
     if event_type != "MESSAGE":
         return json.dumps({"text": "Unsupported event type"}), 200, {"Content-Type": "application/json"}
 
-    raw_text = str(((event.get("message") or {}).get("text") or "")).strip()
-    prompt = _clean_chat_text(event)
-    is_gmail_post = _is_gmail_app_message(event)
-    history_key = _context_key(event, user_name)
-    prefer_ticket_format = False
-    save_ticket_history = False
-    manual_backfill_mode = False
-    raw_body_text = _strip_mentions_preserve_lines(raw_text)
-    source_text_for_quality = ""
-    if is_gmail_post:
-        message_payload_text = _extract_message_text_payload((event.get("message") or {}))
-        source_text_for_quality = message_payload_text or raw_text
-        _remember_thread_root_text(event, source_text_for_quality)
-        prompt = _build_vulnerability_ticket_prompt(source_text_for_quality)
-        prefer_ticket_format = True
-        save_ticket_history = True
-    elif _is_manual_ticket_generation_prompt(raw_body_text):
-        manual_source = _resolve_manual_backfill_source_text(event, raw_body_text)
-        if not manual_source:
-            return json.dumps(_thread_payload(event, _build_backfill_guidance_message()), ensure_ascii=False), 200, {
-                "Content-Type": "application/json"
-            }
-        source_text_for_quality = manual_source
-        _remember_thread_root_text(event, manual_source)
-        prompt = _build_vulnerability_ticket_prompt(manual_source)
-        prefer_ticket_format = True
-        save_ticket_history = True
-        manual_backfill_mode = True
-    elif _contains_manual_ticket_trigger(raw_body_text):
-        return json.dumps(_thread_payload(event, _build_backfill_guidance_message()), ensure_ascii=False), 200, {
-            "Content-Type": "application/json"
-        }
-    elif _is_correction_prompt(prompt):
-        if _extract_incident_id(prompt):
-            pass
-        else:
-            root_text = _fetch_thread_root_message_text(event)
-            resolved_incident = _extract_incident_id(root_text)
-            if not resolved_incident:
-                recent_turns = _get_recent_turns(history_key, max_turns=2)
-                for turn in reversed(recent_turns):
-                    candidate = _extract_incident_id(turn.get("assistant", ""))
-                    if candidate:
-                        resolved_incident = candidate
-                        break
-            if not resolved_incident:
-                history_ticket = _fetch_latest_ticket_record_from_history(event)
-                resolved_incident = str(history_ticket.get("incident_id") or "").strip()
-            if not resolved_incident:
-                return json.dumps(
-                    _thread_payload(
-                        event,
-                        "このスレッドから incident_id を特定できませんでした。"
-                        " 直近の通知に含まれる【管理ID】を指定して再度「修正して」と依頼してください。",
-                    ),
-                    ensure_ascii=False,
-                ), 200, {"Content-Type": "application/json"}
-            prompt = _build_review_prompt_with_incident_id(prompt, resolved_incident)
-    elif not prompt:
-        # メンションでもGmail投稿でもない通常メッセージは何もしない。
-        return json.dumps({}, ensure_ascii=False), 200, {"Content-Type": "application/json"}
-    elif _is_analysis_trigger_prompt(prompt) and _requests_thread_root_context(prompt):
-        root_text = _fetch_thread_root_message_text(event)
-        if not root_text:
-            root_text = _get_cached_thread_root_text(event)
-        if root_text:
-            if _looks_like_gmail_digest(root_text):
-                prompt = _build_vulnerability_ticket_prompt(root_text)
-                prefer_ticket_format = True
-            else:
-                prompt = _build_thread_root_analysis_prompt(prompt, root_text)
-        else:
-            return json.dumps(_thread_payload(event, _build_clarification_message()), ensure_ascii=False), 200, {
-                "Content-Type": "application/json"
-            }
-    elif _is_analysis_trigger_prompt(prompt) and _is_ambiguous_prompt(prompt):
-        root_text = _fetch_thread_root_message_text(event)
-        if not root_text:
-            root_text = _get_cached_thread_root_text(event)
-        if root_text:
-            prompt = _build_vulnerability_ticket_prompt(root_text)
-            prefer_ticket_format = True
-        else:
-            message = event.get("message") or {}
-            thread_name = ((message.get("thread") or {}).get("name") or "").strip()
-            if thread_name:
-                history_ticket = _fetch_latest_ticket_record_from_history(event)
-                history_message = _build_history_ticket_message(history_ticket)
-                if history_message:
-                    _remember_turn(history_key, _clean_chat_text(event), history_message)
-                    return json.dumps(_thread_payload(event, history_message), ensure_ascii=False), 200, {
-                        "Content-Type": "application/json"
-                    }
-                recent_turns = _get_recent_turns(history_key, max_turns=2)
-                if recent_turns:
-                    contextual = _build_contextual_prompt(prompt, recent_turns)
-                    prompt = _build_thread_followup_prompt(contextual)
-                else:
-                    return json.dumps(_thread_payload(event, _build_backfill_guidance_message()), ensure_ascii=False), 200, {
-                        "Content-Type": "application/json"
-                    }
-                prefer_ticket_format = True
-            else:
-                return json.dumps(_thread_payload(event, _build_clarification_message()), ensure_ascii=False), 200, {
-                    "Content-Type": "application/json"
-                }
-    elif _is_ambiguous_prompt(prompt):
-        recent_turns = _get_recent_turns(history_key, max_turns=2)
-        if not recent_turns:
-            return json.dumps(_thread_payload(event, _build_clarification_message()), ensure_ascii=False), 200, {
-                "Content-Type": "application/json"
-            }
-        prompt = _build_contextual_prompt(prompt, recent_turns)
+    if _is_async_response_enabled():
+        if not _is_message_actionable(event):
+            return json.dumps({}, ensure_ascii=False), 200, {"Content-Type": "application/json"}
+        if _register_async_event_once(event):
+            _ASYNC_WORKER_POOL.submit(_run_async_message_processing, event, user_name)
+        return json.dumps(
+            _thread_payload(event, "思考中です。分析が完了したらこのスレッドに結果を送信します。"),
+            ensure_ascii=False,
+        ), 200, {"Content-Type": "application/json"}
 
     try:
-        response_text = _run_agent_query(prompt, history_key)
-        if manual_backfill_mode:
-            if not _is_manual_ticket_output_usable(response_text):
-                return json.dumps(_thread_payload(event, _build_backfill_guidance_message()), ensure_ascii=False), 200, {
-                    "Content-Type": "application/json"
-                }
-            if save_ticket_history:
-                _save_ticket_record_to_history(event, response_text, source="chat_webhook_manual")
-        elif prefer_ticket_format:
-            if not _is_auto_ticket_output_usable(response_text):
-                if is_gmail_post and not _contains_specific_vuln_signal(source_text_for_quality):
-                    return json.dumps(_thread_payload(event, _build_low_quality_ticket_message()), ensure_ascii=False), 200, {
-                        "Content-Type": "application/json"
-                    }
-                response_text = _format_ticket_like_response(response_text)
-        _remember_turn(history_key, _clean_chat_text(event), response_text)
+        response_text = _process_message_event(event, user_name)
+        if response_text is None:
+            return json.dumps({}, ensure_ascii=False), 200, {"Content-Type": "application/json"}
         return json.dumps(_thread_payload(event, response_text), ensure_ascii=False), 200, {
             "Content-Type": "application/json"
         }
