@@ -1165,6 +1165,16 @@ def _build_backfill_guidance_message() -> str:
     )
 
 
+def _build_low_quality_ticket_message() -> str:
+    return (
+        "起票データの根拠情報が不足しているため、このままでは誤起票の可能性があります。\n"
+        "次の形式で同一スレッドに貼り付けてください。\n\n"
+        "1) 脆弱性通知本文（CVE / CVSS / 対象製品 / 参照URL を含む）\n"
+        "2) 最後に「この内容で起票用を作成して」と送信\n\n"
+        "十分な情報が確認でき次第、起票用データを再生成します。"
+    )
+
+
 def _strip_manual_command_lines(text: str) -> str:
     if not text:
         return ""
@@ -1222,6 +1232,26 @@ def _is_manual_ticket_output_usable(text: str) -> bool:
         return False
     if "小分類: 要確認" in body and "依頼概要: 要確認" in body and "詳細: 要確認" in body:
         return False
+    return True
+
+
+def _is_auto_ticket_output_usable(text: str) -> bool:
+    body = (text or "").strip()
+    if not body:
+        return False
+    if not _has_ticket_sections(body):
+        return False
+    if _is_low_quality_ticket_output(body):
+        return False
+    if "依頼概要:" not in body or "詳細:" not in body:
+        return False
+    weak_summary = ("はい、承知", "以下に", "テンプレート", "作成します")
+    for line in body.splitlines():
+        if not line.strip().startswith("依頼概要:"):
+            continue
+        summary = line.split(":", 1)[1].strip()
+        if any(w in summary for w in weak_summary):
+            return False
     return True
 
 
@@ -1284,9 +1314,12 @@ def handle_chat_event(request):
     save_ticket_history = False
     manual_backfill_mode = False
     raw_body_text = _strip_mentions_preserve_lines(raw_text)
+    source_text_for_quality = ""
     if is_gmail_post:
-        _remember_thread_root_text(event, raw_text)
-        prompt = _build_vulnerability_ticket_prompt(raw_text)
+        message_payload_text = _extract_message_text_payload((event.get("message") or {}))
+        source_text_for_quality = message_payload_text or raw_text
+        _remember_thread_root_text(event, source_text_for_quality)
+        prompt = _build_vulnerability_ticket_prompt(source_text_for_quality)
         prefer_ticket_format = True
         save_ticket_history = True
     elif _is_manual_ticket_generation_prompt(raw_body_text):
@@ -1295,6 +1328,7 @@ def handle_chat_event(request):
             return json.dumps(_thread_payload(event, _build_backfill_guidance_message()), ensure_ascii=False), 200, {
                 "Content-Type": "application/json"
             }
+        source_text_for_quality = manual_source
         _remember_thread_root_text(event, manual_source)
         prompt = _build_vulnerability_ticket_prompt(manual_source)
         prefer_ticket_format = True
@@ -1396,7 +1430,12 @@ def handle_chat_event(request):
             if save_ticket_history:
                 _save_ticket_record_to_history(event, response_text, source="chat_webhook_manual")
         elif prefer_ticket_format:
-            response_text = _format_ticket_like_response(response_text)
+            if not _is_auto_ticket_output_usable(response_text):
+                if is_gmail_post and not _contains_specific_vuln_signal(source_text_for_quality):
+                    return json.dumps(_thread_payload(event, _build_low_quality_ticket_message()), ensure_ascii=False), 200, {
+                        "Content-Type": "application/json"
+                    }
+                response_text = _format_ticket_like_response(response_text)
         _remember_turn(history_key, _clean_chat_text(event), response_text)
         return json.dumps(_thread_payload(event, response_text), ensure_ascii=False), 200, {
             "Content-Type": "application/json"

@@ -171,6 +171,25 @@ class ChatWebhookTests(unittest.TestCase):
         self.assertIn("【起票用（コピペ）】", body["text"])
         self.assertIn("【判断理由】", body["text"])
 
+    def test_gmail_post_with_low_quality_output_returns_guidance(self):
+        self.chat_webhook._is_valid_token = lambda event: True
+        self.chat_webhook._run_agent_query = lambda prompt, user_id: "はい、承知いたしました。テンプレートを作成します。"
+        payload = {
+            "type": "MESSAGE",
+            "user": {"name": "users/111"},
+            "message": {
+                "sender": {"displayName": "Notifier", "type": "BOT", "name": "users/abc"},
+                "text": (
+                    "To view the full email in Google Groups, including links and attachments, select View message."
+                ),
+                "thread": {"name": "spaces/AAA/threads/BBB"},
+            },
+        }
+        raw_body, status, _headers = self.chat_webhook.handle_chat_event(_FakeRequest(payload))
+        self.assertEqual(status, 200)
+        body = json.loads(raw_body)
+        self.assertIn("根拠情報が不足", body["text"])
+
     def test_analysis_trigger_uses_thread_root_message(self):
         self.chat_webhook._is_valid_token = lambda event: True
         self.chat_webhook._fetch_thread_root_message_text = lambda event: (
