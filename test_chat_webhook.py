@@ -50,6 +50,10 @@ class ChatWebhookTests(unittest.TestCase):
     def setUp(self):
         if hasattr(self.chat_webhook, "_RECENT_TURNS"):
             self.chat_webhook._RECENT_TURNS.clear()
+        if hasattr(self.chat_webhook, "_THREAD_ROOT_CACHE"):
+            self.chat_webhook._THREAD_ROOT_CACHE.clear()
+        if hasattr(self.chat_webhook, "_ASYNC_EVENT_SEEN"):
+            self.chat_webhook._ASYNC_EVENT_SEEN.clear()
         for key in ("AGENT_RESOURCE_NAME", "AGENT_RESOURCE_NAME_FLASH", "AGENT_RESOURCE_NAME_PRO"):
             os.environ.pop(key, None)
         os.environ.pop("CHAT_ASYNC_RESPONSE_ENABLED", None)
@@ -433,7 +437,8 @@ class ChatWebhookTests(unittest.TestCase):
         self.chat_webhook._is_valid_token = lambda event: True
         sent: list[str] = []
         self.chat_webhook._send_message_to_thread = lambda event, text: sent.append(text)
-        self.chat_webhook._process_message_event = lambda event, user_name: "FINAL"
+        submitted: list[tuple[dict, str]] = []
+        self.chat_webhook._submit_async_job = lambda event, user_name: submitted.append((event, user_name))
         payload = {
             "type": "MESSAGE",
             "user": {"name": "users/111"},
@@ -442,9 +447,10 @@ class ChatWebhookTests(unittest.TestCase):
         raw_body, status, _headers = self.chat_webhook.handle_chat_event(_FakeRequest(payload))
         self.assertEqual(status, 200)
         self.assertEqual(json.loads(raw_body), {})
-        self.assertEqual(len(sent), 2)
+        self.assertEqual(len(sent), 1)
         self.assertIn("思考中です", sent[0])
-        self.assertEqual(sent[1], "FINAL")
+        self.assertEqual(len(submitted), 1)
+        self.assertEqual(submitted[0][1], "111")
 
     def test_async_mode_skips_non_actionable_bot_messages(self):
         os.environ["CHAT_ASYNC_RESPONSE_ENABLED"] = "true"
@@ -464,6 +470,48 @@ class ChatWebhookTests(unittest.TestCase):
         raw_body, status, _headers = self.chat_webhook.handle_chat_event(_FakeRequest(payload))
         self.assertEqual(status, 200)
         self.assertEqual(json.loads(raw_body), {})
+
+    def test_manual_ticket_generation_uses_thread_root_fallback_when_inline_body_missing(self):
+        self.chat_webhook._is_valid_token = lambda event: True
+        self.chat_webhook._is_gmail_app_message = lambda event: False
+        self.chat_webhook._fetch_quoted_message_text = lambda event: ""
+        self.chat_webhook._fetch_thread_root_message_text = (
+            lambda event: "【脆弱性情報】\nCVE-2026-1234\nhttps://sid.softek.jp/filter/sinfo/62989"
+        )
+        self.chat_webhook._save_ticket_record_to_history = lambda event, response_text, source="": None
+        captured: list[str] = []
+
+        def _fake_run(prompt, user_id):
+            captured.append(prompt)
+            return (
+                "【起票用（コピペ）】\n"
+                "大分類: 017.脆弱性対応（情シス専用）\n"
+                "小分類: 002.IT基盤チーム\n"
+                "依頼概要: AlmaLinux の脆弱性確認及び該当バージョンの対応願い\n"
+                "詳細: 002.IT基盤チーム\n\n"
+                "【判断理由】\n"
+                "- スレッド本文を参照"
+            )
+
+        self.chat_webhook._run_agent_query = _fake_run
+        payload = {
+            "type": "MESSAGE",
+            "user": {"name": "users/111"},
+            "message": {
+                "text": "<users/999> この内容で起票用を作成して",
+                "thread": {"name": "spaces/AAA/threads/BBB"},
+            },
+        }
+        raw_body, status, _headers = self.chat_webhook.handle_chat_event(_FakeRequest(payload))
+        self.assertEqual(status, 200)
+        self.assertEqual(len(captured), 1)
+        self.assertIn("CVE-2026-1234", captured[0])
+        body = json.loads(raw_body)
+        self.assertIn("【起票用（コピペ）】", body["text"])
+
+    def test_contains_specific_vuln_signal_does_not_accept_generic_url_only(self):
+        text = "To view the full email in Google Groups, select View message. https://groups.google.com/"
+        self.assertFalse(self.chat_webhook._contains_specific_vuln_signal(text))
 
 
 if __name__ == "__main__":

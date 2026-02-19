@@ -396,7 +396,21 @@ def _contains_specific_vuln_signal(text: str) -> bool:
         return True
     if "sid.softek.jp" in t or "nvd.nist.gov" in t:
         return True
-    if "https://" in t or "http://" in t:
+    vuln_domains = (
+        "cve.mitre.org",
+        "security-next.com",
+        "fortiguard.com",
+        "sec.cloudapps.cisco.com",
+        "motex.co.jp",
+        "jvn.jp",
+        "jpcert.or.jp",
+        "redhat.com",
+        "ubuntu.com",
+        "debian.org",
+    )
+    if any(domain in t for domain in vuln_domains):
+        return True
+    if "脆弱性" in text and ("http://" in t or "https://" in t):
         return True
     return False
 
@@ -940,6 +954,17 @@ def _register_async_event_once(event: dict[str, Any]) -> bool:
     return True
 
 
+def _submit_async_job(event: dict[str, Any], user_name: str) -> None:
+    global _ASYNC_WORKER_POOL
+    try:
+        _ASYNC_WORKER_POOL.submit(_run_async_message_processing, event, user_name)
+        return
+    except RuntimeError:
+        # Worker pool can be in shutdown state during instance lifecycle transitions.
+        _ASYNC_WORKER_POOL = ThreadPoolExecutor(max_workers=4, thread_name_prefix="chat-webhook-worker")
+        _ASYNC_WORKER_POOL.submit(_run_async_message_processing, event, user_name)
+
+
 def _send_message_to_thread(event: dict[str, Any], text: str) -> None:
     payload = _thread_payload(event, text)
     thread_name = str(((payload.get("thread") or {}).get("name") or "")).strip()
@@ -1297,9 +1322,27 @@ def _resolve_manual_backfill_source_text(event: dict[str, Any], raw_body_text: s
     candidate = _strip_manual_command_lines(raw_body_text)
     if _contains_specific_vuln_signal(candidate):
         return candidate
+    if _contains_vulnerability_signal(candidate) and len(candidate) >= 80:
+        return candidate
     quoted = _fetch_quoted_message_text(event)
     if _contains_specific_vuln_signal(quoted):
         return quoted
+    if _contains_vulnerability_signal(quoted) and len(quoted) >= 80:
+        return quoted
+    root_text = _fetch_thread_root_message_text(event)
+    if _contains_specific_vuln_signal(root_text):
+        return root_text
+    if _contains_vulnerability_signal(root_text) and len(root_text) >= 80:
+        return root_text
+    cached_root = _get_cached_thread_root_text(event)
+    if _contains_specific_vuln_signal(cached_root):
+        return cached_root
+    if _contains_vulnerability_signal(cached_root) and len(cached_root) >= 80:
+        return cached_root
+    history_ticket = _fetch_latest_ticket_record_from_history(event)
+    history_copy = str(history_ticket.get("copy_paste_text") or "").strip()
+    if _contains_specific_vuln_signal(history_copy):
+        return history_copy
     return ""
 
 
@@ -1408,7 +1451,7 @@ def _process_message_event(event: dict[str, Any], user_name: str) -> str | None:
         prompt = _build_vulnerability_ticket_prompt(source_text_for_quality)
         prefer_ticket_format = True
         save_ticket_history = True
-    elif _is_manual_ticket_generation_prompt(raw_body_text):
+    elif _contains_manual_ticket_trigger(raw_body_text):
         manual_source = _resolve_manual_backfill_source_text(event, raw_body_text)
         if not manual_source:
             return _build_backfill_guidance_message()
@@ -1418,8 +1461,6 @@ def _process_message_event(event: dict[str, Any], user_name: str) -> str | None:
         prefer_ticket_format = True
         save_ticket_history = True
         manual_backfill_mode = True
-    elif _contains_manual_ticket_trigger(raw_body_text):
-        return _build_backfill_guidance_message()
     elif _is_correction_prompt(prompt):
         if _extract_incident_id(prompt):
             pass
@@ -1549,16 +1590,7 @@ def handle_chat_event(request):
             _send_message_to_thread(event, "思考中です。分析が完了したらこのスレッドに結果を送信します。")
         except Exception as exc:
             logger.warning("Failed to send thinking message: %s", exc)
-        try:
-            response_text = _process_message_event(event, user_name)
-            if response_text:
-                _send_message_to_thread(event, response_text)
-        except Exception as exc:
-            logger.exception("Failed to handle async-inline event: %s", exc)
-            try:
-                _send_message_to_thread(event, f"処理中にエラーが発生しました: {exc}")
-            except Exception:
-                pass
+        _submit_async_job(event, user_name)
         return json.dumps({}, ensure_ascii=False), 200, {"Content-Type": "application/json"}
 
     try:
