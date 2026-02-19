@@ -5,7 +5,7 @@ from __future__ import annotations
 import asyncio
 from collections import deque
 from concurrent.futures import ThreadPoolExecutor
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 import hashlib
 import json
 import logging
@@ -1499,7 +1499,7 @@ def _is_auto_ticket_output_usable(text: str) -> bool:
 def _infer_request_summary_from_source(source_text: str) -> str:
     text = (source_text or "").strip()
     if not text:
-        return "脆弱性確認及び該当バージョンの対応依頼"
+        return "脆弱性確認及び該当バージョンの対応願い"
     lower = text.lower()
     product_patterns = [
         (r"almalinux", "AlmaLinux"),
@@ -1513,17 +1513,125 @@ def _infer_request_summary_from_source(source_text: str) -> str:
     for pattern, name in product_patterns:
         if re.search(pattern, lower):
             if name == "Apple iOS":
-                return "Apple iOS のアップグレード依頼"
-            return f"{name} の脆弱性確認及び該当バージョンの対応依頼"
-    return "脆弱性確認及び該当バージョンの対応依頼"
+                return "Apple iOS のアップグレード"
+            return f"{name} の脆弱性確認及び該当バージョンの対応願い"
+    return "脆弱性確認及び該当バージョンの対応願い"
+
+
+def _extract_sidfm_entries(source_text: str) -> list[dict[str, Any]]:
+    text = (source_text or "").strip()
+    if not text:
+        return []
+
+    entries: list[dict[str, Any]] = []
+    seen_ids: set[str] = set()
+    lines = text.splitlines()
+
+    # 1) SIDfm一覧テーブル: "1 62977  9.4 AlmaLinux ..."
+    row_pat = re.compile(r"^\s*\d+\s+(\d{4,8})\s+([0-9](?:\.[0-9])?)\s+(.+?)\s*$")
+    for raw in lines:
+        m = row_pat.match(raw)
+        if not m:
+            continue
+        vuln_id, cvss_s, title = m.group(1), m.group(2), m.group(3).strip()
+        if vuln_id in seen_ids:
+            continue
+        seen_ids.add(vuln_id)
+        try:
+            cvss = float(cvss_s)
+        except Exception:
+            cvss = None
+        entries.append({"id": vuln_id, "cvss": cvss, "title": title, "url": f"https://sid.softek.jp/filter/sinfo/{vuln_id}"})
+
+    # 2) 本文ブロック: "ID:62977 ... CVSSv3: 9.4"
+    block_pat = re.compile(r"ID:(\d{4,8}).*?CVSSv3:\s*([0-9](?:\.[0-9])?)", re.IGNORECASE)
+    for i, raw in enumerate(lines):
+        m = block_pat.search(raw)
+        if not m:
+            continue
+        vuln_id, cvss_s = m.group(1), m.group(2)
+        if vuln_id in seen_ids:
+            continue
+        try:
+            cvss = float(cvss_s)
+        except Exception:
+            cvss = None
+        title = ""
+        url = ""
+        for j in range(i + 1, min(i + 12, len(lines))):
+            candidate = lines[j].strip()
+            if not candidate:
+                continue
+            if not title and "http" not in candidate and "AlmaLinux" in candidate:
+                title = re.sub(r"\s+", " ", candidate).strip()
+            if "https://sid.softek.jp/filter/sinfo/" in candidate:
+                url = re.search(r"https://sid\.softek\.jp/filter/sinfo/\d+", candidate).group(0)  # type: ignore[union-attr]
+                break
+        if not url:
+            url = f"https://sid.softek.jp/filter/sinfo/{vuln_id}"
+        seen_ids.add(vuln_id)
+        entries.append({"id": vuln_id, "cvss": cvss, "title": title or "要確認", "url": url})
+
+    def _key(item: dict[str, Any]) -> tuple[float, str]:
+        score = item.get("cvss")
+        return (float(score) if isinstance(score, (int, float)) else -1.0, str(item.get("id") or ""))
+
+    return sorted(entries, key=_key, reverse=True)
+
+
+def _extract_base_date_from_source(source_text: str) -> datetime:
+    text = (source_text or "").strip()
+    m = re.search(r"SIDfm\s*\((\d{4})/(\d{2})/(\d{2})\)", text)
+    if m:
+        y, mo, d = int(m.group(1)), int(m.group(2)), int(m.group(3))
+        try:
+            return datetime(y, mo, d, tzinfo=timezone.utc)
+        except Exception:
+            pass
+    return datetime.now(timezone.utc)
+
+
+def _add_business_days(base: datetime, days: int) -> datetime:
+    current = base
+    added = 0
+    while added < max(0, days):
+        current = current + timedelta(days=1)
+        if current.weekday() < 5:
+            added += 1
+    return current
+
+
+def _infer_due_date_from_policy(source_text: str, max_cvss: float | None) -> tuple[str, str]:
+    base = _extract_base_date_from_source(source_text)
+    text = (source_text or "").lower()
+    exploit_signal = ("悪用実績" in source_text) or ("エクスプロイトコード" in source_text) or ("exploit" in text)
+    is_public_resource = any(token in text for token in ("fortigate", "cisco asa", "zeem", "mail", "公開"))
+
+    if max_cvss is None or max_cvss < 8.0:
+        return "要確認", "CVSS 8.0未満または不明"
+    if is_public_resource and max_cvss >= 9.0 and exploit_signal:
+        due = _add_business_days(base, 5)
+        return due.strftime("%Y/%m/%d"), "社内方針: 公開リソース×CVSS9.0以上×悪用実績あり(5営業日)"
+    if is_public_resource and max_cvss >= 8.0:
+        due = _add_business_days(base, 10)
+        return due.strftime("%Y/%m/%d"), "社内方針: 公開リソース×CVSS8.0以上(10営業日)"
+    # デフォルトは内部リソース扱い: 3か月
+    month = base.month + 3
+    year = base.year + (month - 1) // 12
+    month = ((month - 1) % 12) + 1
+    day = min(base.day, 28)
+    due = datetime(year, month, day, tzinfo=timezone.utc)
+    return due.strftime("%Y/%m/%d"), "社内方針: 内部リソース×CVSS8.0以上(3か月)"
 
 
 def _extract_source_facts(source_text: str) -> dict[str, Any]:
     text = (source_text or "").strip()
     lowered = text.lower()
+    entries = _extract_sidfm_entries(text)
     links = re.findall(r"https?://[^\s)>\]]+", text)
     sid_links = [u for u in links if "sid.softek.jp" in u]
-    vuln_links = sid_links if sid_links else links
+    entry_links = [str(e.get("url") or "").strip() for e in entries if str(e.get("url") or "").strip()]
+    vuln_links = entry_links or sid_links or links
 
     products: list[str] = []
     if "almalinux" in lowered:
@@ -1562,11 +1670,15 @@ def _extract_source_facts(source_text: str) -> dict[str, Any]:
     unique_scores = sorted(set(scores), reverse=True)
     max_score = unique_scores[0] if unique_scores else None
 
+    due_date, due_reason = _infer_due_date_from_policy(text, max_score)
     return {
+        "entries": entries,
         "products": products,
         "vuln_links": vuln_links[:20],
         "scores": unique_scores[:10],
         "max_score": max_score,
+        "due_date": due_date,
+        "due_reason": due_reason,
     }
 
 
@@ -1581,9 +1693,27 @@ def _infer_ticket_detail_from_source(source_text: str) -> str:
         cvss_line = f"最大 {max_score:.1f}（通知内: {scores_text}）"
     else:
         cvss_line = "要確認"
+
+    entry_lines: list[str] = []
+    for e in facts.get("entries", []):
+        vuln_id = str(e.get("id") or "").strip()
+        score = e.get("cvss")
+        title = str(e.get("title") or "").strip()
+        url = str(e.get("url") or "").strip()
+        score_text = f"{float(score):.1f}" if isinstance(score, (int, float)) else "要確認"
+        parts = [f"ID:{vuln_id}" if vuln_id else "ID:要確認", f"CVSS:{score_text}"]
+        if title and title != "要確認":
+            parts.append(title)
+        if url:
+            parts.append(url)
+        entry_lines.append(" - " + " / ".join(parts))
+    entry_text = "\n".join(entry_lines[:12]) if entry_lines else " - 要確認"
+
     return (
         "【対象の機器/アプリ】\n"
         f"{product_line}\n\n"
+        "【通知内の脆弱性一覧】\n"
+        f"{entry_text}\n\n"
         "【脆弱性情報】\n"
         f"{links_line}\n\n"
         "【CVSSスコア】\n"
@@ -1592,7 +1722,7 @@ def _infer_ticket_detail_from_source(source_text: str) -> str:
         "上記脆弱性情報をご確認いただき、該当バージョンの場合はアップデート対応をお願いします。\n"
         "対応を実施した場合は対象ホスト名（または対象端末）をご共有ください。\n\n"
         "【対応完了目標】\n"
-        "要確認"
+        f"{facts.get('due_date') or '要確認'}"
     )
 
 
@@ -1600,6 +1730,7 @@ def _infer_reasoning_from_source(source_text: str) -> str:
     facts = _extract_source_facts(source_text)
     product_text = " / ".join(facts["products"]) if facts["products"] else "要確認"
     links_count = len(facts["vuln_links"])
+    entries_count = len(facts.get("entries", []))
     if facts["scores"]:
         scores_text = ", ".join(f"{s:.1f}" for s in facts["scores"])
     else:
@@ -1607,9 +1738,10 @@ def _infer_reasoning_from_source(source_text: str) -> str:
     return (
         "【判断理由】\n"
         f"- 通知本文から対象製品を抽出: {product_text}\n"
+        f"- 通知本文から脆弱性エントリを抽出: {entries_count}件\n"
         f"- 参照URLを抽出: {links_count}件\n"
         f"- CVSSを抽出: {scores_text}\n"
-        "- 通知本文に対応完了目標の明記がないため、対応完了目標は「要確認」"
+        f"- 対応完了目標を算出: {facts.get('due_date') or '要確認'}（{facts.get('due_reason') or '根拠不足'}）"
     )
 
 
