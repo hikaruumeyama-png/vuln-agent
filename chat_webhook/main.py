@@ -20,7 +20,8 @@ import vertexai
 logger = logging.getLogger(__name__)
 
 _secret_client = None
-_chat_service_client = None
+_chat_service_read_client = None
+_chat_service_post_client = None
 _RECENT_TURNS: dict[str, deque[dict[str, str]]] = {}
 _THREAD_ROOT_CACHE: dict[str, str] = {}
 _ASYNC_WORKER_POOL = ThreadPoolExecutor(max_workers=4, thread_name_prefix="chat-webhook-worker")
@@ -180,17 +181,22 @@ def _get_secret_client():
     return _secret_client
 
 
-def _get_chat_service():
-    global _chat_service_client
-    if _chat_service_client is not None:
-        return _chat_service_client
+def _get_chat_service(mode: str = "read"):
+    global _chat_service_read_client, _chat_service_post_client
+    normalized_mode = (mode or "read").strip().lower()
+    if normalized_mode not in {"read", "post"}:
+        normalized_mode = "read"
+
+    if normalized_mode == "read" and _chat_service_read_client is not None:
+        return _chat_service_read_client
+    if normalized_mode == "post" and _chat_service_post_client is not None:
+        return _chat_service_post_client
 
     from googleapiclient.discovery import build
 
-    scopes = [
-        "https://www.googleapis.com/auth/chat.bot",
-        "https://www.googleapis.com/auth/chat.messages.readonly",
-    ]
+    scopes = ["https://www.googleapis.com/auth/chat.bot"]
+    if normalized_mode == "read":
+        scopes.append("https://www.googleapis.com/auth/chat.messages.readonly")
     sa_json = _get_config("CHAT_SA_CREDENTIALS_JSON", "vuln-agent-chat-sa-key", "")
     delegated_user = _get_config("CHAT_DELEGATED_USER", "vuln-agent-chat-delegated-user", "")
     if sa_json:
@@ -199,27 +205,37 @@ def _get_chat_service():
 
             sa_info = json.loads(sa_json)
             credentials = service_account.Credentials.from_service_account_info(sa_info, scopes=scopes)
-            if delegated_user:
+            if normalized_mode == "read" and delegated_user:
                 # Chat message read is user-data scope; use domain-wide delegation when configured.
                 credentials = credentials.with_subject(delegated_user)
                 logger.info("Thread fetch uses delegated user auth: %s", delegated_user)
-            else:
+            elif normalized_mode == "read":
                 logger.warning(
                     "CHAT_DELEGATED_USER is not configured. "
                     "ListMessages may fail with insufficient scopes in app auth mode."
                 )
-            _chat_service_client = build("chat", "v1", credentials=credentials, cache_discovery=False)
-            logger.info("Thread fetch uses Chat app SA credentials from secret")
-            return _chat_service_client
+            service = build("chat", "v1", credentials=credentials, cache_discovery=False)
+            if normalized_mode == "read":
+                _chat_service_read_client = service
+                logger.info("Thread fetch uses Chat SA credentials from secret")
+            else:
+                _chat_service_post_client = service
+                logger.info("Chat post uses Chat SA bot credentials from secret")
+            return service
         except Exception as exc:
             logger.warning("Failed to init Chat service from SA secret: %s", exc)
 
     import google.auth
 
     credentials, _ = google.auth.default(scopes=scopes)
-    _chat_service_client = build("chat", "v1", credentials=credentials, cache_discovery=False)
-    logger.warning("Thread fetch uses ADC fallback credentials")
-    return _chat_service_client
+    service = build("chat", "v1", credentials=credentials, cache_discovery=False)
+    if normalized_mode == "read":
+        _chat_service_read_client = service
+        logger.warning("Thread fetch uses ADC fallback credentials")
+    else:
+        _chat_service_post_client = service
+        logger.warning("Chat post uses ADC fallback credentials")
+    return service
 
 
 def _get_project_id() -> str:
@@ -522,7 +538,7 @@ def _fetch_quoted_message_text(event: dict[str, Any]) -> str:
     if not quoted_name:
         return ""
     try:
-        service = _get_chat_service()
+        service = _get_chat_service(mode="read")
         quoted_message = service.spaces().messages().get(name=quoted_name).execute()
         return _extract_message_text_payload(quoted_message if isinstance(quoted_message, dict) else {})
     except Exception as exc:
@@ -541,7 +557,7 @@ def _fetch_thread_root_message_text(event: dict[str, Any]) -> str:
         return ""
 
     try:
-        service = _get_chat_service()
+        service = _get_chat_service(mode="read")
 
         quoted_name = str((((event.get("message") or {}).get("quotedMessageMetadata") or {}).get("name") or "")).strip()
         if quoted_name:
@@ -930,7 +946,7 @@ def _send_message_to_thread(event: dict[str, Any], text: str) -> None:
     space_name = _extract_space_name(event, thread_name)
     if not space_name:
         return
-    service = _get_chat_service()
+    service = _get_chat_service(mode="post")
     body: dict[str, Any] = {"text": str(payload.get("text") or "")}
     if thread_name:
         body["thread"] = {"name": thread_name}
