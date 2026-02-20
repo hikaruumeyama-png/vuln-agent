@@ -1887,6 +1887,94 @@ def _extract_sidfm_entries(source_text: str) -> list[dict[str, Any]]:
     return sorted(entries, key=_key, reverse=True)
 
 
+def _extract_almalinux_versions_from_text(text: str) -> list[str]:
+    versions = sorted(
+        {m.group(1) for m in re.finditer(r"almalinux\s*([0-9]{1,2})", text or "", re.IGNORECASE)},
+        key=lambda x: int(x),
+        reverse=True,
+    )
+    return versions
+
+
+def _build_entries_from_sid_links_fallback(source_text: str, sid_links: list[str]) -> list[dict[str, Any]]:
+    if not sid_links:
+        return []
+    text = source_text or ""
+    entries: list[dict[str, Any]] = []
+    seen: set[str] = set()
+    for link in sid_links:
+        m = re.search(r"/sinfo/(\d+)", link)
+        if not m:
+            continue
+        vuln_id = m.group(1)
+        if vuln_id in seen:
+            continue
+        seen.add(vuln_id)
+        # ID と CVSS/バージョンの近傍を可能な範囲で復元
+        cvss = None
+        ver = ""
+        title = "要確認"
+        block_pat = re.compile(
+            rf"(?:ID[:：]\s*{re.escape(vuln_id)}.*?CVSSv3[:：]?\s*([0-9](?:\.[0-9])?).*?AlmaLinux\s*([0-9]{{1,2}}).*?{re.escape(link)})",
+            re.IGNORECASE | re.DOTALL,
+        )
+        bm = block_pat.search(text)
+        if bm:
+            try:
+                cvss = float(bm.group(1))
+            except Exception:
+                cvss = None
+            ver = str(bm.group(2) or "").strip()
+            title = f"AlmaLinux {ver} の脆弱性" if ver else "AlmaLinux の脆弱性"
+        entries.append(
+            {
+                "id": vuln_id,
+                "cvss": cvss,
+                "title": title,
+                "url": link,
+                "os_version": ver or "要確認",
+            }
+        )
+    return entries
+
+
+def _group_sid_links_by_almalinux_version(source_text: str, sid_links: list[str]) -> dict[str, list[str]]:
+    grouped: dict[str, list[str]] = {}
+    text = source_text or ""
+    for link in sid_links:
+        link = str(link or "").strip()
+        if not link:
+            continue
+        escaped = re.escape(link)
+        # 直前近傍にある AlmaLinux バージョンを拾う
+        mm = re.search(
+            rf"(AlmaLinux\s*([0-9]{{1,2}}).{{0,260}}?{escaped}|{escaped}.{{0,260}}?AlmaLinux\s*([0-9]{{1,2}}))",
+            text,
+            re.IGNORECASE | re.DOTALL,
+        )
+        version = ""
+        if mm:
+            version = str(mm.group(2) or mm.group(3) or "").strip()
+        if not version:
+            # URLのIDに対応する本文ブロックから推定
+            id_match = re.search(r"/sinfo/(\d+)", link)
+            vuln_id = id_match.group(1) if id_match else ""
+            if vuln_id:
+                vm = re.search(
+                    rf"ID[:：]\s*{re.escape(vuln_id)}.*?AlmaLinux\s*([0-9]{{1,2}})",
+                    text,
+                    re.IGNORECASE | re.DOTALL,
+                )
+                if vm:
+                    version = str(vm.group(1) or "").strip()
+        if version:
+            key = f"AlmaLinux{version}"
+            grouped.setdefault(key, [])
+            if link not in grouped[key]:
+                grouped[key].append(link)
+    return grouped
+
+
 def _get_sbom_almalinux_versions() -> set[str]:
     cached_versions = _SBOM_ALMA_VERSION_CACHE.get("versions")
     fetched_at = _SBOM_ALMA_VERSION_CACHE.get("fetched_at")
@@ -1968,7 +2056,10 @@ def _extract_source_facts(source_text: str) -> dict[str, Any]:
     lowered = text.lower()
     entries = _extract_sidfm_entries(text)
     links = re.findall(r"https?://[^\s)>\]]+", text)
-    sid_links = [u for u in links if "sid.softek.jp" in u]
+    sid_links = [u for u in links if "sid.softek.jp/filter/sinfo/" in u]
+    sid_links = list(dict.fromkeys(sid_links))
+    if not entries and sid_links:
+        entries = _build_entries_from_sid_links_fallback(text, sid_links)
     sbom_alma_versions = _get_sbom_almalinux_versions()
     if sbom_alma_versions:
         filtered_entries: list[dict[str, Any]] = []
@@ -2010,13 +2101,33 @@ def _extract_source_facts(source_text: str) -> dict[str, Any]:
     entry_links = [str(e.get("url") or "").strip() for e in selected_entries if str(e.get("url") or "").strip()]
     vuln_links = entry_links or sid_links or links
 
+    grouped_links_by_version: dict[str, list[str]] = {}
+    for e in (selected_entries or entries):
+        title = str(e.get("title") or "")
+        url = str(e.get("url") or "").strip()
+        if not url:
+            continue
+        vm = re.search(r"AlmaLinux\s*([0-9]{1,2})", title, re.IGNORECASE)
+        if not vm:
+            continue
+        key = f"AlmaLinux{vm.group(1)}"
+        grouped_links_by_version.setdefault(key, [])
+        if url not in grouped_links_by_version[key]:
+            grouped_links_by_version[key].append(url)
+    if not grouped_links_by_version:
+        grouped_links_by_version = _group_sid_links_by_almalinux_version(text, sid_links)
+    if sbom_alma_versions and grouped_links_by_version:
+        allowed = {f"AlmaLinux{v}" for v in sbom_alma_versions}
+        grouped_links_by_version = {
+            k: v for k, v in grouped_links_by_version.items() if k in allowed and v
+        }
+
     products: list[str] = []
     entry_text_for_products = "\n".join(str(e.get("title") or "") for e in (selected_entries or entries))
     if "almalinux" in lowered or "almalinux" in entry_text_for_products.lower():
-        versions = sorted(
-            {m.group(1) for m in re.finditer(r"almalinux\s*([0-9]{1,2})", entry_text_for_products or lowered, re.IGNORECASE)},
-            reverse=True,
-        )
+        versions = _extract_almalinux_versions_from_text(entry_text_for_products or lowered)
+        if not versions and sbom_alma_versions:
+            versions = sorted(set(sbom_alma_versions), key=lambda x: int(x), reverse=True)
         if versions:
             products.extend([f"AlmaLinux{v}" for v in versions])
         else:
@@ -2068,6 +2179,7 @@ def _extract_source_facts(source_text: str) -> dict[str, Any]:
         "due_group_count": len(due_groups) if due_groups else 1,
         "products": products,
         "vuln_links": vuln_links[:20],
+        "grouped_vuln_links": grouped_links_by_version,
         "scores": unique_scores[:10],
         "max_score": max_score,
         "due_date": due_date,
@@ -2117,7 +2229,12 @@ def _merge_hypothesis_with_tool_facts(hypothesis: dict[str, Any], source_text: s
     return facts
 
 
-def _audit_ticket_candidate(summary: str, detail: str, reasoning: str) -> tuple[bool, list[str]]:
+def _audit_ticket_candidate(
+    summary: str,
+    detail: str,
+    reasoning: str,
+    facts: dict[str, Any] | None = None,
+) -> tuple[bool, list[str]]:
     errors: list[str] = []
     if not summary or _is_summary_low_quality(summary):
         errors.append("summary_low_quality")
@@ -2144,6 +2261,19 @@ def _audit_ticket_candidate(summary: str, detail: str, reasoning: str) -> tuple[
     for phrase in _TICKET_FORBIDDEN_PHRASES:
         if phrase.lower() in lowered:
             errors.append(f"forbidden_phrase:{phrase}")
+    if isinstance(facts, dict):
+        sbom_versions = [str(v).strip() for v in (facts.get("sbom_alma_versions") or []) if str(v).strip()]
+        if len(sbom_versions) >= 2:
+            alma_lines = re.findall(r"^AlmaLinux[0-9]{1,2}\s*$", detail, flags=re.MULTILINE)
+            if len(set(alma_lines)) < 2:
+                errors.append("missing_multiversion_target_lines")
+            sid_urls = [u for u in urls if u.startswith("https://sid.softek.jp/filter/sinfo/")]
+            if len(set(sid_urls)) < 2:
+                errors.append("missing_multiversion_urls")
+        all_entries_count = int(facts.get("all_entries_count") or 0)
+        sid_links_count = len([u for u in (facts.get("vuln_links") or []) if str(u).startswith("https://sid.softek.jp/filter/sinfo/")])
+        if all_entries_count == 0 and sid_links_count >= 2:
+            errors.append("entry_extraction_inconsistent_with_links")
     return len(errors) == 0, errors
 
 
@@ -2156,6 +2286,15 @@ def _infer_ticket_detail_from_facts(facts: dict[str, Any]) -> str:
     product_line = "\n".join(facts["products"]) if facts["products"] else "要確認"
     links = facts["vuln_links"] or ["要確認"]
     grouped_links: dict[str, list[str]] = {}
+    pre_grouped = facts.get("grouped_vuln_links")
+    if isinstance(pre_grouped, dict):
+        for k, vals in pre_grouped.items():
+            key = str(k or "").strip()
+            if not key:
+                continue
+            urls = [str(v).strip() for v in (vals or []) if str(v).strip()]
+            if urls:
+                grouped_links[key] = list(dict.fromkeys(urls))
     for e in facts.get("entries", []):
         title = str(e.get("title") or "")
         url = str(e.get("url") or "").strip()
@@ -2167,6 +2306,11 @@ def _infer_ticket_detail_from_facts(facts: dict[str, Any]) -> str:
             grouped_links.setdefault(key, [])
             if url not in grouped_links[key]:
                 grouped_links[key].append(url)
+    # SBOM適用版が複数ある場合、少なくとも対象欄はバージョン列挙に寄せる。
+    sbom_versions = [str(v).strip() for v in (facts.get("sbom_alma_versions") or []) if str(v).strip()]
+    if sbom_versions and len(sbom_versions) >= 2:
+        forced_products = [f"AlmaLinux{v}" for v in sorted(set(sbom_versions), key=lambda x: int(x), reverse=True)]
+        product_line = "\n".join(forced_products)
     if grouped_links:
         def _sort_key(k: str) -> tuple[int, str]:
             m = re.search(r"([0-9]{1,2})$", k)
@@ -2461,7 +2605,7 @@ def _process_message_event(event: dict[str, Any], user_name: str) -> str | None:
         summary = str(merged_facts.get("request_summary_ai") or _infer_request_summary_from_source(source_text_for_quality)).strip()
         detail = _infer_ticket_detail_from_facts(merged_facts)
         reasoning = _infer_reasoning_from_facts(merged_facts)
-        ok, audit_errors = _audit_ticket_candidate(summary, detail, reasoning)
+        ok, audit_errors = _audit_ticket_candidate(summary, detail, reasoning, facts=merged_facts)
         if not ok:
             logger.warning("Ticket audit failed, fallback to source-derived fixed output: %s", ", ".join(audit_errors))
             response_text = _build_ticket_text_from_source(source_text_for_quality)
