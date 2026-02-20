@@ -25,6 +25,7 @@ _chat_service_read_client = None
 _chat_service_post_client = None
 _RECENT_TURNS: dict[str, deque[dict[str, str]]] = {}
 _THREAD_ROOT_CACHE: dict[str, str] = {}
+_SBOM_ALMA_VERSION_CACHE: dict[str, Any] = {"versions": None, "fetched_at": None}
 _ASYNC_WORKER_POOL = ThreadPoolExecutor(max_workers=4, thread_name_prefix="chat-webhook-worker")
 _ASYNC_EVENT_LOCK = threading.Lock()
 _ASYNC_EVENT_SEEN: dict[str, float] = {}
@@ -110,8 +111,28 @@ _CORRECTION_TRIGGER_WORDS = (
     "修正して",
     "直して",
     "更新して",
+    "追加して",
+    "追記して",
+    "入れて",
+    "反映して",
+    "書き換えて",
+    "整えて",
+    "にして",
+)
+try:
+    _HYPOTHESIS_RETRY_LIMIT = int((os.environ.get("HYPOTHESIS_RETRY_LIMIT") or "0").strip())
+except Exception:
+    _HYPOTHESIS_RETRY_LIMIT = 0
+if _HYPOTHESIS_RETRY_LIMIT < 0:
+    _HYPOTHESIS_RETRY_LIMIT = 0
+_TOOL_CALL_LIMIT = 3
+_TICKET_FORBIDDEN_PHRASES = (
+    "はい、承知いたしました",
+    "ご依頼のメール内容は",
+    "テンプレートを作成します",
 )
 _INCIDENT_ID_PATTERN = re.compile(r"\bincident_id[:=\s]*([0-9a-fA-F\-]{8,})\b", re.IGNORECASE)
+_INTENT_JSON_MAX_CHARS = 1200
 _COMPLEXITY_KEYWORDS = (
     "比較",
     "違い",
@@ -460,6 +481,233 @@ def _build_vulnerability_ticket_prompt(raw_text: str) -> str:
     )
 
 
+def _build_ticket_hypothesis_prompt(raw_text: str, user_instruction: str = "") -> str:
+    instruction_block = ""
+    if (user_instruction or "").strip():
+        instruction_block = (
+            "\n\n【ユーザー追加指示】\n"
+            f"{str(user_instruction).strip()}\n"
+            "上記指示を優先し、起票フォーマットを壊さず補正してください。"
+        )
+    return (
+        "以下の脆弱性通知本文を解析し、まず仮説JSONのみを出力してください。"
+        "説明文は禁止です。JSONオブジェクト以外を出力しないでください。\n"
+        "必須スキーマ:\n"
+        "{\n"
+        '  "is_vulnerability_notification": true/false,\n'
+        '  "request_summary": "string",\n'
+        '  "target_products": ["string", ...],\n'
+        '  "entries": [\n'
+        "    {\n"
+        '      "id": "string",\n'
+        '      "cvss": number,\n'
+        '      "title": "string",\n'
+        '      "url": "string",\n'
+        '      "os_version": "string",\n'
+        '      "package": "string",\n'
+        '      "confidence": number,\n'
+        '      "evidence": "string"\n'
+        "    }\n"
+        "  ],\n"
+        '  "grouping_plan": "single|split",\n'
+        '  "assumptions": ["string", ...]\n'
+        "}\n"
+        "不明値は空文字ではなく `要確認` を使ってください。\n\n"
+        f"{raw_text}{instruction_block}"
+    )
+
+
+def _build_ai_intent_prompt(
+    user_prompt: str,
+    raw_body_text: str,
+    root_text: str,
+    recent_turns: list[dict[str, str]],
+    is_gmail_post: bool,
+) -> str:
+    turns_preview: list[str] = []
+    for turn in recent_turns[-2:]:
+        u = str(turn.get("user", "")).strip()
+        a = str(turn.get("assistant", "")).strip()
+        if u or a:
+            turns_preview.append(f"- user: {u[:200]}\n  assistant: {a[:200]}")
+    recent = "\n".join(turns_preview) if turns_preview else "(none)"
+    root_preview = (root_text or "").strip()
+    if len(root_preview) > 1200:
+        root_preview = root_preview[:1200] + "\n...(truncated)"
+    return (
+        "あなたはGoogle Chat運用の意図判定器です。"
+        "次の入力に対して、JSONのみを返してください。説明文は禁止です。\n\n"
+        "返却JSON schema:\n"
+        '{'
+        '"intent":"ticket_generate|ticket_revise|general_analysis|clarification",'
+        '"needs_ticket_format":true|false,'
+        '"prefer_thread_root":true|false,'
+        '"prefer_history":true|false,'
+        '"reason":"short reason",'
+        '"confidence":"high|medium|low"'
+        '}\n\n'
+        f"is_gmail_post: {str(bool(is_gmail_post)).lower()}\n"
+        f"user_prompt:\n{(user_prompt or '').strip()}\n\n"
+        f"raw_body_text:\n{(raw_body_text or '').strip()}\n\n"
+        f"thread_root_preview:\n{root_preview or '(none)'}\n\n"
+        f"recent_turns:\n{recent}\n"
+    )
+
+
+def _parse_ai_intent_json(text: str) -> dict[str, Any]:
+    blob = _extract_first_json_object(text)
+    if not blob:
+        return {}
+    try:
+        parsed = json.loads(blob)
+    except Exception:
+        return {}
+    if not isinstance(parsed, dict):
+        return {}
+    intent = str(parsed.get("intent") or "").strip()
+    if intent not in {"ticket_generate", "ticket_revise", "general_analysis", "clarification"}:
+        return {}
+    return {
+        "intent": intent,
+        "needs_ticket_format": bool(parsed.get("needs_ticket_format")),
+        "prefer_thread_root": bool(parsed.get("prefer_thread_root")),
+        "prefer_history": bool(parsed.get("prefer_history")),
+        "reason": str(parsed.get("reason") or "").strip()[:_INTENT_JSON_MAX_CHARS],
+        "confidence": str(parsed.get("confidence") or "").strip().lower() or "low",
+    }
+
+
+def _run_ai_intent_planner(
+    user_prompt: str,
+    raw_body_text: str,
+    root_text: str,
+    recent_turns: list[dict[str, str]],
+    is_gmail_post: bool,
+    history_key: str,
+) -> dict[str, Any]:
+    if is_gmail_post:
+        return {
+            "intent": "ticket_generate",
+            "needs_ticket_format": True,
+            "prefer_thread_root": True,
+            "prefer_history": False,
+            "reason": "gmail_notification",
+            "confidence": "high",
+        }
+    prompt = _build_ai_intent_prompt(
+        user_prompt=user_prompt,
+        raw_body_text=raw_body_text,
+        root_text=root_text,
+        recent_turns=recent_turns,
+        is_gmail_post=is_gmail_post,
+    )
+    raw = _run_agent_query(prompt, history_key)
+    parsed = _parse_ai_intent_json(raw)
+    if parsed:
+        return parsed
+
+    # Fallback for malformed planner output: preserve existing behavior as safety net.
+    if _is_ambiguous_prompt(user_prompt) and not root_text and not recent_turns:
+        return {
+            "intent": "clarification",
+            "needs_ticket_format": False,
+            "prefer_thread_root": False,
+            "prefer_history": False,
+            "reason": "fallback_ambiguous_without_context",
+            "confidence": "medium",
+        }
+    if _contains_manual_ticket_trigger(raw_body_text):
+        return {
+            "intent": "ticket_generate",
+            "needs_ticket_format": True,
+            "prefer_thread_root": True,
+            "prefer_history": True,
+            "reason": "fallback_ticket_pattern",
+            "confidence": "low",
+        }
+    return {
+        "intent": "general_analysis",
+        "needs_ticket_format": False,
+        "prefer_thread_root": False,
+        "prefer_history": False,
+        "reason": "fallback_general",
+        "confidence": "low",
+    }
+
+
+def _extract_first_json_object(text: str) -> str:
+    body = (text or "").strip()
+    if not body:
+        return ""
+    start = body.find("{")
+    if start < 0:
+        return ""
+    depth = 0
+    for i in range(start, len(body)):
+        ch = body[i]
+        if ch == "{":
+            depth += 1
+        elif ch == "}":
+            depth -= 1
+            if depth == 0:
+                return body[start : i + 1]
+    return ""
+
+
+def _parse_ticket_hypothesis_json(text: str) -> dict[str, Any]:
+    raw = _extract_first_json_object(text)
+    if not raw:
+        return {}
+    try:
+        obj = json.loads(raw)
+    except Exception:
+        return {}
+    return obj if isinstance(obj, dict) else {}
+
+
+def _validate_ticket_hypothesis_schema(hypothesis: dict[str, Any]) -> tuple[bool, list[str]]:
+    errs: list[str] = []
+    if not isinstance(hypothesis, dict):
+        return False, ["hypothesis is not object"]
+    for key in ("is_vulnerability_notification", "request_summary", "target_products", "entries", "grouping_plan", "assumptions"):
+        if key not in hypothesis:
+            errs.append(f"missing:{key}")
+    if "target_products" in hypothesis and not isinstance(hypothesis.get("target_products"), list):
+        errs.append("target_products must be list")
+    if "entries" in hypothesis and not isinstance(hypothesis.get("entries"), list):
+        errs.append("entries must be list")
+    if isinstance(hypothesis.get("entries"), list):
+        for idx, e in enumerate(hypothesis.get("entries") or []):
+            if not isinstance(e, dict):
+                errs.append(f"entries[{idx}] not object")
+                continue
+            for k in ("id", "cvss", "title", "url", "os_version", "package", "confidence", "evidence"):
+                if k not in e:
+                    errs.append(f"entries[{idx}] missing:{k}")
+    return (len(errs) == 0), errs
+
+
+def _run_hypothesis_pipeline(source_text: str, history_key: str, user_instruction: str = "") -> dict[str, Any]:
+    attempts = max(1, _HYPOTHESIS_RETRY_LIMIT + 1)
+    prompt = _build_ticket_hypothesis_prompt(source_text, user_instruction=user_instruction)
+    last_errs: list[str] = []
+    for _ in range(attempts):
+        raw = _run_agent_query(prompt, history_key)
+        parsed = _parse_ticket_hypothesis_json(raw)
+        ok, errs = _validate_ticket_hypothesis_schema(parsed)
+        if ok:
+            return parsed
+        last_errs = errs
+        prompt = (
+            _build_ticket_hypothesis_prompt(source_text, user_instruction=user_instruction)
+            + "\n\n前回の不備:\n- "
+            + "\n- ".join(errs[:12])
+            + "\n上記を修正し、JSONのみ再出力してください。"
+        )
+    logger.warning("Hypothesis schema validation failed after retries: %s", ", ".join(last_errs))
+    return {}
+
+
 def _build_thread_root_analysis_prompt(user_prompt: str, root_text: str) -> str:
     return (
         "以下はスレッド元メッセージです。"
@@ -475,6 +723,23 @@ def _is_correction_prompt(prompt: str) -> bool:
     if not normalized:
         return False
     return any(token in normalized for token in _CORRECTION_TRIGGER_WORDS)
+
+
+def _looks_like_polite_correction_prompt(prompt: str) -> bool:
+    normalized = re.sub(r"\s+", " ", (prompt or "").strip()).lower()
+    if not normalized:
+        return False
+    polite_suffixes = (
+        "してもらえますか",
+        "してください",
+        "してほしい",
+        "お願いします",
+        "お願いできますか",
+        "できますか",
+    )
+    has_target_hint = any(token in normalized for token in ("対象", "詳細", "依頼概要", "cvss", "脆弱性情報", "機器", "アプリ"))
+    has_action_hint = any(token in normalized for token in ("追加", "追記", "変更", "修正", "更新", "反映", "入れ"))
+    return has_target_hint and has_action_hint and any(s in normalized for s in polite_suffixes)
 
 
 def _extract_incident_id(text: str) -> str:
@@ -565,6 +830,10 @@ def _fetch_thread_root_message_text(event: dict[str, Any]) -> str:
     message = event.get("message") or {}
     thread_name = str(((message.get("thread") or {}).get("name") or "")).strip()
     if not thread_name:
+        return ""
+    delegated_user = _get_config("CHAT_DELEGATED_USER", "vuln-agent-chat-delegated-user", "").strip()
+    if not delegated_user:
+        # DWD未設定環境ではChat read scope取得が失敗しやすいため、読み取りAPI呼び出しを抑止。
         return ""
     current_message_name = str(message.get("name") or "").strip()
     space_name = _extract_space_name(event, thread_name)
@@ -1056,11 +1325,27 @@ def _send_message_to_thread(event: dict[str, Any], text: str) -> None:
     body: dict[str, Any] = {"text": str(payload.get("text") or "")}
     if thread_name:
         body["thread"] = {"name": thread_name}
-    service.spaces().messages().create(
-        parent=space_name,
-        body=body,
-        messageReplyOption="REPLY_MESSAGE_FALLBACK_TO_NEW_THREAD",
-    ).execute()
+    try:
+        req: dict[str, Any] = {
+            "parent": space_name,
+            "body": body,
+        }
+        if thread_name:
+            req["messageReplyOption"] = "REPLY_MESSAGE_FALLBACK_TO_NEW_THREAD"
+        service.spaces().messages().create(**req).execute()
+    except Exception as exc:
+        msg = str(exc)
+        if "malformed space resource name" in msg.lower() or "missing or malformed space resource name" in msg.lower():
+            logger.warning("Skip Chat post due to malformed space name: %s", space_name)
+            return
+        if thread_name and ("invalid thread resource name" in msg.lower() or "malformed thread" in msg.lower()):
+            logger.warning("Retrying Chat post without thread due to invalid thread name: %s", thread_name)
+            service.spaces().messages().create(
+                parent=space_name,
+                body={"text": str(payload.get("text") or "")},
+            ).execute()
+            return
+        raise
 
 
 def _context_key(event: dict[str, Any], user_name: str) -> str:
@@ -1392,6 +1677,12 @@ def _strip_manual_command_lines(text: str) -> str:
     for line in lines:
         lowered = line.lower()
         if any(token in lowered for token in _MANUAL_TICKET_TRIGGER_WORDS):
+            cleaned = line
+            for token in _MANUAL_TICKET_TRIGGER_WORDS:
+                cleaned = re.sub(re.escape(token), "", cleaned, flags=re.IGNORECASE)
+            cleaned = re.sub(r"\s+", " ", cleaned).strip()
+            if cleaned:
+                kept.append(cleaned)
             continue
         if line in {"確認して", "確認", "解析して"}:
             continue
@@ -1596,6 +1887,37 @@ def _extract_sidfm_entries(source_text: str) -> list[dict[str, Any]]:
     return sorted(entries, key=_key, reverse=True)
 
 
+def _get_sbom_almalinux_versions() -> set[str]:
+    cached_versions = _SBOM_ALMA_VERSION_CACHE.get("versions")
+    fetched_at = _SBOM_ALMA_VERSION_CACHE.get("fetched_at")
+    now = datetime.now(timezone.utc)
+    if isinstance(cached_versions, set) and isinstance(fetched_at, datetime):
+        if (now - fetched_at).total_seconds() < 600:
+            return set(cached_versions)
+
+    table_id = _get_config("BQ_SBOM_TABLE_ID", "vuln-agent-bq-sbom-table-id", "").strip()
+    if not table_id:
+        return set()
+    try:
+        from google.cloud import bigquery
+
+        client = bigquery.Client(project=_get_project_id() or None)
+        query = f"""
+            SELECT DISTINCT REGEXP_EXTRACT(LOWER(release), r'almalinux([0-9]{{1,2}})') AS alma_ver
+            FROM `{table_id}`
+            WHERE REGEXP_CONTAINS(LOWER(release), r'almalinux[0-9]{{1,2}}')
+        """
+        rows = list(client.query(query).result())
+        versions = {str((r.get("alma_ver") if isinstance(r, dict) else getattr(r, "alma_ver", "")) or "").strip() for r in rows}
+        versions = {v for v in versions if v}
+        _SBOM_ALMA_VERSION_CACHE["versions"] = set(versions)
+        _SBOM_ALMA_VERSION_CACHE["fetched_at"] = now
+        return versions
+    except Exception as exc:
+        logger.warning("Failed to load AlmaLinux versions from SBOM table: %s", exc)
+        return set()
+
+
 def _extract_base_date_from_source(source_text: str) -> datetime:
     text = (source_text or "").strip()
     m = re.search(r"SIDfm\s*\((\d{4})/(\d{2})/(\d{2})\)", text)
@@ -1647,6 +1969,20 @@ def _extract_source_facts(source_text: str) -> dict[str, Any]:
     entries = _extract_sidfm_entries(text)
     links = re.findall(r"https?://[^\s)>\]]+", text)
     sid_links = [u for u in links if "sid.softek.jp" in u]
+    sbom_alma_versions = _get_sbom_almalinux_versions()
+    if sbom_alma_versions:
+        filtered_entries: list[dict[str, Any]] = []
+        for e in entries:
+            title = str(e.get("title") or "")
+            m = re.search(r"almalinux\s*([0-9]{1,2})", title, re.IGNORECASE)
+            if m:
+                if m.group(1) in sbom_alma_versions:
+                    filtered_entries.append(e)
+            else:
+                filtered_entries.append(e)
+        if filtered_entries:
+            entries = filtered_entries
+
     # 同一納期で同一起票とするため、エントリごとに納期を算出してグルーピングする。
     due_groups: dict[str, list[dict[str, Any]]] = {}
     for e in entries:
@@ -1675,8 +2011,12 @@ def _extract_source_facts(source_text: str) -> dict[str, Any]:
     vuln_links = entry_links or sid_links or links
 
     products: list[str] = []
-    if "almalinux" in lowered:
-        versions = sorted({m.group(1) for m in re.finditer(r"almalinux\s*([0-9]{1,2})", lowered)})
+    entry_text_for_products = "\n".join(str(e.get("title") or "") for e in (selected_entries or entries))
+    if "almalinux" in lowered or "almalinux" in entry_text_for_products.lower():
+        versions = sorted(
+            {m.group(1) for m in re.finditer(r"almalinux\s*([0-9]{1,2})", entry_text_for_products or lowered, re.IGNORECASE)},
+            reverse=True,
+        )
         if versions:
             products.extend([f"AlmaLinux{v}" for v in versions])
         else:
@@ -1732,35 +2072,119 @@ def _extract_source_facts(source_text: str) -> dict[str, Any]:
         "max_score": max_score,
         "due_date": due_date,
         "due_reason": due_reason,
+        "sbom_alma_versions": sorted(sbom_alma_versions),
     }
+
+
+def _merge_hypothesis_with_tool_facts(hypothesis: dict[str, Any], source_text: str) -> dict[str, Any]:
+    facts = _extract_source_facts(source_text)
+    if not hypothesis:
+        return facts
+
+    # Use AI interpretation as tentative signal, then keep tool-verified facts as source of truth.
+    products = [str(p).strip() for p in (hypothesis.get("target_products") or []) if str(p).strip()]
+    if products:
+        normalized = []
+        for p in products:
+            if re.search(r"almalinux\s*[0-9]{1,2}", p, re.IGNORECASE):
+                m = re.search(r"([0-9]{1,2})", p)
+                if m:
+                    normalized.append(f"AlmaLinux{m.group(1)}")
+                    continue
+            normalized.append(p)
+        facts["products"] = list(dict.fromkeys(normalized))
+
+    h_entries = hypothesis.get("entries") if isinstance(hypothesis.get("entries"), list) else []
+    if h_entries:
+        by_id = {str(e.get("id") or "").strip(): e for e in facts.get("entries", []) if str(e.get("id") or "").strip()}
+        for he in h_entries:
+            if not isinstance(he, dict):
+                continue
+            hid = str(he.get("id") or "").strip()
+            if not hid or hid not in by_id:
+                continue
+            if str(by_id[hid].get("title") or "").strip() in ("", "要確認"):
+                by_id[hid]["title"] = str(he.get("title") or "").strip() or by_id[hid]["title"]
+        facts["entries"] = list(by_id.values())
+
+    req_summary = str(hypothesis.get("request_summary") or "").strip()
+    if req_summary and not _is_summary_low_quality(req_summary):
+        facts["request_summary_ai"] = req_summary
+
+    assumptions = hypothesis.get("assumptions")
+    if isinstance(assumptions, list):
+        facts["assumptions"] = [str(a).strip() for a in assumptions if str(a).strip()]
+    return facts
+
+
+def _audit_ticket_candidate(summary: str, detail: str, reasoning: str) -> tuple[bool, list[str]]:
+    errors: list[str] = []
+    if not summary or _is_summary_low_quality(summary):
+        errors.append("summary_low_quality")
+    for line in ("【対象の機器/アプリ】", "【脆弱性情報】", "【CVSSスコア】", "【依頼内容】", "【対応完了目標】"):
+        if line not in detail:
+            errors.append(f"missing_section:{line}")
+    urls = re.findall(r"https?://[^\s)>\]]+", detail)
+    if not urls:
+        errors.append("missing_url")
+    if any(not (u.startswith("https://sid.softek.jp/filter/sinfo/") or "nvd.nist.gov" in u) for u in urls):
+        # permissive warning-style hardening
+        errors.append("unexpected_url_domain")
+    score_match = re.search(r"【CVSSスコア】\s*[\r\n]+([0-9](?:\.[0-9])?)", detail)
+    if not score_match:
+        errors.append("missing_cvss_numeric")
+    else:
+        try:
+            v = float(score_match.group(1))
+            if not (0.0 <= v <= 10.0):
+                errors.append("cvss_out_of_range")
+        except Exception:
+            errors.append("cvss_parse_error")
+    lowered = (summary + "\n" + detail + "\n" + reasoning).lower()
+    for phrase in _TICKET_FORBIDDEN_PHRASES:
+        if phrase.lower() in lowered:
+            errors.append(f"forbidden_phrase:{phrase}")
+    return len(errors) == 0, errors
 
 
 def _infer_ticket_detail_from_source(source_text: str) -> str:
     facts = _extract_source_facts(source_text)
+    return _infer_ticket_detail_from_facts(facts)
+
+
+def _infer_ticket_detail_from_facts(facts: dict[str, Any]) -> str:
     product_line = "\n".join(facts["products"]) if facts["products"] else "要確認"
     links = facts["vuln_links"] or ["要確認"]
-    links_line = "\n".join(links)
+    grouped_links: dict[str, list[str]] = {}
+    for e in facts.get("entries", []):
+        title = str(e.get("title") or "")
+        url = str(e.get("url") or "").strip()
+        if not url:
+            continue
+        m = re.search(r"(AlmaLinux\s*[0-9]{1,2})", title, re.IGNORECASE)
+        key = m.group(1).replace(" ", "") if m else ""
+        if key:
+            grouped_links.setdefault(key, [])
+            if url not in grouped_links[key]:
+                grouped_links[key].append(url)
+    if grouped_links:
+        def _sort_key(k: str) -> tuple[int, str]:
+            m = re.search(r"([0-9]{1,2})$", k)
+            return (-(int(m.group(1)) if m else -1), k.lower())
+
+        parts: list[str] = []
+        for key in sorted(grouped_links.keys(), key=_sort_key):
+            parts.append(key)
+            parts.extend(grouped_links[key])
+            parts.append("")
+        links_line = "\n".join(parts).strip()
+    else:
+        links_line = "\n".join(links)
     if facts["scores"]:
         max_score = facts["max_score"]
-        scores_text = ", ".join(f"{s:.1f}" for s in facts["scores"])
-        cvss_line = f"最大 {max_score:.1f}（通知内: {scores_text}）"
+        cvss_line = f"{max_score:.1f}"
     else:
         cvss_line = "要確認"
-
-    entry_lines: list[str] = []
-    for e in facts.get("entries", []):
-        vuln_id = str(e.get("id") or "").strip()
-        score = e.get("cvss")
-        title = str(e.get("title") or "").strip()
-        url = str(e.get("url") or "").strip()
-        score_text = f"{float(score):.1f}" if isinstance(score, (int, float)) else "要確認"
-        parts = [f"ID:{vuln_id}" if vuln_id else "ID:要確認", f"CVSS:{score_text}"]
-        if title and title != "要確認":
-            parts.append(title)
-        if url:
-            parts.append(url)
-        entry_lines.append(" - " + " / ".join(parts))
-    entry_text = "\n".join(entry_lines[:12]) if entry_lines else " - 要確認"
     split_note = ""
     if int(facts.get("due_group_count") or 1) > 1:
         split_note = (
@@ -1771,15 +2195,13 @@ def _infer_ticket_detail_from_source(source_text: str) -> str:
     return (
         "【対象の機器/アプリ】\n"
         f"{product_line}\n\n"
-        "【通知内の脆弱性一覧】\n"
-        f"{entry_text}\n\n"
-        "【脆弱性情報】\n"
+        "【脆弱性情報】（リンク貼り付け）\n"
         f"{links_line}\n\n"
         "【CVSSスコア】\n"
         f"{cvss_line}\n\n"
         "【依頼内容】\n"
-        "上記脆弱性情報をご確認いただき、該当バージョンの場合はアップデート対応をお願いします。\n"
-        "対応を実施した場合は対象ホスト名（または対象端末）をご共有ください。\n\n"
+        "上記脆弱性情報をご確認いただき、バージョンアップが低い場合はバージョンアップのご対応お願いいたします。\n"
+        "対応を実施した場合はサーバのホスト名をご教示ください。\n\n"
         "【対応完了目標】\n"
         f"{facts.get('due_date') or '要確認'}"
         f"{split_note}"
@@ -1788,6 +2210,10 @@ def _infer_ticket_detail_from_source(source_text: str) -> str:
 
 def _infer_reasoning_from_source(source_text: str) -> str:
     facts = _extract_source_facts(source_text)
+    return _infer_reasoning_from_facts(facts)
+
+
+def _infer_reasoning_from_facts(facts: dict[str, Any]) -> str:
     product_text = " / ".join(facts["products"]) if facts["products"] else "要確認"
     links_count = len(facts["vuln_links"])
     entries_count = len(facts.get("entries", []))
@@ -1802,6 +2228,7 @@ def _infer_reasoning_from_source(source_text: str) -> str:
         f"- 通知本文から脆弱性エントリを抽出: {all_entries_count}件（起票対象: {entries_count}件）\n"
         f"- 参照URLを抽出: {links_count}件\n"
         f"- CVSSを抽出: {scores_text}\n"
+        f"- SBOM照合で対象AlmaLinuxバージョンを適用: {', '.join(facts.get('sbom_alma_versions') or ['未適用'])}\n"
         f"- 対応完了目標を算出: {facts.get('due_date') or '要確認'}（{facts.get('due_reason') or '根拠不足'}）"
     )
 
@@ -1868,6 +2295,10 @@ def _build_ticket_text_from_source(source_text: str) -> str:
     summary = _infer_request_summary_from_source(source_text)
     detail = _infer_ticket_detail_from_source(source_text)
     reasoning = _infer_reasoning_from_source(source_text)
+    return _build_ticket_text_from_parts(summary, detail, reasoning)
+
+
+def _build_ticket_text_from_parts(summary: str, detail: str, reasoning: str) -> str:
     return (
         "【起票用（コピペ）】\n"
         "大分類: 017.脆弱性対応（情シス専用）\n"
@@ -1876,6 +2307,24 @@ def _build_ticket_text_from_source(source_text: str) -> str:
         f"詳細:\n{detail}\n\n"
         f"{reasoning}"
     ).strip()
+
+
+def _ai_final_review_with_value_lock(summary: str, detail: str, reasoning: str, history_key: str) -> str:
+    base_text = _build_ticket_text_from_parts(summary, detail, reasoning)
+    prompt = (
+        "以下の起票文を、値を変えずに可読性だけ改善してください。"
+        "禁止: 値改変・項目追加削除。許可: 改行や句読点の軽微調整のみ。\n\n"
+        f"{base_text}"
+    )
+    reviewed = _run_agent_query(prompt, history_key)
+    normalized = _format_ticket_like_response(reviewed, detail)
+    if "【起票用（コピペ）】" not in normalized or "【判断理由】" not in normalized:
+        return base_text
+    # value-lock check
+    required_tokens = [f"依頼概要: {summary}", "大分類: 017.脆弱性対応（情シス専用）", "小分類: 002.IT基盤チーム"]
+    if any(tok not in normalized for tok in required_tokens):
+        return base_text
+    return normalized
 
 
 def _format_ticket_like_response(text: str, source_text: str = "") -> str:
@@ -1924,105 +2373,115 @@ def _process_message_event(event: dict[str, Any], user_name: str) -> str | None:
     manual_backfill_mode = False
     raw_body_text = _strip_mentions_preserve_lines(raw_text)
     source_text_for_quality = ""
+    root_text = _fetch_thread_root_message_text(event)
+    if not root_text:
+        root_text = _get_cached_thread_root_text(event)
+    recent_turns = _get_recent_turns(history_key, max_turns=3)
+
     if is_gmail_post:
         message_payload_text = _extract_message_text_payload((event.get("message") or {}))
         source_text_for_quality = message_payload_text or raw_text
         _remember_thread_root_text(event, source_text_for_quality)
-        prompt = _build_vulnerability_ticket_prompt(source_text_for_quality)
         prefer_ticket_format = True
         save_ticket_history = True
-    elif _contains_manual_ticket_trigger(raw_body_text):
-        manual_source = _resolve_manual_backfill_source_text(event, raw_body_text)
-        if not manual_source:
-            return _build_backfill_guidance_message()
-        source_text_for_quality = manual_source
-        _remember_thread_root_text(event, manual_source)
-        prompt = _build_vulnerability_ticket_prompt(manual_source)
-        prefer_ticket_format = True
-        save_ticket_history = True
-        manual_backfill_mode = True
-    elif _is_correction_prompt(prompt):
-        if _extract_incident_id(prompt):
-            pass
-        else:
-            root_text = _fetch_thread_root_message_text(event)
-            resolved_incident = _extract_incident_id(root_text)
-            if not resolved_incident:
-                recent_turns = _get_recent_turns(history_key, max_turns=2)
-                for turn in reversed(recent_turns):
-                    candidate = _extract_incident_id(turn.get("assistant", ""))
-                    if candidate:
-                        resolved_incident = candidate
-                        break
-            if not resolved_incident:
-                history_ticket = _fetch_latest_ticket_record_from_history(event)
-                resolved_incident = str(history_ticket.get("incident_id") or "").strip()
-            if not resolved_incident:
-                return (
-                    "このスレッドから incident_id を特定できませんでした。"
-                    " 直近の通知に含まれる【管理ID】を指定して再度「修正して」と依頼してください。"
-                )
-            prompt = _build_review_prompt_with_incident_id(prompt, resolved_incident)
     elif not prompt:
         return None
-    elif _is_analysis_trigger_prompt(prompt) and _requests_thread_root_context(prompt):
-        root_text = _fetch_thread_root_message_text(event)
-        if not root_text:
-            root_text = _get_cached_thread_root_text(event)
-        if root_text:
-            if _looks_like_gmail_digest(root_text):
-                prompt = _build_vulnerability_ticket_prompt(root_text)
-                prefer_ticket_format = True
-            else:
-                prompt = _build_thread_root_analysis_prompt(prompt, root_text)
-        else:
+    else:
+        intent_plan = _run_ai_intent_planner(
+            user_prompt=prompt,
+            raw_body_text=raw_body_text,
+            root_text=root_text,
+            recent_turns=recent_turns,
+            is_gmail_post=is_gmail_post,
+            history_key=history_key,
+        )
+        intent = str(intent_plan.get("intent") or "").strip()
+        logger.info(
+            "ai_intent_plan intent=%s ticket=%s root=%s history=%s confidence=%s reason=%s",
+            intent,
+            bool(intent_plan.get("needs_ticket_format")),
+            bool(intent_plan.get("prefer_thread_root")),
+            bool(intent_plan.get("prefer_history")),
+            str(intent_plan.get("confidence") or ""),
+            str(intent_plan.get("reason") or ""),
+        )
+        if intent == "clarification":
             return _build_clarification_message()
-    elif _is_analysis_trigger_prompt(prompt) and _is_ambiguous_prompt(prompt):
-        root_text = _fetch_thread_root_message_text(event)
-        if not root_text:
-            root_text = _get_cached_thread_root_text(event)
-        if root_text:
-            prompt = _build_vulnerability_ticket_prompt(root_text)
+        if bool(intent_plan.get("needs_ticket_format")) or intent in {"ticket_generate", "ticket_revise"}:
             prefer_ticket_format = True
-        else:
-            message = event.get("message") or {}
-            thread_name = ((message.get("thread") or {}).get("name") or "").strip()
-            if thread_name:
+            save_ticket_history = True
+            if intent == "ticket_revise" or _contains_manual_ticket_trigger(raw_body_text):
+                manual_backfill_mode = True
+            # 1) user provided body
+            candidate_source = _resolve_manual_backfill_source_text(event, raw_body_text)
+            # 2) thread root
+            if not candidate_source and bool(intent_plan.get("prefer_thread_root")):
+                candidate_source = root_text
+            # 3) history fallback
+            if not candidate_source and bool(intent_plan.get("prefer_history")):
                 history_ticket = _fetch_latest_ticket_record_from_history(event)
                 history_message = _build_history_ticket_message(history_ticket)
                 if history_message:
-                    _remember_turn(history_key, _clean_chat_text(event), history_message)
-                    return history_message
-                recent_turns = _get_recent_turns(history_key, max_turns=2)
-                if recent_turns:
-                    contextual = _build_contextual_prompt(prompt, recent_turns)
-                    prompt = _build_thread_followup_prompt(contextual)
-                else:
-                    return _build_backfill_guidance_message()
-                prefer_ticket_format = True
+                    candidate_source = history_message
+            if intent == "ticket_revise" and candidate_source and not _contains_specific_vuln_signal(candidate_source):
+                history_ticket = _fetch_latest_ticket_record_from_history(event)
+                history_message = _build_history_ticket_message(history_ticket)
+                if history_message and _contains_vulnerability_signal(history_message):
+                    candidate_source = history_message
+            source_text_for_quality = candidate_source
+            if source_text_for_quality:
+                _remember_thread_root_text(event, source_text_for_quality)
             else:
+                return _build_backfill_guidance_message()
+        else:
+            if _is_ambiguous_prompt(prompt) and recent_turns:
+                prompt = _build_contextual_prompt(prompt, recent_turns)
+            elif _is_ambiguous_prompt(prompt) and not recent_turns:
                 return _build_clarification_message()
-    elif _is_ambiguous_prompt(prompt):
-        recent_turns = _get_recent_turns(history_key, max_turns=2)
-        if not recent_turns:
-            return _build_clarification_message()
-        prompt = _build_contextual_prompt(prompt, recent_turns)
 
-    response_text = _run_agent_query(prompt, history_key)
-    if manual_backfill_mode:
-        if not _is_manual_ticket_output_usable(response_text):
+    if prefer_ticket_format:
+        if is_gmail_post and not _contains_specific_vuln_signal(source_text_for_quality):
+            return _build_low_quality_ticket_message()
+
+        hypothesis_instruction = ""
+        if manual_backfill_mode and prompt:
+            hypothesis_instruction = prompt
+        hypothesis = _run_hypothesis_pipeline(source_text_for_quality, history_key, user_instruction=hypothesis_instruction)
+        tool_calls_used = 0
+        if tool_calls_used >= _TOOL_CALL_LIMIT:
+            logger.warning("Tool call limit reached before fact merge; using source-only output.")
+            response_text = _build_ticket_text_from_source(source_text_for_quality)
+            _remember_turn(history_key, _clean_chat_text(event), response_text)
+            return response_text
+        merged_facts = _merge_hypothesis_with_tool_facts(hypothesis, source_text_for_quality)
+        tool_calls_used += 1
+        if manual_backfill_mode and not merged_facts.get("entries") and not _contains_specific_vuln_signal(source_text_for_quality):
             return _build_backfill_guidance_message()
+
+        summary = str(merged_facts.get("request_summary_ai") or _infer_request_summary_from_source(source_text_for_quality)).strip()
+        detail = _infer_ticket_detail_from_facts(merged_facts)
+        reasoning = _infer_reasoning_from_facts(merged_facts)
+        ok, audit_errors = _audit_ticket_candidate(summary, detail, reasoning)
+        if not ok:
+            logger.warning("Ticket audit failed, fallback to source-derived fixed output: %s", ", ".join(audit_errors))
+            response_text = _build_ticket_text_from_source(source_text_for_quality)
+        else:
+            response_text = _ai_final_review_with_value_lock(summary, detail, reasoning, history_key)
+
+        if manual_backfill_mode and not _is_manual_ticket_output_usable(response_text):
+            response_text = _build_ticket_text_from_source(source_text_for_quality)
         if save_ticket_history:
-            _save_ticket_record_to_history(event, response_text, source="chat_webhook_manual")
-    elif prefer_ticket_format:
-        if not _is_auto_ticket_output_usable(response_text):
-            if is_gmail_post and not _contains_specific_vuln_signal(source_text_for_quality):
-                return _build_low_quality_ticket_message()
-            response_text = _format_ticket_like_response(response_text, source_text_for_quality)
-    elif _looks_like_ticket_template_output(response_text):
-        # どの経路でも、起票テンプレート風の回答は固定フォーマットへ正規化する。
-        source_for_format = source_text_for_quality or _get_cached_thread_root_text(event)
-        response_text = _format_ticket_like_response(response_text, source_for_format)
+            _save_ticket_record_to_history(
+                event,
+                response_text,
+                source="chat_webhook_manual" if manual_backfill_mode else "chat_alert",
+            )
+    else:
+        response_text = _run_agent_query(prompt, history_key)
+        if _looks_like_ticket_template_output(response_text):
+            # どの経路でも、起票テンプレート風の回答は固定フォーマットへ正規化する。
+            source_for_format = source_text_for_quality or _get_cached_thread_root_text(event)
+            response_text = _format_ticket_like_response(response_text, source_for_format)
     _remember_turn(history_key, _clean_chat_text(event), response_text)
     return response_text
 
