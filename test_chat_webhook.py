@@ -583,6 +583,30 @@ class ChatWebhookTests(unittest.TestCase):
         self.assertIn("【CVSSスコア】\n8.8", out)
         self.assertIn("SBOM照合で対象AlmaLinuxバージョンを適用: 8, 9", out)
 
+    def test_build_ticket_text_from_sidfm_mixed_versions_keeps_only_sbom_versions(self):
+        self.chat_webhook._get_sbom_almalinux_versions = lambda: {"8", "9"}
+        source = (
+            "[SIDfm] AWSサーバー_001 (2026/02/12)\n"
+            "No ID    CVSS TITLE\n"
+            "1 62977  9.4 AlmaLinux 10 の keylime にクライアント証明書による認証を迂回される問題\n"
+            "2 62986  8.8 AlmaLinux 9 の fontforge に情報漏洩・情報改竄・サービス妨害など複数の問題\n"
+            "3 62990  8.6 AlmaLinux 10 の libsoup3 に任意のコード実行など複数の問題\n"
+            "4 62989  8.6 AlmaLinux 8 の libsoup に任意のコード実行など複数の問題\n"
+            "https://sid.softek.jp/filter/sinfo/62977\n"
+            "https://sid.softek.jp/filter/sinfo/62986\n"
+            "https://sid.softek.jp/filter/sinfo/62990\n"
+            "https://sid.softek.jp/filter/sinfo/62989\n"
+        )
+        out = self.chat_webhook._build_ticket_text_from_source(source)
+        self.assertIn("AlmaLinux9", out)
+        self.assertIn("AlmaLinux8", out)
+        self.assertNotIn("AlmaLinux10", out)
+        self.assertIn("https://sid.softek.jp/filter/sinfo/62986", out)
+        self.assertIn("https://sid.softek.jp/filter/sinfo/62989", out)
+        self.assertNotIn("https://sid.softek.jp/filter/sinfo/62977", out)
+        self.assertNotIn("https://sid.softek.jp/filter/sinfo/62990", out)
+        self.assertIn("起票対象: 2件", out)
+
     def test_correction_prompt_without_incident_id_returns_guidance(self):
         self.chat_webhook._is_valid_token = lambda event: True
         self.chat_webhook._fetch_thread_root_message_text = lambda event: ""
