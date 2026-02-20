@@ -70,6 +70,14 @@ echo -n "${PROJECT_ID}.vuln_agent.sbom_packages" | gcloud secrets versions add v
 echo -n "${PROJECT_ID}.vuln_agent.owner_mapping" | gcloud secrets versions add vuln-agent-bq-owner-table-id --data-file=-
 ```
 
+### Excel からの SBOM / Owner 同期（運用向け）
+`scripts/sync_sbom_owner_from_excel.py` で以下を一括実行できます。
+- `sbom_packages.release` の正規化（`almalinux8:<arch>`）
+- `owner_mapping` の同期
+- 取り込み後の検証クエリ実行
+
+詳細は `docs/SBOM_OWNER_SYNC.md` を参照してください。
+
 ## BigQuery 権限（重要）
 Agent Engine 実行 ID（`service-<PROJECT_NUMBER>@gcp-sa-aiplatform-re.iam.gserviceaccount.com`）に、少なくとも次を付与してください。
 - `roles/bigquery.jobUser`
@@ -111,6 +119,13 @@ Live Gateway は OIDC 認証を有効化できます（Entra ID 対応）。
 - `OIDC_REDIRECT_URI=https://<live-gateway-domain>/auth/callback`
 - `OIDC_SESSION_SECRET=<32bytes以上のランダム文字列>`
 
+Cloud Build 連携（このリポジトリ既定）:
+- `cloudbuild.yaml` は `OIDC_ENABLED`, `OIDC_TENANT_ID`, `OIDC_CLIENT_ID`, `OIDC_REDIRECT_URI`, `OIDC_SCOPES` を Live Gateway に注入します。
+- `OIDC_CLIENT_SECRET` は Secret Manager `vuln-agent-oidc-client-secret` から注入します。
+- `OIDC_SESSION_SECRET` は Secret Manager `vuln-agent-oidc-session-secret` から注入します。
+- Secret 名を変える場合は `cloudbuild.yaml` の substitutions
+  (`_OIDC_CLIENT_SECRET_SECRET`, `_OIDC_SESSION_SECRET_SECRET`) を変更してください。
+
 任意:
 - `OIDC_SCOPES`（デフォルト: `openid profile email`）
 - `OIDC_ISSUER`（未指定時は tenant から自動生成）
@@ -120,6 +135,7 @@ Live Gateway は OIDC 認証を有効化できます（Entra ID 対応）。
 - `/auth/callback` でログイン完了し、セッションCookieを発行
 - `/`（UI本体）, `/app.js`, `/style.css` は未認証時 `/login` にリダイレクト
 - `/ws` は認証済みセッションがないと接続拒否
+- `OIDC_REDIRECT_URI` は Live Gateway が受けるURIにしてください（`/auth/callback` は live_gateway 側エンドポイントです）。
 
 段階導入:
 - `OIDC_ENABLED=false`（デフォルト）なら従来どおり未認証でもUIにアクセス可能
@@ -204,9 +220,11 @@ gcloud functions logs read vuln-agent-workspace-events-webhook --region=asia-nor
 
 ## 補足ドキュメント
 詳細手順は `docs/` を参照してください。
+- `AGENTS.md`（実装時の運用ルール・AI中心設計の遵守事項）
 - `docs/SETUP_GMAIL.md`
 - `docs/SETUP_CHAT.md`
 - `docs/SETUP_CHAT_INTERACTIVE.md`
 - `docs/SETUP_WORKSPACE_EVENTS.md`
 - `docs/SETUP_A2A.md`
+- `docs/AI_FIRST_DESIGN_PRINCIPLES.md`（AI中心設計の原則）
 - `docs/EXTENSION_SIDEPANEL_BACKLOG.md`（ブラウザ拡張の開発予定）
