@@ -1446,6 +1446,23 @@ def _has_ticket_sections(text: str) -> bool:
     return "【起票用（コピペ）】" in body and "【判断理由】" in body
 
 
+def _looks_like_ticket_template_output(text: str) -> bool:
+    body = (text or "").strip()
+    if not body:
+        return False
+    markers = (
+        "【大分類】",
+        "【小分類】",
+        "【依頼概要】",
+        "【対象の機器/アプリ】",
+        "【脆弱性情報",
+        "【CVSSスコア】",
+        "【依頼内容】",
+        "【対応完了目標】",
+    )
+    return sum(1 for m in markers if m in body) >= 3
+
+
 def _is_manual_ticket_output_usable(text: str) -> bool:
     body = (text or "").strip()
     if not body:
@@ -2002,6 +2019,10 @@ def _process_message_event(event: dict[str, Any], user_name: str) -> str | None:
             if is_gmail_post and not _contains_specific_vuln_signal(source_text_for_quality):
                 return _build_low_quality_ticket_message()
             response_text = _format_ticket_like_response(response_text, source_text_for_quality)
+    elif _looks_like_ticket_template_output(response_text):
+        # どの経路でも、起票テンプレート風の回答は固定フォーマットへ正規化する。
+        source_for_format = source_text_for_quality or _get_cached_thread_root_text(event)
+        response_text = _format_ticket_like_response(response_text, source_for_format)
     _remember_turn(history_key, _clean_chat_text(event), response_text)
     return response_text
 

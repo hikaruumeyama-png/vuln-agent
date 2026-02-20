@@ -555,6 +555,34 @@ class ChatWebhookTests(unittest.TestCase):
         self.assertEqual(json.loads(raw_body)["status"], "ok")
         self.assertEqual(sent, ["FINAL_FROM_TASK"])
 
+    def test_non_preferred_path_still_normalizes_ticket_template_style_output(self):
+        self.chat_webhook._is_valid_token = lambda event: True
+        self.chat_webhook._is_gmail_app_message = lambda event: False
+        self.chat_webhook._run_agent_query = lambda prompt, user_id: (
+            "ご依頼いただいたGmailの内容はSIDfmからの脆弱性通知と判断しました。\n"
+            "【大分類】\n017.脆弱性対応（情シス専用）\n"
+            "【小分類】\n002.IT基盤チーム\n"
+            "【依頼概要】\nAlmaLinuxで検知された複数の脆弱性に関する対応依頼\n"
+            "【対象の機器/アプリ】\nAlmaLinux9\n"
+            "【脆弱性情報（リンク貼り付け）】\nhttps://sid.softek.jp/filter/sinfo/62989\n"
+            "【CVSSスコア】\n8.6\n"
+            "【依頼内容】\n対応願います。\n"
+            "【対応完了目標】\n要確認"
+        )
+        payload = {
+            "type": "MESSAGE",
+            "user": {"name": "users/111"},
+            "message": {
+                "text": "<users/999> CVE-2026-1234 の要点を教えて",
+                "thread": {"name": "spaces/AAA/threads/BBB"},
+            },
+        }
+        raw_body, status, _headers = self.chat_webhook.handle_chat_event(_FakeRequest(payload))
+        self.assertEqual(status, 200)
+        body = json.loads(raw_body)
+        self.assertIn("【起票用（コピペ）】", body["text"])
+        self.assertIn("【判断理由】", body["text"])
+
 
 if __name__ == "__main__":
     unittest.main()
