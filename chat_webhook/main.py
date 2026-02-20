@@ -1630,7 +1630,31 @@ def _extract_source_facts(source_text: str) -> dict[str, Any]:
     entries = _extract_sidfm_entries(text)
     links = re.findall(r"https?://[^\s)>\]]+", text)
     sid_links = [u for u in links if "sid.softek.jp" in u]
-    entry_links = [str(e.get("url") or "").strip() for e in entries if str(e.get("url") or "").strip()]
+    # 同一納期で同一起票とするため、エントリごとに納期を算出してグルーピングする。
+    due_groups: dict[str, list[dict[str, Any]]] = {}
+    for e in entries:
+        entry_score = e.get("cvss")
+        score = float(entry_score) if isinstance(entry_score, (int, float)) else None
+        due_date, due_reason = _infer_due_date_from_policy(text, score)
+        entry = dict(e)
+        entry["due_date"] = due_date
+        entry["due_reason"] = due_reason
+        due_groups.setdefault(due_date, []).append(entry)
+
+    selected_due_date = ""
+    selected_entries: list[dict[str, Any]] = []
+    if due_groups:
+        # 件数優先、同数なら日付昇順で選択。
+        def _due_sort_key(item: tuple[str, list[dict[str, Any]]]) -> tuple[int, str]:
+            due, group = item
+            due_key = due if re.fullmatch(r"\d{4}/\d{2}/\d{2}", due or "") else "9999/12/31"
+            return (-len(group), due_key)
+
+        selected_due_date, selected_entries = sorted(due_groups.items(), key=_due_sort_key)[0]
+    else:
+        selected_entries = []
+
+    entry_links = [str(e.get("url") or "").strip() for e in selected_entries if str(e.get("url") or "").strip()]
     vuln_links = entry_links or sid_links or links
 
     products: list[str] = []
@@ -1653,7 +1677,7 @@ def _extract_source_facts(source_text: str) -> dict[str, Any]:
     products = list(dict.fromkeys(products))
 
     scores: list[float] = []
-    entry_scores = [float(e.get("cvss")) for e in entries if isinstance(e.get("cvss"), (int, float))]
+    entry_scores = [float(e.get("cvss")) for e in selected_entries if isinstance(e.get("cvss"), (int, float))]
     if entry_scores:
         scores.extend(entry_scores)
     else:
@@ -1674,9 +1698,17 @@ def _extract_source_facts(source_text: str) -> dict[str, Any]:
     unique_scores = sorted(set(scores), reverse=True)
     max_score = unique_scores[0] if unique_scores else None
 
-    due_date, due_reason = _infer_due_date_from_policy(text, max_score)
+    if selected_due_date:
+        due_date = selected_due_date
+        first_reason = str((selected_entries[0] or {}).get("due_reason") or "").strip() if selected_entries else ""
+        due_reason = first_reason or "社内方針に基づき算出"
+    else:
+        due_date, due_reason = _infer_due_date_from_policy(text, max_score)
     return {
-        "entries": entries,
+        "entries": selected_entries or entries,
+        "all_entries_count": len(entries),
+        "selected_entries_count": len(selected_entries) if selected_entries else len(entries),
+        "due_group_count": len(due_groups) if due_groups else 1,
         "products": products,
         "vuln_links": vuln_links[:20],
         "scores": unique_scores[:10],
@@ -1712,6 +1744,12 @@ def _infer_ticket_detail_from_source(source_text: str) -> str:
             parts.append(url)
         entry_lines.append(" - " + " / ".join(parts))
     entry_text = "\n".join(entry_lines[:12]) if entry_lines else " - 要確認"
+    split_note = ""
+    if int(facts.get("due_group_count") or 1) > 1:
+        split_note = (
+            "\n\n【備考】\n"
+            "通知内で納期が異なる脆弱性が含まれるため、本起票は同一納期グループでまとめています。"
+        )
 
     return (
         "【対象の機器/アプリ】\n"
@@ -1727,6 +1765,7 @@ def _infer_ticket_detail_from_source(source_text: str) -> str:
         "対応を実施した場合は対象ホスト名（または対象端末）をご共有ください。\n\n"
         "【対応完了目標】\n"
         f"{facts.get('due_date') or '要確認'}"
+        f"{split_note}"
     )
 
 
@@ -1735,6 +1774,7 @@ def _infer_reasoning_from_source(source_text: str) -> str:
     product_text = " / ".join(facts["products"]) if facts["products"] else "要確認"
     links_count = len(facts["vuln_links"])
     entries_count = len(facts.get("entries", []))
+    all_entries_count = int(facts.get("all_entries_count") or entries_count)
     if facts["scores"]:
         scores_text = ", ".join(f"{s:.1f}" for s in facts["scores"])
     else:
@@ -1742,7 +1782,7 @@ def _infer_reasoning_from_source(source_text: str) -> str:
     return (
         "【判断理由】\n"
         f"- 通知本文から対象製品を抽出: {product_text}\n"
-        f"- 通知本文から脆弱性エントリを抽出: {entries_count}件\n"
+        f"- 通知本文から脆弱性エントリを抽出: {all_entries_count}件（起票対象: {entries_count}件）\n"
         f"- 参照URLを抽出: {links_count}件\n"
         f"- CVSSを抽出: {scores_text}\n"
         f"- 対応完了目標を算出: {facts.get('due_date') or '要確認'}（{facts.get('due_reason') or '根拠不足'}）"
