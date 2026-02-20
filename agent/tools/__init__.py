@@ -13,15 +13,6 @@ from typing import Any
 
 _EXPORT_SPECS: list[tuple[str, list[str]]] = [
     (
-        "gmail_tools",
-        [
-            "get_sidfm_emails",
-            "get_unread_emails",
-            "mark_email_as_read",
-            "check_gmail_connection",
-        ],
-    ),
-    (
         "sheets_tools",
         [
             "search_sbom_by_purl",
@@ -74,9 +65,6 @@ _EXPORT_SPECS: list[tuple[str, list[str]]] = [
     (
         "granular_tools",
         [
-            "list_sidfm_email_subjects",
-            "list_unread_email_ids",
-            "get_email_preview_by_id",
             "get_chat_space_info",
             "list_chat_member_emails",
             "build_history_record_preview",

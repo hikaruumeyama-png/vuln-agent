@@ -146,8 +146,6 @@ def main():
     )
     
     # 環境変数
-    parser.add_argument("--gmail-user", help="Gmail user email for domain delegation")
-    parser.add_argument("--sidfm-sender", default="noreply@sidfm.com", help="SIDfm sender email")
     parser.add_argument("--sbom-spreadsheet-id", help="SBOM spreadsheet ID")
     parser.add_argument("--sbom-sheet-name", default="SBOM", help="SBOM sheet name")
     parser.add_argument("--chat-space-id", help="Default Google Chat space ID")
@@ -156,10 +154,6 @@ def main():
     
     # 環境変数を構築
     env_vars = {}
-    if args.gmail_user:
-        env_vars["GMAIL_USER_EMAIL"] = args.gmail_user
-    if args.sidfm_sender:
-        env_vars["SIDFM_SENDER_EMAIL"] = args.sidfm_sender
     if args.sbom_spreadsheet_id:
         env_vars["SBOM_SPREADSHEET_ID"] = args.sbom_spreadsheet_id
     if args.sbom_sheet_name:

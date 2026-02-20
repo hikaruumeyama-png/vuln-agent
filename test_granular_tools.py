@@ -10,17 +10,6 @@ TOOLS_PATH = ROOT / "agent" / "tools" / "granular_tools.py"
 
 
 def _stub_dependency_modules() -> None:
-    gmail_tools = types.ModuleType("gmail_tools")
-    gmail_tools.get_sidfm_emails = lambda max_results=10: {
-        "status": "success",
-        "emails": [{"id": "m1", "subject": "s1"}, {"id": "m2", "subject": "s2"}],
-    }
-    gmail_tools.get_unread_emails = lambda query="is:unread", max_results=10: {
-        "status": "success",
-        "emails": [{"id": "m1", "subject": "s1", "body_preview": "p1"}],
-    }
-    sys.modules["gmail_tools"] = gmail_tools
-
     chat_tools = types.ModuleType("chat_tools")
     chat_tools.check_chat_connection = lambda space_id=None: {
         "status": "connected",
@@ -103,10 +92,6 @@ class GranularToolsTests(unittest.TestCase):
     def setUpClass(cls):
         _stub_dependency_modules()
         cls.mod = _load_module("granular_tools_test_module", TOOLS_PATH)
-
-    def test_list_sidfm_email_subjects(self):
-        result = self.mod.list_sidfm_email_subjects()
-        self.assertEqual(result["count"], 2)
 
     def test_get_chat_space_info(self):
         result = self.mod.get_chat_space_info()

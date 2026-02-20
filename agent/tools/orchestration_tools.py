@@ -26,10 +26,6 @@ except Exception:
 
 
 _TOOL_OPERATIONS: list[dict[str, str]] = [
-    {"tool": "get_sidfm_emails", "domain": "gmail", "operation": "SIDfmメール取得"},
-    {"tool": "get_unread_emails", "domain": "gmail", "operation": "未読メール取得"},
-    {"tool": "mark_email_as_read", "domain": "gmail", "operation": "メール既読化"},
-    {"tool": "check_gmail_connection", "domain": "gmail", "operation": "Gmail接続確認"},
     {"tool": "search_sbom_by_purl", "domain": "sbom", "operation": "PURLでSBOM検索"},
     {"tool": "search_sbom_by_product", "domain": "sbom", "operation": "製品名でSBOM検索"},
     {"tool": "get_affected_systems", "domain": "sbom", "operation": "影響システム特定"},
@@ -61,9 +57,6 @@ _TOOL_OPERATIONS: list[dict[str, str]] = [
     {"tool": "fetch_web_content", "domain": "web", "operation": "Web本文取得"},
     {"tool": "get_nvd_cve_details", "domain": "intel", "operation": "NVD CVE詳細"},
     {"tool": "search_osv_vulnerabilities", "domain": "intel", "operation": "OSV脆弱性検索"},
-    {"tool": "list_sidfm_email_subjects", "domain": "granular", "operation": "SIDfm件名一覧"},
-    {"tool": "list_unread_email_ids", "domain": "granular", "operation": "未読メールID一覧"},
-    {"tool": "get_email_preview_by_id", "domain": "granular", "operation": "メールプレビュー"},
     {"tool": "get_chat_space_info", "domain": "granular", "operation": "Chatスペース情報"},
     {"tool": "list_chat_member_emails", "domain": "granular", "operation": "Chatメンバーメール一覧"},
     {"tool": "build_history_record_preview", "domain": "granular", "operation": "履歴保存プレビュー"},
@@ -92,7 +85,6 @@ _KEYWORD_TOOL_MAP: list[tuple[str, str]] = [
     ("sbom", "search_sbom_by_product"),
     ("purl", "search_sbom_by_purl"),
     ("bigquery", "run_bigquery_readonly_query"),
-    ("gmail", "get_unread_emails"),
     ("chat", "send_simple_message"),
     ("通知", "send_vulnerability_alert"),
     ("担当者", "get_owner_mapping"),
@@ -115,10 +107,6 @@ _COMPLEXITY_HINTS = (
 )
 _MAX_PLAN_STEPS = 10
 _DEFAULT_DOMAIN_BY_PREFIX: list[tuple[str, str]] = [
-    ("get_sidfm_", "gmail"),
-    ("get_unread_", "gmail"),
-    ("mark_email_", "gmail"),
-    ("check_gmail_", "gmail"),
     ("search_sbom_", "sbom"),
     ("get_sbom_", "sbom"),
     ("list_sbom_", "sbom"),

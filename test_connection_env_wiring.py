@@ -8,7 +8,6 @@ import unittest
 
 ROOT = Path(__file__).resolve().parent
 CHAT_TOOLS_PATH = ROOT / "agent" / "tools" / "chat_tools.py"
-GMAIL_TOOLS_PATH = ROOT / "agent" / "tools" / "gmail_tools.py"
 SETUP_CLOUD_PATH = ROOT / "setup_cloud.sh"
 
 
@@ -70,7 +69,6 @@ class ConnectionEnvWiringTests(unittest.TestCase):
         _stub_google_modules()
         _stub_secret_config_module()
         cls.chat_tools = _load_module("chat_tools_test", CHAT_TOOLS_PATH)
-        cls.gmail_tools_source = GMAIL_TOOLS_PATH.read_text(encoding="utf-8")
         cls.setup_cloud_source = SETUP_CLOUD_PATH.read_text(encoding="utf-8")
 
     def setUp(self):
@@ -88,18 +86,11 @@ class ConnectionEnvWiringTests(unittest.TestCase):
         os.environ["GOOGLE_CHAT_SPACE_ID"] = " spaces/CCCC "
         self.assertEqual(self.chat_tools._resolve_space_id(), "spaces/CCCC")
 
-    def test_gmail_tools_supports_workspace_env_alias(self):
-        self.assertIn('["GMAIL_USER_EMAIL", "GOOGLE_WORKSPACE_USER_EMAIL"]', self.gmail_tools_source)
-        self.assertIn('secret_name="vuln-agent-gmail-oauth-token"', self.gmail_tools_source)
-        self.assertIn('secret_name="vuln-agent-gmail-user-email"', self.gmail_tools_source)
-
     def test_chat_tools_uses_chat_secret_fallback(self):
         chat_source = CHAT_TOOLS_PATH.read_text(encoding="utf-8")
         self.assertIn('secret_name="vuln-agent-chat-space-id"', chat_source)
 
-    def test_setup_cloud_has_gmail_user_secret(self):
-        self.assertIn("vuln-agent-gmail-user-email", self.setup_cloud_source)
-        self.assertIn("GMAIL_USER_EMAIL=$(_sm_get vuln-agent-gmail-user-email)", self.setup_cloud_source)
+    def test_setup_cloud_has_chat_related_secrets(self):
         self.assertIn("vuln-agent-chat-webhook", self.setup_cloud_source)
         self.assertIn("vuln-agent-chat-verification-token", self.setup_cloud_source)
 

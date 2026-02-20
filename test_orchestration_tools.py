@@ -34,8 +34,8 @@ class OrchestrationToolsTests(unittest.TestCase):
 
     def test_decide_execution_mode_codegen(self):
         result = self.mod.decide_execution_mode(
-            "未読メールを全件取得してSBOMを横断突合して担当者ごとに集計してから通知して",
-            requested_operations=["get_unread_emails", "search_sbom_by_product", "get_owner_mapping", "send_vulnerability_alert"],
+            "通知本文を全件抽出してSBOMを横断突合して担当者ごとに集計してから通知して",
+            requested_operations=["search_sbom_by_product", "get_owner_mapping", "send_vulnerability_alert", "log_vulnerability_history"],
         )
         self.assertEqual(result["status"], "success")
         self.assertEqual(result["mode"], "codegen_with_tools")

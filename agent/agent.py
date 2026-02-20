@@ -11,10 +11,6 @@ from google.adk import Agent
 from google.adk.tools import FunctionTool
 
 from .tools import (
-    get_sidfm_emails,
-    get_unread_emails,
-    mark_email_as_read,
-    check_gmail_connection,
     search_sbom_by_purl,
     search_sbom_by_product,
     get_affected_systems,
@@ -47,9 +43,6 @@ from .tools import (
     fetch_web_content,
     get_nvd_cve_details,
     search_osv_vulnerabilities,
-    list_sidfm_email_subjects,
-    list_unread_email_ids,
-    get_email_preview_by_id,
     get_chat_space_info,
     list_chat_member_emails,
     build_history_record_preview,
@@ -80,7 +73,7 @@ AGENT_INSTRUCTION = """あなたは脆弱性管理を専門とするセキュリ
 
 ## 主要な責務
 
-1. **脆弱性検知**: SIDfmからの通知メールを監視し、新しい脆弱性を検出
+1. **脆弱性検知**: Chat通知・メンション入力から脆弱性情報を抽出し、新しい脆弱性を検出
 2. **影響分析**: SBOMと照合し、組織内で影響を受けるシステムを特定
 3. **担当者特定**: 担当者マッピングから適切な担当者を特定
 4. **優先度判定**: CVSSスコアと影響範囲から対応優先度を決定
@@ -114,22 +107,21 @@ AGENT_INSTRUCTION = """あなたは脆弱性管理を専門とするセキュリ
 | CVSS 8.0以上 + 内部リソース | 3か月以内 |
 | 上記以外 | 重大度別の標準期限（緊急/高/中/低） |
 
-## 処理フロー（スキャン実行時）
+## 処理フロー（分析実行時）
 
-1. `get_sidfm_emails` で未読のSIDfmメールを取得
+1. Chatの通知本文またはユーザー入力から脆弱性情報を抽出
 2. 各脆弱性について影響を分析
 3. `search_sbom_by_purl` または `search_sbom_by_product` でSBOM検索
    - 検索結果には担当者情報が自動的に付加されます
 4. 影響システムと担当者を特定、優先度を判定
 5. `send_vulnerability_alert` で各担当者に通知
-6. `mark_email_as_read` でメールを既読に
 
 ## 問い合わせ対応
 
 ユーザーや他のエージェントからの問い合わせにも応答します：
 - 「CVE-XXXX-XXXXの影響を教えて」→ SBOM検索して影響と担当者を回答
 - 「システムXの脆弱性状況は？」→ 該当システムの情報を検索
-- 「脆弱性スキャンを実行して」→ SIDfmメールをチェック
+- 「脆弱性スキャンを実行して」→ 通知本文を基に分析を実行
 - 「担当者マッピングを確認して」→ `get_owner_mapping` で現在の設定を表示
 - 「SBOMの内容を教えて」→ `get_sbom_contents` で一覧を提示（未依頼の追加処理はしない）
 - 「起票内容を修正して保存して」→ `save_ticket_review_result` でレビュー結果を履歴保存
@@ -204,7 +196,7 @@ AGENT_INSTRUCTION = """あなたは脆弱性管理を専門とするセキュリ
 
 ## 細粒度優先ポリシー
 
-- Gmail/Chat/履歴/A2A/Capability/Web/Vuln Intel すべてで、まず細粒度ツールを優先利用する
+- Chat/履歴/A2A/Capability/Web/Vuln Intel で、まず細粒度ツールを優先利用する
 - 大きい依頼は細粒度ツールを複数回呼び出して合成し、必要最小の追加呼び出しだけ行う
 - 単一の大きいツール呼び出しで済ませず、説明可能な手順に分解して実行する
 
@@ -222,7 +214,6 @@ AGENT_INSTRUCTION = """あなたは脆弱性管理を専門とするセキュリ
 
 ## 注意事項
 
-- 同じ脆弱性を二重に通知しないよう、メールは処理後に既読にする
 - 担当者が特定できない場合（パターンにマッチしない場合）はデフォルトの担当者に通知
 - 技術的な詳細は正確に、対応方法は具体的に記載
 - 複数の担当者に影響がある場合は、それぞれの担当者に個別に通知
@@ -235,12 +226,6 @@ def create_vulnerability_agent() -> Agent:
     
     # ツールをFunctionToolとしてラップ
     tools = [
-        # Gmail Tools
-        FunctionTool(get_sidfm_emails),
-        FunctionTool(get_unread_emails),
-        FunctionTool(mark_email_as_read),
-        FunctionTool(check_gmail_connection),
-        
         # Sheets Tools (SBOM & 担当者マッピング)
         FunctionTool(search_sbom_by_purl),
         FunctionTool(search_sbom_by_product),
@@ -285,9 +270,6 @@ def create_vulnerability_agent() -> Agent:
         FunctionTool(get_nvd_cve_details),
         FunctionTool(search_osv_vulnerabilities),
         # Granular Tools
-        FunctionTool(list_sidfm_email_subjects),
-        FunctionTool(list_unread_email_ids),
-        FunctionTool(get_email_preview_by_id),
         FunctionTool(get_chat_space_info),
         FunctionTool(list_chat_member_emails),
         FunctionTool(build_history_record_preview),

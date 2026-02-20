@@ -140,7 +140,7 @@ REMOTE_AGENT_MASTER=projects/your-project/locations/us-central1/reasoningEngines
 ユーザー: 「脆弱性スキャンを実行して、緊急度が高い場合はJiraチケットも作成して」
 
 エージェントの処理:
-1. get_sidfm_emails() で未読メール取得
+1. Chat通知本文を受信し脆弱性情報を抽出
 2. search_sbom_by_purl() で影響分析
 3. 優先度が「緊急」または「高」の場合:
    - create_jira_ticket_request() でリクエスト構築

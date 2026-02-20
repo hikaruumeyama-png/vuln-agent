@@ -65,7 +65,6 @@ step "1/8: API を有効化しています..."
 
 APIS=(
   aiplatform.googleapis.com
-  gmail.googleapis.com
   sheets.googleapis.com
   chat.googleapis.com
   workspaceevents.googleapis.com
@@ -185,8 +184,6 @@ echo "  エージェントの動作に必要な設定値を入力してくださ
 echo "  空欄で Enter を押すとその項目はスキップされます。"
 echo ""
 
-create_secret "vuln-agent-sidfm-sender"        "SIDfm 送信元メール"                       "noreply@sidfm.com"
-create_secret "vuln-agent-gmail-user-email"    "Gmail ユーザーEmail（Workspace任意）"
 create_secret "vuln-agent-sbom-data-backend"   "SBOM データソース (sheets/bigquery/auto)"     "sheets"
 create_secret "vuln-agent-sbom-spreadsheet-id" "SBOM スプレッドシート ID"
 create_secret "vuln-agent-sbom-sheet-name"     "SBOM シート名"                             "SBOM"
@@ -352,9 +349,6 @@ _wait_engine_ready() {
 }
 
 cat > agent/.env <<ENVEOF
-GMAIL_OAUTH_TOKEN=$(_sm_get vuln-agent-gmail-oauth-token)
-GMAIL_USER_EMAIL=$(_sm_get vuln-agent-gmail-user-email)
-SIDFM_SENDER_EMAIL=$(_sm_get vuln-agent-sidfm-sender)
 SBOM_DATA_BACKEND=$(_sm_get vuln-agent-sbom-data-backend)
 SBOM_SPREADSHEET_ID=$(_sm_get vuln-agent-sbom-spreadsheet-id)
 SBOM_SHEET_NAME=$(_sm_get vuln-agent-sbom-sheet-name)
