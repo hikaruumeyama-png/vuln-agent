@@ -406,15 +406,21 @@ def _audit_chat_event(
     event: str,
     user: dict[str, Any] | None,
     request_id: str,
+    session_id: str = "",
+    result: str = "success",
     message: str = "",
     response_text: str = "",
 ) -> None:
     user = user or {}
     payload = {
+        "timestamp": int(time.time()),
         "event": event,
+        "action": event,
+        "result": str(result or "unknown"),
         "user_sub": str(user.get("sub", "")),
         "user_email": str(user.get("email", "")),
         "user_name": str(user.get("name", "")),
+        "session_id": str(session_id or ""),
         "request_id": str(request_id or ""),
         "message": str(message or "")[:4000],
         "response_text": str(response_text or "")[:4000],
@@ -1352,11 +1358,25 @@ async def websocket_endpoint(websocket: WebSocket):
             if not transcript:
                 return
             last_response_index = len(transcript_parts)
-            agent_response = await _query_agent(client, transcript, websocket, ws_user_id)
+            try:
+                agent_response = await _query_agent(client, transcript, websocket, ws_user_id)
+            except Exception as exc:
+                _audit_chat_event(
+                    event="voice_response",
+                    user=ws_user,
+                    request_id="",
+                    session_id=ws_conversation_id,
+                    result="error",
+                    response_text=str(exc),
+                )
+                await _safe_send(websocket, {"type": "error", "message": str(exc)})
+                return
             _audit_chat_event(
                 event="voice_request",
                 user=ws_user,
                 request_id=str(agent_response.get("request_id", "")),
+                session_id=ws_conversation_id,
+                result="success",
                 message=transcript,
             )
             await _safe_send(websocket, agent_response)
@@ -1365,6 +1385,8 @@ async def websocket_endpoint(websocket: WebSocket):
                 event="voice_response",
                 user=ws_user,
                 request_id=str(agent_response.get("request_id", "")),
+                session_id=ws_conversation_id,
+                result="success",
                 response_text=response_text,
             )
             if response_text:
@@ -1427,17 +1449,35 @@ async def websocket_endpoint(websocket: WebSocket):
                     )
                     continue
 
-                response = await _query_agent(client, message, websocket, ws_user_id)
+                try:
+                    response = await _query_agent(client, message, websocket, ws_user_id)
+                except Exception as exc:
+                    _audit_chat_event(
+                        event="text_response",
+                        user=ws_user,
+                        request_id="",
+                        session_id=ws_conversation_id,
+                        result="error",
+                        response_text=str(exc),
+                    )
+                    await websocket.send_text(
+                        json.dumps({"type": "error", "message": str(exc)}, ensure_ascii=False)
+                    )
+                    continue
                 _audit_chat_event(
                     event="text_request",
                     user=ws_user,
                     request_id=str(response.get("request_id", "")),
+                    session_id=ws_conversation_id,
+                    result="success",
                     message=message,
                 )
                 _audit_chat_event(
                     event="text_response",
                     user=ws_user,
                     request_id=str(response.get("request_id", "")),
+                    session_id=ws_conversation_id,
+                    result="success",
                     response_text=str(response.get("text", "")),
                 )
                 await websocket.send_text(json.dumps(response, ensure_ascii=False))

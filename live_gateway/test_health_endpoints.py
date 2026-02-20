@@ -111,6 +111,8 @@ class HealthEndpointTests(unittest.TestCase):
     def test_chat_audit_logging_exists(self):
         source = APP_FILE.read_text(encoding="utf-8")
         self.assertIn("def _audit_chat_event", source)
+        self.assertIn('"session_id"', source)
+        self.assertIn('"result"', source)
         self.assertIn('event="text_request"', source)
         self.assertIn('event="text_response"', source)
         self.assertIn('event="voice_request"', source)
