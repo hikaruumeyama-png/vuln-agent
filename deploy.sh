@@ -77,7 +77,6 @@ print_step "Step 2/5: Enabling required APIs..."
 
 apis=(
     "aiplatform.googleapis.com"
-    "gmail.googleapis.com"
     "sheets.googleapis.com"
     "chat.googleapis.com"
 )
@@ -115,10 +114,6 @@ print_step "Step 4/5: Creating environment configuration..."
 # .env ファイルが存在しない場合はテンプレートを作成
 if [ ! -f "agent/.env" ]; then
     cat > agent/.env << EOF
-# Gmail設定
-GMAIL_USER_EMAIL=security-team@your-domain.com
-SIDFM_SENDER_EMAIL=noreply@sidfm.com
-
 # SBOM設定
 SBOM_DATA_BACKEND=sheets
 SBOM_SPREADSHEET_ID=your-spreadsheet-id
@@ -166,7 +161,7 @@ echo ""
 echo "1. Set up Domain-Wide Delegation in Google Workspace Admin Console"
 echo "   - Go to: admin.google.com → Security → API Controls → Domain-wide Delegation"
 echo "   - Add the Vertex AI service agent"
-echo "   - Grant scopes: Gmail, Sheets, Chat"
+echo "   - Grant scopes: Sheets, Chat"
 echo ""
 echo "2. Share SBOM spreadsheet with the service account"
 echo ""

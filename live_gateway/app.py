@@ -57,10 +57,6 @@ _oidc_metadata_cache: dict[str, Any] | None = None
 _oidc_metadata_cache_at = 0.0
 
 TOOL_DISPLAY_MAP: dict[str, dict[str, str]] = {
-    "get_sidfm_emails":         {"label": "SIDfm脆弱性メールを取得中",     "icon": "mail"},
-    "get_unread_emails":        {"label": "未読メールを確認中",           "icon": "mail"},
-    "mark_email_as_read":       {"label": "メールを既読にマーク中",       "icon": "mail-check"},
-    "check_gmail_connection":   {"label": "Gmail接続を確認中",           "icon": "mail"},
     "search_sbom_by_purl":      {"label": "SBOMをパッケージURLで検索中",   "icon": "search"},
     "search_sbom_by_product":   {"label": "SBOMを製品名で検索中",         "icon": "search"},
     "get_sbom_contents":        {"label": "SBOM一覧を取得中",             "icon": "list"},
@@ -82,9 +78,6 @@ TOOL_DISPLAY_MAP: dict[str, dict[str, str]] = {
     "list_registered_agents":   {"label": "登録済エージェントを取得中",    "icon": "link"},
     "create_jira_ticket_request": {"label": "Jiraチケットを作成中",      "icon": "clipboard"},
     "create_approval_request":  {"label": "承認リクエストを作成中",       "icon": "check-circle"},
-    "list_sidfm_email_subjects": {"label": "SIDfm件名一覧を取得中",        "icon": "list"},
-    "list_unread_email_ids":    {"label": "未読メールID一覧を取得中",      "icon": "list"},
-    "get_email_preview_by_id":  {"label": "メールプレビューを取得中",      "icon": "mail-open"},
     "get_chat_space_info":      {"label": "Chatスペース情報を取得中",      "icon": "message-square"},
     "list_chat_member_emails":  {"label": "Chatメンバー一覧を取得中",      "icon": "users"},
     "build_history_record_preview": {"label": "履歴レコードを組立中",      "icon": "clipboard"},
@@ -135,7 +128,6 @@ CLEAR_CONTEXT_KEYWORDS = (
     "sidfm",
     "purl",
     "bigquery",
-    "gmail",
     "chat",
     "jira",
     "脆弱性",

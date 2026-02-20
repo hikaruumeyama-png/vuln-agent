@@ -15,13 +15,11 @@ from google.cloud import bigquery
 
 try:
     from .secret_config import get_config_value
-    from .gmail_tools import check_gmail_connection
     from .chat_tools import check_chat_connection
     from .sheets_tools import get_owner_mapping
     from .a2a_tools import list_registered_agents
 except ImportError:
     from secret_config import get_config_value
-    from gmail_tools import check_gmail_connection
     from chat_tools import check_chat_connection
     from sheets_tools import get_owner_mapping
     from a2a_tools import list_registered_agents
@@ -76,12 +74,6 @@ def get_runtime_capabilities(include_live_checks: bool = True) -> dict[str, Any]
 
     capabilities = {
         "tool_groups": {
-            "gmail": [
-                "check_gmail_connection",
-                "get_sidfm_emails",
-                "get_unread_emails",
-                "mark_email_as_read",
-            ],
             "sbom": [
                 "search_sbom_by_purl",
                 "search_sbom_by_product",
@@ -121,7 +113,6 @@ def get_runtime_capabilities(include_live_checks: bool = True) -> dict[str, Any]
 
     if include_live_checks:
         capabilities["live_checks"] = {
-            "gmail": _run_safe_check(check_gmail_connection),
             "chat": _run_safe_check(check_chat_connection),
             "owner_mapping": _run_safe_check(get_owner_mapping),
             "a2a_registry": _run_safe_check(list_registered_agents),

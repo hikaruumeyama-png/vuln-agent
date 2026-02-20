@@ -1,14 +1,13 @@
 # 脆弱性管理AIエージェント
 
-SIDfm の脆弱性通知メールを取り込み、SBOM と突合して担当者へ Google Chat 通知する Vertex AI Agent Engine 向けエージェントです。
+SIDfm 通知本文（Chat投稿/コピペ）を取り込み、SBOM と突合して担当者へ Google Chat 通知する Vertex AI Agent Engine 向けエージェントです。
 
 ## 何ができるか
-- Gmail から SIDfm 通知メール取得
 - SBOM（BigQuery または Sheets）で影響システム検索
 - 担当者マッピングで通知先特定
 - Google Chat へカード通知
 - Google Chat メンション対話（Chatアプリ経由）
-- Google Chat の Gmail 投稿メッセージを自動解析して同一スレッド返信
+- Google Chat 投稿メッセージを自動解析して同一スレッド返信
 - BigQuery へ対応履歴保存
 
 ## 構成
@@ -25,7 +24,6 @@ SIDfm の脆弱性通知メールを取り込み、SBOM と突合して担当者
 前提:
 - GCP プロジェクト（課金有効）
 - `gcloud` 利用可能
-- Gmail OAuth 用 `credentials.json`
 
 ### 1. リポジトリ取得
 ```bash
@@ -34,21 +32,7 @@ git clone https://github.com/YOUR_ORG/vuln-agent.git
 cd vuln-agent
 ```
 
-### 2. Gmail OAuth トークン作成
-```bash
-pip install -q google-auth-oauthlib google-api-python-client
-python setup_gmail_oauth.py
-```
-
-### 3. Gmail トークンを Secret Manager に保存
-```bash
-OAUTH_TOKEN=$(grep '^GMAIL_OAUTH_TOKEN=' agent/.env | cut -d'=' -f2-)
-echo -n "$OAUTH_TOKEN" | gcloud secrets create vuln-agent-gmail-oauth-token \
-  --data-file=- --replication-policy=automatic 2>/dev/null \
-  || echo -n "$OAUTH_TOKEN" | gcloud secrets versions add vuln-agent-gmail-oauth-token --data-file=-
-```
-
-### 4. 初期セットアップ実行
+### 2. 初期セットアップ実行
 ```bash
 bash setup_cloud.sh
 ```
@@ -96,7 +80,6 @@ gcloud projects add-iam-policy-binding YOUR_PROJECT_ID \
 
 ## 動作確認
 ```bash
-bash test_agent.sh "Gmailへの接続を確認して"
 bash test_agent.sh "Chatへの接続を確認して"
 bash test_agent.sh "SBOMでlog4jを検索して結果を教えて"
 ```
@@ -173,7 +156,6 @@ gcloud functions logs read vuln-agent-workspace-events-webhook --region=asia-nor
 ```
 
 ## ツール一覧（Agent）
-- Gmail: `get_sidfm_emails`, `get_unread_emails`, `mark_email_as_read`, `check_gmail_connection`
 - SBOM/担当者: `search_sbom_by_purl`, `search_sbom_by_product`, `get_affected_systems`, `get_owner_mapping`
 - SBOM一覧: `get_sbom_contents`（SBOM内容の先頭N件を返す）
 - SBOM細粒度:
@@ -191,7 +173,6 @@ gcloud functions logs read vuln-agent-workspace-events-webhook --region=asia-nor
 - Web参照: `web_search`, `fetch_web_content`
 - 脆弱性インテリジェンス: `get_nvd_cve_details`, `search_osv_vulnerabilities`
 - 細粒度ツール（横断）:
-  - Gmail: `list_sidfm_email_subjects`, `list_unread_email_ids`, `get_email_preview_by_id`
   - Chat: `get_chat_space_info`, `list_chat_member_emails`
   - 履歴/A2A: `build_history_record_preview`, `list_registered_agent_ids`, `get_registered_agent_details`, `save_vulnerability_history_minimal`
   - Capability/Web/Intel: `get_configured_bigquery_tables`, `check_bigquery_readability_summary`, `list_web_search_urls`, `get_web_content_excerpt`, `get_nvd_cvss_summary`, `list_osv_vulnerability_ids`
@@ -213,15 +194,12 @@ gcloud functions logs read vuln-agent-workspace-events-webhook --region=asia-nor
 - `SBOMデータが見つかりません`
   - `vuln-agent-sbom-data-backend` と `vuln-agent-bq-*-table-id` を確認
   - Agent Engine 実行 ID に BigQuery 権限（`jobUser`, `dataViewer`）があるか確認
-- Gmail 接続失敗
-  - `vuln-agent-gmail-oauth-token` の最新値を確認し、必要なら再発行
 - Chat 接続失敗
   - `vuln-agent-chat-space-id` と Chat アプリのスペース参加状態を確認
 
 ## 補足ドキュメント
 詳細手順は `docs/` を参照してください。
 - `AGENTS.md`（実装時の運用ルール・AI中心設計の遵守事項）
-- `docs/SETUP_GMAIL.md`
 - `docs/SETUP_CHAT.md`
 - `docs/SETUP_CHAT_INTERACTIVE.md`
 - `docs/SETUP_WORKSPACE_EVENTS.md`

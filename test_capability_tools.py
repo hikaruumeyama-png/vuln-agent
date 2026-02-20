@@ -84,10 +84,6 @@ def _stub_modules():
     secret_config.get_config_value = get_config_value
     sys.modules["secret_config"] = secret_config
 
-    gmail_tools = types.ModuleType("gmail_tools")
-    gmail_tools.check_gmail_connection = lambda: {"status": "connected"}
-    sys.modules["gmail_tools"] = gmail_tools
-
     chat_tools = types.ModuleType("chat_tools")
     chat_tools.check_chat_connection = lambda: {"status": "connected"}
     sys.modules["chat_tools"] = chat_tools

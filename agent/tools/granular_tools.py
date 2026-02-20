@@ -10,7 +10,6 @@ from __future__ import annotations
 from typing import Any
 
 try:
-    from .gmail_tools import get_sidfm_emails, get_unread_emails
     from .chat_tools import check_chat_connection, list_space_members
     from .history_tools import log_vulnerability_history
     from .a2a_tools import list_registered_agents
@@ -18,62 +17,12 @@ try:
     from .web_tools import web_search, fetch_web_content
     from .vuln_intel_tools import get_nvd_cve_details, search_osv_vulnerabilities
 except ImportError:
-    from gmail_tools import get_sidfm_emails, get_unread_emails
     from chat_tools import check_chat_connection, list_space_members
     from history_tools import log_vulnerability_history
     from a2a_tools import list_registered_agents
     from capability_tools import get_runtime_capabilities, inspect_bigquery_capabilities
     from web_tools import web_search, fetch_web_content
     from vuln_intel_tools import get_nvd_cve_details, search_osv_vulnerabilities
-
-
-def list_sidfm_email_subjects(max_results: int = 10) -> dict[str, Any]:
-    """SIDfmメールの件名一覧のみ返す。"""
-    result = get_sidfm_emails(max_results=max_results)
-    emails = result.get("emails") or []
-    subjects = [{"id": e.get("id"), "subject": e.get("subject", "")} for e in emails]
-    return {
-        "status": result.get("status", "success"),
-        "count": len(subjects),
-        "subjects": subjects,
-    }
-
-
-def list_unread_email_ids(query: str = "is:unread", max_results: int = 20) -> dict[str, Any]:
-    """未読メールID一覧のみ返す。"""
-    result = get_unread_emails(query=query, max_results=max_results)
-    emails = result.get("emails") or []
-    ids = [e.get("id") for e in emails if e.get("id")]
-    return {"status": result.get("status", "success"), "count": len(ids), "email_ids": ids}
-
-
-def get_email_preview_by_id(email_id: str, max_results: int = 100) -> dict[str, Any]:
-    """
-    指定メールIDのプレビューを返す。
-    Gmailクエリ制約を避けるため、未読一覧からID一致を抽出する。
-    """
-    target = (email_id or "").strip()
-    if not target:
-        return {"status": "error", "message": "email_id は必須です。"}
-    result = get_unread_emails(query="is:unread", max_results=max_results)
-    emails = result.get("emails") or []
-    for email in emails:
-        if (email.get("id") or "").strip() == target:
-            return {
-                "status": "success",
-                "email": {
-                    "id": email.get("id"),
-                    "subject": email.get("subject", ""),
-                    "from": email.get("from", ""),
-                    "date": email.get("date", ""),
-                    "body_preview": email.get("body_preview", ""),
-                },
-            }
-    return {
-        "status": "not_found",
-        "message": "指定メールIDは未読一覧に見つかりませんでした。",
-        "email_id": target,
-    }
 
 
 def get_chat_space_info(space_id: str | None = None) -> dict[str, Any]:
