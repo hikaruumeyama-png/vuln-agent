@@ -415,7 +415,6 @@ steps:
         gsutil mb -p ${PROJECT_ID} -l ${_REGION} $$BUCKET 2>/dev/null || true
         gsutil web set -m index.html -e index.html $$BUCKET
         gsutil -m rsync -r -d web $$BUCKET
-        gsutil iam ch allUsers:objectViewer $$BUCKET
     waitFor:
       - "-"
 
