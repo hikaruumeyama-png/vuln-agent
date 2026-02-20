@@ -9,6 +9,13 @@ substitutions:
   _ADK_BUILDER_IMAGE: gcr.io/google.com/cloudsdktool/cloud-sdk
   _FORCE_FULL_DEPLOY: "false"
   _CHANGED_FILES: ""
+  _OIDC_ENABLED: "true"
+  _OIDC_TENANT_ID: "ec63baa5-2623-40d2-9ef2-58afd2fb0b86"
+  _OIDC_CLIENT_ID: "44373ff2-e89e-4b9d-a9d8-ad0d9972ade8"
+  _OIDC_REDIRECT_URI: ""
+  _OIDC_SCOPES: "openid profile email"
+  _OIDC_CLIENT_SECRET_SECRET: "vuln-agent-oidc-client-secret"
+  _OIDC_SESSION_SECRET_SECRET: "vuln-agent-oidc-session-secret"
 
 steps:
   - name: "gcr.io/google.com/cloudsdktool/cloud-sdk"
@@ -290,6 +297,17 @@ steps:
           echo "警告: vuln-agent-gemini-api-key が存在しないためスキップ"
           exit 0
         fi
+        oidc_enabled="$(printf '%s' "${_OIDC_ENABLED}" | tr '[:upper:]' '[:lower:]')"
+        if [ "$$oidc_enabled" = "true" ] || [ "$$oidc_enabled" = "1" ] || [ "$$oidc_enabled" = "yes" ] || [ "$$oidc_enabled" = "on" ]; then
+          if ! gcloud secrets describe "${_OIDC_CLIENT_SECRET_SECRET}" >/dev/null 2>&1; then
+            echo "エラー: OIDC client secret 用 Secret が存在しません: ${_OIDC_CLIENT_SECRET_SECRET}"
+            exit 1
+          fi
+          if ! gcloud secrets describe "${_OIDC_SESSION_SECRET_SECRET}" >/dev/null 2>&1; then
+            echo "エラー: OIDC session secret 用 Secret が存在しません: ${_OIDC_SESSION_SECRET_SECRET}"
+            exit 1
+          fi
+        fi
         mkdir -p live_gateway/ui
         cp web/index.html live_gateway/ui/index.html
         cp web/app.js live_gateway/ui/app.js
@@ -298,8 +316,8 @@ steps:
         gcloud run deploy vuln-agent-live-gateway \
           --source=live_gateway \
           --region=${_REGION} \
-          --set-env-vars="GCP_PROJECT_ID=${PROJECT_ID},GCP_LOCATION=${_REGION}" \
-          --update-secrets="AGENT_RESOURCE_NAME=vuln-agent-resource-name:latest,AGENT_RESOURCE_NAME_FLASH=vuln-agent-resource-name-flash:latest,AGENT_RESOURCE_NAME_PRO=vuln-agent-resource-name-pro:latest,GEMINI_API_KEY=vuln-agent-gemini-api-key:latest" \
+          --set-env-vars="GCP_PROJECT_ID=${PROJECT_ID},GCP_LOCATION=${_REGION},OIDC_ENABLED=${_OIDC_ENABLED},OIDC_TENANT_ID=${_OIDC_TENANT_ID},OIDC_CLIENT_ID=${_OIDC_CLIENT_ID},OIDC_REDIRECT_URI=${_OIDC_REDIRECT_URI},OIDC_SCOPES=${_OIDC_SCOPES}" \
+          --update-secrets="AGENT_RESOURCE_NAME=vuln-agent-resource-name:latest,AGENT_RESOURCE_NAME_FLASH=vuln-agent-resource-name-flash:latest,AGENT_RESOURCE_NAME_PRO=vuln-agent-resource-name-pro:latest,GEMINI_API_KEY=vuln-agent-gemini-api-key:latest,OIDC_CLIENT_SECRET=${_OIDC_CLIENT_SECRET_SECRET}:latest,OIDC_SESSION_SECRET=${_OIDC_SESSION_SECRET_SECRET}:latest" \
           --service-account=vuln-agent-sa@${PROJECT_ID}.iam.gserviceaccount.com \
           --allow-unauthenticated \
           --memory=512Mi \
