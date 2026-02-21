@@ -120,9 +120,9 @@ _CORRECTION_TRIGGER_WORDS = (
     "にして",
 )
 try:
-    _HYPOTHESIS_RETRY_LIMIT = int((os.environ.get("HYPOTHESIS_RETRY_LIMIT") or "0").strip())
+    _HYPOTHESIS_RETRY_LIMIT = int((os.environ.get("HYPOTHESIS_RETRY_LIMIT") or "2").strip())
 except Exception:
-    _HYPOTHESIS_RETRY_LIMIT = 0
+    _HYPOTHESIS_RETRY_LIMIT = 2
 if _HYPOTHESIS_RETRY_LIMIT < 0:
     _HYPOTHESIS_RETRY_LIMIT = 0
 _TOOL_CALL_LIMIT = 3
@@ -333,7 +333,7 @@ def _looks_like_gmail_digest(text: str) -> bool:
         signals += 1
     if "to view the full email" in t or "google groups" in t:
         signals += 1
-    if re.search(r"\bcve-\d{4}-\d{4,7}\b", t):
+    if re.search(r"\bcve-\d{4}-\d{4,9}\b", t):
         signals += 1
     if "gmail" in t and "new email" in t:
         signals += 2
@@ -367,6 +367,8 @@ def _is_ambiguous_prompt(prompt: str) -> bool:
     normalized = re.sub(r"\s+", " ", (prompt or "").strip()).lower()
     if not normalized:
         return True
+    if _contains_specific_vuln_signal(normalized):
+        return False
     if normalized in _AMBIGUOUS_PROMPT_EXACT:
         return True
     if re.fullmatch(r"[?？!！。,.、\s]+", normalized):
@@ -401,6 +403,8 @@ def _contains_vulnerability_signal(text: str) -> bool:
         return False
     if "cve-" in t or "cvss" in t:
         return True
+    if re.search(r"\bghsa-[0-9a-z]{4}-[0-9a-z]{4}-[0-9a-z]{4}\b", t):
+        return True
     if "sid.softek.jp" in t or "nvd.nist.gov" in t:
         return True
     if "脆弱性" in text or "対象の機器/アプリ" in text:
@@ -412,7 +416,9 @@ def _contains_specific_vuln_signal(text: str) -> bool:
     t = (text or "").lower()
     if not t:
         return False
-    if re.search(r"\bcve-\d{4}-\d{4,7}\b", t):
+    if re.search(r"\bcve-\d{4}-\d{4,9}\b", t):
+        return True
+    if re.search(r"\bghsa-[0-9a-z]{4}-[0-9a-z]{4}-[0-9a-z]{4}\b", t):
         return True
     if "cvss" in t:
         return True
@@ -429,6 +435,9 @@ def _contains_specific_vuln_signal(text: str) -> bool:
         "redhat.com",
         "ubuntu.com",
         "debian.org",
+        "github.com/advisories",
+        "osv.dev",
+        "nvd.nist.gov",
     )
     if any(domain in t for domain in vuln_domains):
         return True
@@ -503,7 +512,7 @@ def _build_ticket_hypothesis_prompt(raw_text: str, user_instruction: str = "") -
         '      "cvss": number,\n'
         '      "title": "string",\n'
         '      "url": "string",\n'
-        '      "os_version": "string",\n'
+        '      "os_version": "string (optional)",\n'
         '      "package": "string",\n'
         '      "confidence": number,\n'
         '      "evidence": "string"\n'
@@ -512,6 +521,8 @@ def _build_ticket_hypothesis_prompt(raw_text: str, user_instruction: str = "") -
         '  "grouping_plan": "single|split",\n'
         '  "assumptions": ["string", ...]\n'
         "}\n"
+        "os_version はオプションです。特定OS/バージョン依存の脆弱性のみ記載してください。\n"
+        "OS非依存（Webライブラリ等）の場合は `要確認` または省略可能です。\n"
         "不明値は空文字ではなく `要確認` を使ってください。\n\n"
         f"{raw_text}{instruction_block}"
     )
@@ -681,7 +692,7 @@ def _validate_ticket_hypothesis_schema(hypothesis: dict[str, Any]) -> tuple[bool
             if not isinstance(e, dict):
                 errs.append(f"entries[{idx}] not object")
                 continue
-            for k in ("id", "cvss", "title", "url", "os_version", "package", "confidence", "evidence"):
+            for k in ("id", "cvss", "title", "url", "package", "confidence", "evidence"):
                 if k not in e:
                     errs.append(f"entries[{idx}] missing:{k}")
     return (len(errs) == 0), errs
@@ -689,21 +700,22 @@ def _validate_ticket_hypothesis_schema(hypothesis: dict[str, Any]) -> tuple[bool
 
 def _run_hypothesis_pipeline(source_text: str, history_key: str, user_instruction: str = "") -> dict[str, Any]:
     attempts = max(1, _HYPOTHESIS_RETRY_LIMIT + 1)
-    prompt = _build_ticket_hypothesis_prompt(source_text, user_instruction=user_instruction)
     last_errs: list[str] = []
-    for _ in range(attempts):
+    for attempt_num in range(attempts):
+        prompt = _build_ticket_hypothesis_prompt(source_text, user_instruction=user_instruction)
+        if attempt_num > 0 and last_errs:
+            prompt = (
+                prompt
+                + "\n\n【前回の検証エラー】前回の出力が以下の理由で不正でした。修正して再出力してください。\n"
+                + "\n".join(f"- {e}" for e in last_errs[:10])
+                + "\n\nJSONのみ出力。説明文・マークダウン禁止。"
+            )
         raw = _run_agent_query(prompt, history_key)
         parsed = _parse_ticket_hypothesis_json(raw)
         ok, errs = _validate_ticket_hypothesis_schema(parsed)
         if ok:
             return parsed
         last_errs = errs
-        prompt = (
-            _build_ticket_hypothesis_prompt(source_text, user_instruction=user_instruction)
-            + "\n\n前回の不備:\n- "
-            + "\n- ".join(errs[:12])
-            + "\n上記を修正し、JSONのみ再出力してください。"
-        )
     logger.warning("Hypothesis schema validation failed after retries: %s", ", ".join(last_errs))
     return {}
 
@@ -944,7 +956,7 @@ def _estimate_prompt_complexity(prompt: str) -> dict[str, Any]:
         score += 1
         reasons.append("multi_line_request")
 
-    cve_count = len(re.findall(r"\bcve-\d{4}-\d{4,7}\b", normalized))
+    cve_count = len(re.findall(r"\bcve-\d{4}-\d{4,9}\b", normalized))
     if cve_count >= 2:
         score += 2
         reasons.append("multiple_cves")
@@ -1174,6 +1186,71 @@ def _run_agent_query(prompt: str, user_id: str) -> str:
     return _trim_response_text(result)
 
 
+# ---------------------------------------------------------------------------
+# Reflection loop – general_analysis 回答の品質検証 & リトライ
+# ---------------------------------------------------------------------------
+_REQUIRED_OUTPUT_SECTIONS = ("結論", "根拠", "不確実性", "次アクション")
+_VULN_KEYWORDS = ("cve", "脆弱性", "cvss", "vulnerability", "脆弱", "パッチ")
+_REFLECTION_ENABLED_KEY = "REFLECTION_ENABLED"
+_REFLECTION_RETRY_LIMIT = 1
+
+
+def _validate_agent_response(response_text: str, original_prompt: str) -> list[str]:
+    """エージェント回答の品質を検証する。問題のリストを返す（空=合格）。"""
+    issues: list[str] = []
+    is_vuln_response = any(kw in original_prompt.lower() for kw in _VULN_KEYWORDS)
+
+    if not is_vuln_response or len(response_text) < 100:
+        return issues  # 脆弱性以外 or 短すぎる回答は検証スキップ
+
+    # 必須セクション検査（1 件欠損までは許容）
+    missing = [s for s in _REQUIRED_OUTPUT_SECTIONS if s not in response_text]
+    if len(missing) >= 2:
+        issues.append(f"必須セクション不足: {', '.join(missing)}")
+
+    # 根拠セクションのデータソース記載チェック
+    if "根拠" in response_text and "確認中" not in response_text:
+        evidence_keywords = ("NVD", "SBOM", "BigQuery", "OSV", "search_sbom", "get_nvd", "web_search")
+        parts = response_text.split("根拠")
+        evidence_part = parts[1][:500] if len(parts) > 1 else ""
+        if not any(kw in evidence_part for kw in evidence_keywords):
+            issues.append("根拠セクションにデータソース記載なし")
+
+    return issues
+
+
+def _run_agent_query_with_reflection(prompt: str, user_id: str) -> str:
+    """エージェントクエリを実行し、品質不足時にリトライする。"""
+    response = _run_agent_query(prompt, user_id)
+
+    # 環境変数で無効化可能（デフォルト有効）
+    if os.environ.get(_REFLECTION_ENABLED_KEY, "true").lower() != "true":
+        return response
+
+    issues = _validate_agent_response(response, prompt)
+    if not issues:
+        return response
+
+    logger.info("Reflection: issues found: %s, retrying", issues)
+
+    reflection_prompt = (
+        "前回の回答に以下の品質問題があります。修正して再回答してください。\n"
+        + "\n".join(f"- {issue}" for issue in issues)
+        + f"\n\n元の質問:\n{prompt}\n\n"
+        "修正ルール:\n"
+        "- 必須4セクション（結論/根拠/不確実性/次アクション）を必ず含める\n"
+        "- 根拠にはツール名・データソースを明記する\n"
+        "- 不確実性には最低1つの前提条件を記載する"
+    )
+
+    corrected = _run_agent_query(reflection_prompt, user_id)
+    corrected_issues = _validate_agent_response(corrected, prompt)
+
+    if len(corrected_issues) < len(issues):
+        return corrected
+    return response  # フォールバック: 元の回答を返す
+
+
 def _thread_payload(event: dict[str, Any], text: str) -> dict[str, Any]:
     message = event.get("message") or {}
     thread_name = ((message.get("thread") or {}).get("name") or "").strip()
@@ -1184,7 +1261,7 @@ def _thread_payload(event: dict[str, Any], text: str) -> dict[str, Any]:
 
 
 def _is_async_response_enabled() -> bool:
-    return (os.environ.get("CHAT_ASYNC_RESPONSE_ENABLED", "false") or "false").strip().lower() in {
+    return (os.environ.get("CHAT_ASYNC_RESPONSE_ENABLED", "true") or "true").strip().lower() in {
         "1",
         "true",
         "yes",
@@ -2621,7 +2698,7 @@ def _process_message_event(event: dict[str, Any], user_name: str) -> str | None:
                 source="chat_webhook_manual" if manual_backfill_mode else "chat_alert",
             )
     else:
-        response_text = _run_agent_query(prompt, history_key)
+        response_text = _run_agent_query_with_reflection(prompt, history_key)
         if _looks_like_ticket_template_output(response_text):
             # どの経路でも、起票テンプレート風の回答は固定フォーマットへ正規化する。
             source_for_format = source_text_for_quality or _get_cached_thread_root_text(event)

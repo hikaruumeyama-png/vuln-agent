@@ -36,7 +36,7 @@ _EXPORT_SPECS: list[tuple[str, list[str]]] = [
             "list_space_members",
         ],
     ),
-    ("history_tools", ["log_vulnerability_history"]),
+    ("history_tools", ["log_vulnerability_history", "recall_vulnerability_history"]),
     (
         "a2a_tools",
         [

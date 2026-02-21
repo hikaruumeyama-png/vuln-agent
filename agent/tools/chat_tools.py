@@ -46,6 +46,27 @@ PUBLIC_RESOURCE_ALIASES = (
     "zeem",
 )
 
+_JP_HOLIDAY_FALLBACK = {
+    date(2026, 1, 1),
+    date(2026, 1, 12),
+    date(2026, 2, 11),
+    date(2026, 2, 23),
+    date(2026, 3, 20),
+    date(2026, 4, 29),
+    date(2026, 5, 3),
+    date(2026, 5, 4),
+    date(2026, 5, 5),
+    date(2026, 5, 6),
+    date(2026, 7, 20),
+    date(2026, 8, 11),
+    date(2026, 9, 21),
+    date(2026, 9, 22),
+    date(2026, 9, 23),
+    date(2026, 10, 12),
+    date(2026, 11, 3),
+    date(2026, 11, 23),
+}
+
 DEADLINE_RULES = (
     {
         "id": "R1",
@@ -271,7 +292,7 @@ def send_vulnerability_alert(
     owners: list[str] | None = None,
     space_id: str | None = None,
     record_history: bool = True,
-    resource_type: str = "public",
+    resource_type: str = "internal",
     exploit_confirmed: bool = False,
     exploit_code_public: bool = False,
     vulnerability_links: dict[str, str] | list[dict[str, str]] | None = None,
@@ -292,7 +313,7 @@ def send_vulnerability_alert(
         owners: 担当者メールアドレス（オプション）
         space_id: 送信先スペースID（省略時はデフォルト）
         record_history: 履歴を記録するか（デフォルト: True）
-        resource_type: 公開リソース/内部リソース（default: public）
+        resource_type: 公開リソース/内部リソース（default: internal）
         exploit_confirmed: 悪用実績ありか
         exploit_code_public: エクスプロイトコード公開済みか
         vulnerability_links: 脆弱性情報リンク（機器/アプリ名→URL）
@@ -527,7 +548,7 @@ def _build_card(
 def _calculate_deadline(
     severity: str,
     cvss_score: float | None = None,
-    resource_type: str = "public",
+    resource_type: str = "internal",
     exploit_confirmed: bool = False,
     exploit_code_public: bool = False,
     source_name: str = "",
@@ -557,7 +578,7 @@ def _calculate_deadline(
 def _evaluate_deadline_policy(
     severity: str,
     cvss_score: float | None = None,
-    resource_type: str = "public",
+    resource_type: str = "internal",
     exploit_confirmed: bool = False,
     exploit_code_public: bool = False,
     source_name: str = "",
@@ -628,7 +649,7 @@ def _normalize_resource_type(resource_type: str, source_name: str = "") -> dict[
             if alias in normalized_source:
                 return {"type": "public", "matched_by": "source_name_allowlist"}
 
-    return {"type": "public", "matched_by": "default_public"}
+    return {"type": "internal", "matched_by": "default_conservative"}
 
 
 def _matches_deadline_rule(
@@ -669,9 +690,22 @@ def _add_business_days(start_date: date, business_days: int) -> date:
     remaining = max(0, int(business_days))
     while remaining > 0:
         current += timedelta(days=1)
-        if current.weekday() < 5:
+        if _is_business_day(current):
             remaining -= 1
     return current
+
+
+def _is_business_day(check_date: date) -> bool:
+    if check_date.weekday() >= 5:
+        return False
+    try:
+        import jpholiday
+
+        if jpholiday.is_holiday(check_date):
+            return False
+        return True
+    except Exception:
+        return check_date not in _JP_HOLIDAY_FALLBACK
 
 
 def _add_months(start_date: date, months: int) -> date:
