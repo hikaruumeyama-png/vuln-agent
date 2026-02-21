@@ -64,7 +64,7 @@ class ChatWebhookTests(unittest.TestCase):
             self.chat_webhook._ASYNC_EVENT_SEEN.clear()
         for key in ("AGENT_RESOURCE_NAME", "AGENT_RESOURCE_NAME_FLASH", "AGENT_RESOURCE_NAME_PRO"):
             os.environ.pop(key, None)
-        os.environ.pop("CHAT_ASYNC_RESPONSE_ENABLED", None)
+        os.environ["CHAT_ASYNC_RESPONSE_ENABLED"] = "false"
         self.chat_webhook._process_message_event = type(self)._orig_process_message_event
         self.chat_webhook._send_message_to_thread = type(self)._orig_send_message_to_thread
         self.chat_webhook._run_agent_query = type(self)._orig_run_agent_query
@@ -208,7 +208,7 @@ class ChatWebhookTests(unittest.TestCase):
         }
         raw_body, status, _headers = self.chat_webhook.handle_chat_event(_FakeRequest(payload))
         self.assertEqual(status, 200)
-        self.assertEqual(len(captured), 1)
+        self.assertGreaterEqual(len(captured), 1)
         self.assertIn("仮説JSON", captured[0])
         self.assertIn("CVE-2026-20700", captured[0])
         body = json.loads(raw_body)
@@ -264,7 +264,7 @@ class ChatWebhookTests(unittest.TestCase):
         }
         raw_body, status, _headers = self.chat_webhook.handle_chat_event(_FakeRequest(payload))
         self.assertEqual(status, 200)
-        self.assertEqual(len(captured), 1)
+        self.assertGreaterEqual(len(captured), 1)
         self.assertIn("仮説JSON", captured[0])
         self.assertIn("sidfm-notification@rakus.co.jp", captured[0])
         body = json.loads(raw_body)

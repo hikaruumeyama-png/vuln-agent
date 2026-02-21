@@ -96,7 +96,11 @@ def log_vulnerability_history(
     project = (os.environ.get("GCP_PROJECT_ID") or "").strip() or None
     try:
         client = bigquery.Client(project=project)
-        errors = client.insert_rows_json(table_id, [row])
+        errors = client.insert_rows_json(
+            table_id,
+            [row],
+            row_ids=[incident_id],
+        )
         if errors:
             return {
                 "status": "error",
@@ -112,6 +116,93 @@ def log_vulnerability_history(
         }
 
     return {"status": "saved", "incident_id": incident_id, "table_id": table_id}
+
+
+def recall_vulnerability_history(
+    cve_id: str = "",
+    owner_email: str = "",
+    severity: str = "",
+    days_back: int = 90,
+    limit: int = 10,
+) -> dict[str, Any]:
+    """過去の脆弱性対応履歴をBigQueryから検索します。
+
+    Args:
+        cve_id: CVE番号で絞り込み（部分一致）。空文字の場合は全件対象。
+        owner_email: 担当者メールで絞り込み（部分一致）。
+        severity: 重大度で絞り込み（完全一致: 緊急/高/中/低）。
+        days_back: 過去何日分を検索するか（デフォルト90日）。
+        limit: 最大取得件数（デフォルト10件）。
+
+    Returns:
+        dict: {"status": "success", "total_count": int, "records": [...]} or error
+
+    Example:
+        recall_vulnerability_history(cve_id="CVE-2024") → 直近90日のCVE-2024*の履歴
+    """
+    table_id = (os.environ.get("BQ_HISTORY_TABLE_ID") or "").strip()
+    if not table_id:
+        return {
+            "status": "skipped",
+            "message": "BQ_HISTORY_TABLE_ID is not set.",
+        }
+
+    # サニタイズ
+    cve_id = (cve_id or "").strip()
+    owner_email = (owner_email or "").strip()
+    severity = (severity or "").strip()
+    days_back = max(1, min(int(days_back), 3650))
+    limit = max(1, min(int(limit), 500))
+
+    conditions: list[str] = [
+        f"occurred_at >= TIMESTAMP_SUB(CURRENT_TIMESTAMP(), INTERVAL {days_back} DAY)",
+    ]
+    query_params: list[bigquery.ScalarQueryParameter] = []
+
+    if cve_id:
+        conditions.append("CONTAINS_SUBSTR(vulnerability_id, @cve_id)")
+        query_params.append(
+            bigquery.ScalarQueryParameter("cve_id", "STRING", cve_id)
+        )
+    if owner_email:
+        conditions.append("CONTAINS_SUBSTR(owners, @owner_email)")
+        query_params.append(
+            bigquery.ScalarQueryParameter("owner_email", "STRING", owner_email)
+        )
+    if severity:
+        conditions.append("severity = @severity")
+        query_params.append(
+            bigquery.ScalarQueryParameter("severity", "STRING", severity)
+        )
+
+    where_clause = " AND ".join(conditions)
+    query = (
+        f"SELECT * FROM `{table_id}` "
+        f"WHERE {where_clause} "
+        f"ORDER BY occurred_at DESC "
+        f"LIMIT {limit}"
+    )
+
+    project = (os.environ.get("GCP_PROJECT_ID") or "").strip() or None
+    try:
+        client = bigquery.Client(project=project)
+        job_config = bigquery.QueryJobConfig(query_parameters=query_params)
+        rows = client.query(query, job_config=job_config).result()
+
+        records: list[dict[str, Any]] = []
+        for row in rows:
+            records.append(dict(row))
+
+        return {
+            "status": "success",
+            "total_count": len(records),
+            "records": records,
+        }
+    except Exception as exc:
+        return {
+            "status": "error",
+            "message": f"BigQuery query failed: {exc}",
+        }
 
 
 def _normalize_string_list(values: list[str] | tuple[str, ...] | None) -> list[str]:

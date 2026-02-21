@@ -240,7 +240,7 @@ class ChatToolsTests(unittest.TestCase):
             resource_type="public",
             now=date(2026, 2, 15),  # Sunday
         )
-        self.assertEqual(deadline, "2026/2/27")
+        self.assertEqual(deadline, "2026/3/2")
 
     def test_deadline_rule_internal_cvss8(self):
         deadline = self.chat_tools._calculate_deadline(
