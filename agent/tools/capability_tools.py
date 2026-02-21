@@ -86,7 +86,7 @@ def get_runtime_capabilities(include_live_checks: bool = True) -> dict[str, Any]
                 "send_vulnerability_alert",
                 "list_space_members",
             ],
-            "history": ["log_vulnerability_history"],
+            "history": ["log_vulnerability_history", "recall_vulnerability_history"],
             "a2a": [
                 "register_remote_agent",
                 "register_master_agent",
