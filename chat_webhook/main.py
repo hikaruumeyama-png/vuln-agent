@@ -1913,6 +1913,22 @@ def _extract_sidfm_entries(source_text: str) -> list[dict[str, Any]]:
     # Normalize various Unicode whitespace to regular spaces (within lines)
     text = re.sub(r"[\u00a0\u2002\u2003\u2004\u2005\u2006\u2007\u2008\u2009\u200a\u205f\u3000]", " ", text)
 
+    # Google Chat may deliver the entire email as a single line (no line breaks).
+    # Restore line breaks by inserting \n before known SIDfm structural markers.
+    if text.count("\n") < 5 and len(text) > 300:
+        # Before SIDfm table rows: "1 62977 9.4 AlmaLinux ..."
+        text = re.sub(r"(?<=\s)(\d{1,2}\s+\d{5,8}\s+(?:10(?:\.\d{1,2})?|[0-9](?:\.\d{1,2})?)\s+)", r"\n\1", text)
+        # Before detail block entries: "○No.1 ID:62977 ..."
+        text = re.sub(r"(?=○No\.\d)", "\n", text)
+        # Before ID: references in block format
+        text = re.sub(r"(?=ID:\d{4,8})", "\n", text)
+        # Before SIDfm URLs
+        text = re.sub(r"(?=https://sid\.softek\.jp/filter/sinfo/\d)", "\n", text)
+        # Before section dividers
+        text = re.sub(r"(?=◆――)", "\n", text)
+        text = re.sub(r"(?=―――――)", "\n", text)
+        logger.warning("[diag:sidfm] single-line text detected, restored line breaks: lines_after=%d", text.count("\n") + 1)
+
     entries: list[dict[str, Any]] = []
     seen_ids: set[str] = set()
     lines = text.splitlines()
