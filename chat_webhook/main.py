@@ -2109,7 +2109,7 @@ def _infer_due_date_from_policy(source_text: str, max_cvss: float | None) -> tup
     base = _extract_base_date_from_source(source_text)
     text = (source_text or "").lower()
     exploit_signal = ("悪用実績" in source_text) or ("エクスプロイトコード" in source_text) or ("exploit" in text)
-    is_public_resource = any(token in text for token in ("fortigate", "cisco asa", "zeem", "mail", "公開"))
+    is_public_resource = any(token in text for token in ("fortigate", "cisco asa", "zeem", "メールサーバ", "mail server", "公開"))
 
     if max_cvss is None or max_cvss < 8.0:
         return "要確認", "CVSS 8.0未満または不明"
@@ -2148,8 +2148,7 @@ def _extract_source_facts(source_text: str) -> dict[str, Any]:
                     filtered_entries.append(e)
             else:
                 filtered_entries.append(e)
-        if filtered_entries:
-            entries = filtered_entries
+        entries = filtered_entries
 
     # 同一納期で同一起票とするため、エントリごとに納期を算出してグルーピングする。
     due_groups: dict[str, list[dict[str, Any]]] = {}
@@ -2236,7 +2235,10 @@ def _extract_source_facts(source_text: str) -> dict[str, Any]:
     entry_scores = [s for e in selected_entries if (s := _try_cvss_float(e.get("cvss"))) is not None]
     if entry_scores:
         scores.extend(entry_scores)
-    else:
+    elif not sbom_alma_versions:
+        # Regex fallback only when SBOM filtering is not active.
+        # When SBOM is configured but all entries were filtered, regex would pick up
+        # CVSS values from SBOM-unregistered entries in the raw text.
         for m in re.finditer(r"(?:cvss(?:v3)?[:\s]*)\s*(10(?:\.0)?|[0-9](?:\.[0-9])?)", lowered):
             try:
                 scores.append(float(m.group(1)))
@@ -2569,6 +2571,12 @@ def _ai_final_review_with_value_lock(summary: str, detail: str, reasoning: str, 
     norm_urls = set(re.findall(r"https://sid\.softek\.jp/filter/sinfo/\d+", normalized))
     if base_urls and base_urls != norm_urls:
         return base_text
+    # Lock the reasoning section — AI review must not change structured facts
+    base_reason_match = re.search(r"【判断理由】[\s\S]*$", base_text)
+    norm_reason_match = re.search(r"【判断理由】[\s\S]*$", normalized)
+    if base_reason_match:
+        if not norm_reason_match or norm_reason_match.group(0).strip() != base_reason_match.group(0).strip():
+            return base_text
     return normalized
 
 
