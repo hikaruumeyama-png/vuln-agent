@@ -2233,7 +2233,7 @@ def _extract_source_facts(source_text: str) -> dict[str, Any]:
     products = list(dict.fromkeys(products))
 
     scores: list[float] = []
-    entry_scores = [float(e.get("cvss")) for e in selected_entries if isinstance(e.get("cvss"), (int, float))]
+    entry_scores = [s for e in selected_entries if (s := _try_cvss_float(e.get("cvss"))) is not None]
     if entry_scores:
         scores.extend(entry_scores)
     else:
@@ -2555,6 +2555,19 @@ def _ai_final_review_with_value_lock(summary: str, detail: str, reasoning: str, 
     # value-lock check
     required_tokens = [f"依頼概要: {summary}", "大分類: 017.脆弱性対応（情シス専用）", "小分類: 002.IT基盤チーム"]
     if any(tok not in normalized for tok in required_tokens):
+        return base_text
+    # Verify key numeric/date values are preserved by AI review
+    base_cvss = re.search(r"【CVSSスコア】\s*[\r\n]+([0-9](?:\.[0-9])?)", base_text)
+    norm_cvss = re.search(r"【CVSSスコア】\s*[\r\n]+([0-9](?:\.[0-9])?)", normalized)
+    if base_cvss and (not norm_cvss or norm_cvss.group(1) != base_cvss.group(1)):
+        return base_text
+    base_due = re.search(r"【対応完了目標】\s*[\r\n]*(.+)", base_text)
+    norm_due = re.search(r"【対応完了目標】\s*[\r\n]*(.+)", normalized)
+    if base_due and (not norm_due or norm_due.group(1).strip() != base_due.group(1).strip()):
+        return base_text
+    base_urls = set(re.findall(r"https://sid\.softek\.jp/filter/sinfo/\d+", base_text))
+    norm_urls = set(re.findall(r"https://sid\.softek\.jp/filter/sinfo/\d+", normalized))
+    if base_urls and base_urls != norm_urls:
         return base_text
     return normalized
 
