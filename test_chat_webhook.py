@@ -587,6 +587,8 @@ class ChatWebhookTests(unittest.TestCase):
         self.chat_webhook._get_sbom_almalinux_versions = lambda: {"8", "9"}
         source = (
             "[SIDfm] AWSサーバー_001 (2026/02/12)\n"
+            "公開日: 2026/02/12\n"
+            "脆弱性情報が公開されました。\n"
             "No ID    CVSS TITLE\n"
             "1 62977  9.4 AlmaLinux 10 の keylime にクライアント証明書による認証を迂回される問題\n"
             "2 62986  8.8 AlmaLinux 9 の fontforge に情報漏洩・情報改竄・サービス妨害など複数の問題\n"
@@ -606,6 +608,11 @@ class ChatWebhookTests(unittest.TestCase):
         self.assertNotIn("https://sid.softek.jp/filter/sinfo/62977", out)
         self.assertNotIn("https://sid.softek.jp/filter/sinfo/62990", out)
         self.assertIn("起票対象: 2件", out)
+        # Verify "公開" in text does NOT trigger public resource classification
+        self.assertIn("3か月", out)
+        self.assertNotIn("10営業日", out)
+        # all_entries_count should show pre-filter total (4), not post-filter (2)
+        self.assertIn("4件", out)
 
     def test_correction_prompt_without_incident_id_returns_guidance(self):
         self.chat_webhook._is_valid_token = lambda event: True

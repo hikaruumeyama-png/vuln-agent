@@ -1908,12 +1908,21 @@ def _extract_sidfm_entries(source_text: str) -> list[dict[str, Any]]:
     if not text:
         return []
 
+    # Normalize invisible Unicode characters that Google Chat may insert
+    text = re.sub(r"[\u200b\u200c\u200d\u2060\ufeff]", "", text)
+    # Normalize various Unicode whitespace to regular spaces (within lines)
+    text = re.sub(r"[\u00a0\u2002\u2003\u2004\u2005\u2006\u2007\u2008\u2009\u200a\u205f\u3000]", " ", text)
+
     entries: list[dict[str, Any]] = []
     seen_ids: set[str] = set()
     lines = text.splitlines()
+    logger.info("[diag:sidfm] total_lines=%d first_200_chars=%r", len(lines), text[:200])
 
     # 1) SIDfm一覧テーブル: "1 62977  9.4 AlmaLinux ..."
-    row_pat = re.compile(r"^\s*\d+\s+(\d{4,8})\s+([0-9](?:\.[0-9])?)\s+(.+?)\s*$")
+    # CVSS supports: 9.4, 9.40, 10, 10.0 formats
+    row_pat = re.compile(r"^\s*\d+\s+(\d{4,8})\s+(10(?:\.\d{1,2})?|[0-9](?:\.\d{1,2})?)\s+(.+?)\s*$")
+    candidate_lines = [raw for raw in lines if re.search(r"\d{4,8}", raw) and re.search(r"[0-9]\.[0-9]", raw)]
+    logger.info("[diag:sidfm] candidate_lines_with_id_and_cvss=%d samples=%r", len(candidate_lines), candidate_lines[:5])
     for raw in lines:
         m = row_pat.match(raw)
         if not m:
@@ -1929,7 +1938,7 @@ def _extract_sidfm_entries(source_text: str) -> list[dict[str, Any]]:
         entries.append({"id": vuln_id, "cvss": cvss, "title": title, "url": f"https://sid.softek.jp/filter/sinfo/{vuln_id}"})
 
     # 2) 本文ブロック: "ID:62977 ... CVSSv3: 9.4"
-    block_pat = re.compile(r"ID:(\d{4,8}).*?CVSSv3:\s*([0-9](?:\.[0-9])?)", re.IGNORECASE)
+    block_pat = re.compile(r"ID:(\d{4,8}).*?CVSSv3:\s*(10(?:\.\d{1,2})?|[0-9](?:\.\d{1,2})?)", re.IGNORECASE)
     for i, raw in enumerate(lines):
         m = block_pat.search(raw)
         if not m:
@@ -1956,6 +1965,24 @@ def _extract_sidfm_entries(source_text: str) -> list[dict[str, Any]]:
             url = f"https://sid.softek.jp/filter/sinfo/{vuln_id}"
         seen_ids.add(vuln_id)
         entries.append({"id": vuln_id, "cvss": cvss, "title": title or "要確認", "url": url})
+
+    # 3) SIDfm ID without index: "62977  9.4 AlmaLinux ..." (no leading row number)
+    noindex_pat = re.compile(r"^\s*(\d{5,8})\s+(10(?:\.\d{1,2})?|[0-9](?:\.\d{1,2})?)\s+(.+?)\s*$")
+    for raw in lines:
+        m = noindex_pat.match(raw)
+        if not m:
+            continue
+        vuln_id, cvss_s, title = m.group(1), m.group(2), m.group(3).strip()
+        if vuln_id in seen_ids:
+            continue
+        seen_ids.add(vuln_id)
+        try:
+            cvss = float(cvss_s)
+        except Exception:
+            cvss = None
+        entries.append({"id": vuln_id, "cvss": cvss, "title": title, "url": f"https://sid.softek.jp/filter/sinfo/{vuln_id}"})
+
+    logger.info("[diag:sidfm] extracted_entries=%d entries=%r", len(entries), [(e.get("id"), e.get("cvss"), e.get("title", "")[:40]) for e in entries])
 
     def _key(item: dict[str, Any]) -> tuple[float, str]:
         score = item.get("cvss")
@@ -2079,7 +2106,7 @@ def _get_sbom_almalinux_versions() -> set[str]:
         _SBOM_ALMA_VERSION_CACHE["fetched_at"] = now
         return versions
     except Exception as exc:
-        logger.warning("Failed to load AlmaLinux versions from SBOM table: %s", exc)
+        logger.warning("[diag:sbom] Failed to load AlmaLinux versions from SBOM table: %s", exc)
         return set()
 
 
@@ -2109,7 +2136,7 @@ def _infer_due_date_from_policy(source_text: str, max_cvss: float | None) -> tup
     base = _extract_base_date_from_source(source_text)
     text = (source_text or "").lower()
     exploit_signal = ("悪用実績" in source_text) or ("エクスプロイトコード" in source_text) or ("exploit" in text)
-    is_public_resource = any(token in text for token in ("fortigate", "cisco asa", "zeem", "メールサーバ", "mail server", "公開"))
+    is_public_resource = any(token in text for token in ("fortigate", "cisco asa", "zeem", "メールサーバ", "mail server", "公開サーバ", "公開リソース", "インターネット公開", "dmz"))
 
     if max_cvss is None or max_cvss < 8.0:
         return "要確認", "CVSS 8.0未満または不明"
@@ -2132,12 +2159,15 @@ def _extract_source_facts(source_text: str) -> dict[str, Any]:
     text = (source_text or "").strip()
     lowered = text.lower()
     entries = _extract_sidfm_entries(text)
+    pre_filter_count = len(entries)
     links = re.findall(r"https?://[^\s)>\]|]+", text)
     sid_links = [u for u in links if "sid.softek.jp/filter/sinfo/" in u]
     sid_links = list(dict.fromkeys(sid_links))
     if not entries and sid_links:
         entries = _build_entries_from_sid_links_fallback(text, sid_links)
+        logger.info("[diag:facts] used sid_links_fallback, entries=%d", len(entries))
     sbom_alma_versions = _get_sbom_almalinux_versions()
+    logger.info("[diag:facts] pre_filter_entries=%d sbom_versions=%r", pre_filter_count, sbom_alma_versions)
     if sbom_alma_versions:
         filtered_entries: list[dict[str, Any]] = []
         for e in entries:
@@ -2146,9 +2176,13 @@ def _extract_source_facts(source_text: str) -> dict[str, Any]:
             if m:
                 if m.group(1) in sbom_alma_versions:
                     filtered_entries.append(e)
+                else:
+                    logger.info("[diag:facts] SBOM-filtered out: id=%s ver=%s title=%s", e.get("id"), m.group(1), title[:50])
             else:
                 filtered_entries.append(e)
+                logger.info("[diag:facts] no AlmaLinux version in title, keeping: id=%s title=%s", e.get("id"), title[:50])
         entries = filtered_entries
+    logger.info("[diag:facts] post_filter_entries=%d", len(entries))
 
     # 同一納期で同一起票とするため、エントリごとに納期を算出してグルーピングする。
     due_groups: dict[str, list[dict[str, Any]]] = {}
@@ -2255,6 +2289,13 @@ def _extract_source_facts(source_text: str) -> dict[str, Any]:
                     pass
     unique_scores = sorted(set(scores), reverse=True)
     max_score = unique_scores[0] if unique_scores else None
+    logger.info("[diag:facts] entry_scores=%r regex_fallback_used=%r max_score=%r selected_entries=%d",
+                entry_scores, not entry_scores and not sbom_alma_versions, max_score, len(selected_entries))
+
+    # Check is_public_resource tokens for diagnostic
+    _pub_tokens = ("fortigate", "cisco asa", "zeem", "メールサーバ", "mail server", "公開サーバ", "公開リソース", "インターネット公開", "dmz")
+    _matched_pub = [t for t in _pub_tokens if t in lowered]
+    logger.info("[diag:facts] is_public_matched_tokens=%r", _matched_pub)
 
     if selected_due_date:
         due_date = selected_due_date
@@ -2262,9 +2303,10 @@ def _extract_source_facts(source_text: str) -> dict[str, Any]:
         due_reason = first_reason or "社内方針に基づき算出"
     else:
         due_date, due_reason = _infer_due_date_from_policy(text, max_score)
+    logger.info("[diag:facts] final due_date=%r due_reason=%r", due_date, due_reason)
     return {
         "entries": selected_entries or entries,
-        "all_entries_count": len(entries),
+        "all_entries_count": pre_filter_count,
         "selected_entries_count": len(selected_entries) if selected_entries else len(entries),
         "due_group_count": len(due_groups) if due_groups else 1,
         "products": products,
