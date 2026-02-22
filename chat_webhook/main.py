@@ -2139,20 +2139,34 @@ def _extract_source_facts(source_text: str) -> dict[str, Any]:
         entries = _build_entries_from_sid_links_fallback(text, sid_links)
     sbom_alma_versions = _get_sbom_almalinux_versions()
     if sbom_alma_versions:
+        filtered_entries: list[dict[str, Any]] = []
         for e in entries:
             title = str(e.get("title") or "")
             m = re.search(r"almalinux\s*([0-9]{1,2})", title, re.IGNORECASE)
-            if m and m.group(1) not in sbom_alma_versions:
-                e["sbom_unregistered"] = True
+            if m:
+                if m.group(1) in sbom_alma_versions:
+                    filtered_entries.append(e)
+            else:
+                filtered_entries.append(e)
+        if filtered_entries:
+            entries = filtered_entries
 
     # 同一納期で同一起票とするため、エントリごとに納期を算出してグルーピングする。
     due_groups: dict[str, list[dict[str, Any]]] = {}
-    all_scores = [float(e.get("cvss")) for e in entries if isinstance(e.get("cvss"), (int, float))]
+
+    def _try_cvss_float(v: Any) -> float | None:
+        try:
+            return float(v)
+        except (TypeError, ValueError):
+            return None
+
+    all_scores = [s for e in entries if (s := _try_cvss_float(e.get("cvss"))) is not None]
     max_score = max(all_scores) if all_scores else None
 
     for e in entries:
-        entry_score = e.get("cvss")
-        score = float(entry_score) if isinstance(entry_score, (int, float)) else max_score
+        score = _try_cvss_float(e.get("cvss"))
+        if score is None:
+            score = max_score
         due_date, due_reason = _infer_due_date_from_policy(text, score)
         entry = dict(e)
         entry["due_date"] = due_date
@@ -2192,11 +2206,9 @@ def _extract_source_facts(source_text: str) -> dict[str, Any]:
         grouped_links_by_version = _group_sid_links_by_almalinux_version(text, sid_links)
     if sbom_alma_versions and grouped_links_by_version:
         allowed = {f"AlmaLinux{v}" for v in sbom_alma_versions}
-        for k in list(grouped_links_by_version.keys()):
-            if k not in allowed:
-                grouped_links_by_version[k] = [
-                    url + "  ※SBOM未登録" for url in grouped_links_by_version[k]
-                ]
+        grouped_links_by_version = {
+            k: v for k, v in grouped_links_by_version.items() if k in allowed and v
+        }
 
     products: list[str] = []
     entry_text_for_products = "\n".join(str(e.get("title") or "") for e in (selected_entries or entries))
@@ -2412,20 +2424,6 @@ def _infer_ticket_detail_from_facts(facts: dict[str, Any]) -> str:
             "通知内で納期が異なる脆弱性が含まれるため、本起票は同一納期グループでまとめています。"
         )
 
-    # SBOM未登録バージョンの注記を収集
-    unregistered_versions: list[str] = []
-    for e in facts.get("entries", []):
-        if e.get("sbom_unregistered"):
-            title = str(e.get("title") or "")
-            vm = re.search(r"almalinux\s*([0-9]{1,2})", title, re.IGNORECASE)
-            if vm:
-                unregistered_versions.append(f"AlmaLinux{vm.group(1)}")
-    unregistered_versions = sorted(set(unregistered_versions))
-    sbom_note = ""
-    if unregistered_versions:
-        ver_list = "、".join(unregistered_versions)
-        sbom_note = f"\n※{ver_list} はSBOM未登録のため、資産の有無を確認してください"
-
     return (
         "【対象の機器/アプリ】\n"
         f"{product_line}\n\n"
@@ -2435,8 +2433,7 @@ def _infer_ticket_detail_from_facts(facts: dict[str, Any]) -> str:
         f"{cvss_line}\n\n"
         "【依頼内容】\n"
         "上記脆弱性情報をご確認いただき、バージョンアップが低い場合はバージョンアップのご対応お願いいたします。\n"
-        "対応を実施した場合はサーバのホスト名をご教示ください。"
-        f"{sbom_note}\n\n"
+        "対応を実施した場合はサーバのホスト名をご教示ください。\n\n"
         "【対応完了目標】\n"
         f"{facts.get('due_date') or '要確認'}"
         f"{split_note}"
