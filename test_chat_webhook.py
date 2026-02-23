@@ -587,6 +587,8 @@ class ChatWebhookTests(unittest.TestCase):
         self.chat_webhook._get_sbom_almalinux_versions = lambda: {"8", "9"}
         source = (
             "[SIDfm] AWSサーバー_001 (2026/02/12)\n"
+            "公開日: 2026/02/12\n"
+            "脆弱性情報が公開されました。\n"
             "No ID    CVSS TITLE\n"
             "1 62977  9.4 AlmaLinux 10 の keylime にクライアント証明書による認証を迂回される問題\n"
             "2 62986  8.8 AlmaLinux 9 の fontforge に情報漏洩・情報改竄・サービス妨害など複数の問題\n"
@@ -606,6 +608,39 @@ class ChatWebhookTests(unittest.TestCase):
         self.assertNotIn("https://sid.softek.jp/filter/sinfo/62977", out)
         self.assertNotIn("https://sid.softek.jp/filter/sinfo/62990", out)
         self.assertIn("起票対象: 2件", out)
+        # Verify "公開" in text does NOT trigger public resource classification
+        self.assertIn("3か月", out)
+        self.assertNotIn("10営業日", out)
+        # all_entries_count should show pre-filter total (4), not post-filter (2)
+        self.assertIn("4件", out)
+
+    def test_build_ticket_from_single_line_google_chat_text(self):
+        """Google Chat may deliver the entire email as a single line (no line breaks)."""
+        self.chat_webhook._get_sbom_almalinux_versions = lambda: {"8", "9"}
+        # Simulate single-line Google Chat text (no \n between entries)
+        source = (
+            "@bot [SIDfm] Server_001 (2026/02/12) "
+            "No ID CVSS TITLE "
+            "1 62977 9.4 AlmaLinux 10 の keylime にクライアント証明書による認証を迂回される問題 (ALSA-2026:2225) "
+            "2 62986 8.8 AlmaLinux 9 の fontforge に情報漏洩・情報改竄・サービス妨害など複数の問題 "
+            "3 62990 8.6 AlmaLinux 10 の libsoup3 に任意のコード実行など複数の問題 (ALSA-2026:2182) "
+            "4 62989 8.6 AlmaLinux 8 の libsoup に任意のコード実行など複数の問題 (ALSA-2026:2215) "
+            "ID:62977 CVSSv3: 9.4 AlmaLinux 10 の keylime https://sid.softek.jp/filter/sinfo/62977 "
+            "ID:62986 CVSSv3: 8.8 AlmaLinux 9 の fontforge https://sid.softek.jp/filter/sinfo/62986 "
+            "ID:62990 CVSSv3: 8.6 AlmaLinux 10 の libsoup3 https://sid.softek.jp/filter/sinfo/62990 "
+            "ID:62989 CVSSv3: 8.6 AlmaLinux 8 の libsoup https://sid.softek.jp/filter/sinfo/62989"
+        )
+        out = self.chat_webhook._build_ticket_text_from_source(source)
+        self.assertIn("AlmaLinux9", out)
+        self.assertIn("AlmaLinux8", out)
+        self.assertNotIn("AlmaLinux10", out)
+        self.assertIn("https://sid.softek.jp/filter/sinfo/62986", out)
+        self.assertIn("https://sid.softek.jp/filter/sinfo/62989", out)
+        self.assertNotIn("https://sid.softek.jp/filter/sinfo/62977", out)
+        self.assertIn("【CVSSスコア】\n8.8", out)
+        self.assertIn("起票対象: 2件", out)
+        self.assertIn("4件", out)
+        self.assertIn("3か月", out)
 
     def test_correction_prompt_without_incident_id_returns_guidance(self):
         self.chat_webhook._is_valid_token = lambda event: True
