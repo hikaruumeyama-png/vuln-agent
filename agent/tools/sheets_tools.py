@@ -442,10 +442,33 @@ def _find_owner_for_purl(purl: str) -> dict[str, str]:
                 }
     
     # マッチなし
+    default = _get_default_owner()
+    if default["owner_email"]:
+        logger.warning("No owner pattern matched for purl=%s, falling back to default owner", purl)
+        return default
     return {
         "system_name": "不明",
         "owner_email": "",
         "owner_name": "",
+    }
+
+
+def _get_default_owner() -> dict[str, str]:
+    """環境変数またはSecret Managerからデフォルト担当者を取得する。"""
+    email = get_config_value(
+        ["DEFAULT_OWNER_EMAIL"],
+        secret_name="vuln-agent-default-owner-email",
+        default="",
+    ).strip()
+    name = get_config_value(
+        ["DEFAULT_OWNER_NAME"],
+        secret_name="vuln-agent-default-owner-name",
+        default="情報セキュリティチーム",
+    ).strip()
+    return {
+        "system_name": "デフォルト担当者",
+        "owner_email": email,
+        "owner_name": name,
     }
 
 

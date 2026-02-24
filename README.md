@@ -104,8 +104,8 @@ Live Gateway は OIDC 認証を有効化できます（Entra ID 対応）。
 
 Cloud Build 連携（このリポジトリ既定）:
 - `cloudbuild.yaml` は `OIDC_ENABLED`, `OIDC_TENANT_ID`, `OIDC_CLIENT_ID`, `OIDC_REDIRECT_URI`, `OIDC_SCOPES` を Live Gateway に注入します。
-- `OIDC_CLIENT_SECRET` は Secret Manager `vuln-agent-oidc-client-secret` から注入します。
-- `OIDC_SESSION_SECRET` は Secret Manager `vuln-agent-oidc-session-secret` から注入します。
+- `OIDC_CLIENT_SECRET` は Secret Manager `OIDC_CLIENT_SECRET` から注入します。
+- `OIDC_SESSION_SECRET` は Secret Manager `OIDC_SESSION_SECRET` から注入します。
 - Secret 名を変える場合は `cloudbuild.yaml` の substitutions
   (`_OIDC_CLIENT_SECRET_SECRET`, `_OIDC_SESSION_SECRET_SECRET`) を変更してください。
 

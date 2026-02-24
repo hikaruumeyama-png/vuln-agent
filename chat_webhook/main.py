@@ -26,6 +26,7 @@ _chat_service_post_client = None
 _RECENT_TURNS: dict[str, deque[dict[str, str]]] = {}
 _THREAD_ROOT_CACHE: dict[str, str] = {}
 _SBOM_ALMA_VERSION_CACHE: dict[str, Any] = {"versions": None, "fetched_at": None}
+_SBOM_PRODUCT_CACHE: dict[str, Any] = {"names": None, "fetched_at": None}
 _ASYNC_WORKER_POOL = ThreadPoolExecutor(max_workers=4, thread_name_prefix="chat-webhook-worker")
 _ASYNC_EVENT_LOCK = threading.Lock()
 _ASYNC_EVENT_SEEN: dict[str, float] = {}
@@ -106,19 +107,6 @@ _THREAD_ROOT_REFERENCE_WORDS = (
     "上のメッセージ",
     "前のメッセージ",
 )
-_CORRECTION_TRIGGER_WORDS = (
-    "変更して",
-    "修正して",
-    "直して",
-    "更新して",
-    "追加して",
-    "追記して",
-    "入れて",
-    "反映して",
-    "書き換えて",
-    "整えて",
-    "にして",
-)
 try:
     _HYPOTHESIS_RETRY_LIMIT = int((os.environ.get("HYPOTHESIS_RETRY_LIMIT") or "2").strip())
 except Exception:
@@ -126,6 +114,11 @@ except Exception:
 if _HYPOTHESIS_RETRY_LIMIT < 0:
     _HYPOTHESIS_RETRY_LIMIT = 0
 _TOOL_CALL_LIMIT = 3
+_DEFAULT_REMEDIATION_TEXT = (
+    "上記脆弱性情報をご確認いただき、バージョンアップが低い場合は"
+    "バージョンアップのご対応お願いいたします。\n"
+    "対応を実施した場合はサーバのホスト名をご教示ください。"
+)
 _TICKET_FORBIDDEN_PHRASES = (
     "はい、承知いたしました",
     "ご依頼のメール内容は",
@@ -490,6 +483,89 @@ def _build_vulnerability_ticket_prompt(raw_text: str) -> str:
     )
 
 
+def _call_gemini_json(prompt: str, response_schema: dict[str, Any] | None = None) -> dict[str, Any]:
+    """Agent Engineを経由せず、Gemini APIで直接JSON出力を得る。"""
+    from vertexai.generative_models import GenerativeModel, GenerationConfig
+
+    project_id = _get_project_id()
+    location = os.environ.get("GCP_LOCATION", "asia-northeast1")
+    vertexai.init(project=project_id, location=location)
+
+    model = GenerativeModel("gemini-2.5-flash")
+    config_kwargs: dict[str, Any] = {"response_mime_type": "application/json"}
+    if response_schema:
+        config_kwargs["response_schema"] = response_schema
+    config = GenerationConfig(**config_kwargs)
+    _MAX_RETRIES = 3
+    for _attempt in range(_MAX_RETRIES):
+        try:
+            response = model.generate_content(prompt, generation_config=config)
+            return json.loads(response.text)
+        except Exception as exc:
+            _exc_str = str(exc).lower()
+            if ("429" in _exc_str or "resource_exhausted" in _exc_str or "resource exhausted" in _exc_str) and _attempt < _MAX_RETRIES - 1:
+                import time
+                _backoff = (2 ** _attempt) + 1
+                logger.warning("Gemini direct 429 (attempt %d/%d), retrying in %ds: %s", _attempt + 1, _MAX_RETRIES, _backoff, exc)
+                time.sleep(_backoff)
+                continue
+            logger.warning("Gemini direct JSON call failed: %s", exc)
+            return {}
+
+
+def _check_remediation_advice(facts: dict[str, Any], source_text: str) -> dict[str, Any]:
+    """通知内容とSBOM情報をもとに、【依頼内容】の妥当性をGemini APIで検証する。"""
+    products = facts.get("products") or ["要確認"]
+    entries = facts.get("entries") or []
+    max_score = facts.get("max_score")
+    due_date = facts.get("due_date") or "要確認"
+    due_reason = facts.get("due_reason") or ""
+
+    entry_summary = []
+    for e in entries[:10]:
+        entry_summary.append(
+            f"- ID:{e.get('id', '?')} CVSS:{e.get('cvss', '?')} {e.get('title', '')}"
+        )
+    entries_text = "\n".join(entry_summary) if entry_summary else "エントリなし"
+    source_excerpt = (source_text or "")[:2000]
+
+    prompt = (
+        "あなたは脆弱性対応の専門家です。以下の脆弱性情報をもとに、"
+        "提案されている【依頼内容】が対応策として適切かを判定してください。\n\n"
+        f"対象製品: {', '.join(products)}\n"
+        f"脆弱性エントリ:\n{entries_text}\n"
+        f"最大CVSSスコア: {max_score}\n"
+        f"対応完了目標: {due_date}（{due_reason}）\n\n"
+        f"通知本文の要点:\n{source_excerpt}\n\n"
+        f"現在の【依頼内容】:\n{_DEFAULT_REMEDIATION_TEXT}\n\n"
+        "## 回答ルール\n"
+        "- suggested_action は2〜3文以内の簡潔な依頼文にしてください。\n"
+        "- 現在の【依頼内容】と同じスタイル・トーン（丁寧語、〜お願いいたします）を維持してください。\n"
+        "- テスト実施・影響調査・報告手順などの詳細な作業指示は含めないでください。\n"
+        "- 「対応を実施した場合はサーバのホスト名をご教示ください。」は必ず末尾に残してください。\n"
+        "JSONで回答してください。"
+    )
+    schema = {
+        "type": "OBJECT",
+        "properties": {
+            "is_appropriate": {"type": "BOOLEAN"},
+            "confidence": {"type": "STRING", "enum": ["high", "medium", "low"]},
+            "reasoning": {"type": "STRING"},
+            "suggested_action": {"type": "STRING"},
+            "risk_notes": {"type": "STRING"},
+        },
+        "required": ["is_appropriate", "confidence", "reasoning"],
+    }
+    try:
+        result = _call_gemini_json(prompt, response_schema=schema)
+        if not isinstance(result, dict):
+            return {}
+        return result
+    except Exception as exc:
+        logger.warning("Remediation advice check failed: %s", exc)
+        return {}
+
+
 def _build_ticket_hypothesis_prompt(raw_text: str, user_instruction: str = "") -> str:
     instruction_block = ""
     if (user_instruction or "").strip():
@@ -550,13 +626,17 @@ def _build_ai_intent_prompt(
         "次の入力に対して、JSONのみを返してください。説明文は禁止です。\n\n"
         "返却JSON schema:\n"
         '{'
-        '"intent":"ticket_generate|ticket_revise|general_analysis|clarification",'
+        '"intent":"ticket_generate|general_analysis|clarification",'
         '"needs_ticket_format":true|false,'
         '"prefer_thread_root":true|false,'
         '"prefer_history":true|false,'
         '"reason":"short reason",'
         '"confidence":"high|medium|low"'
         '}\n\n'
+        "intent判定ルール:\n"
+        "- ticket_generate: 脆弱性通知メール本文を含み、新規起票テンプレート作成が必要\n"
+        "- general_analysis: 脆弱性や技術情報に関する一般的な質問・分析\n"
+        "- clarification: 入力があいまいで判定不能\n\n"
         f"is_gmail_post: {str(bool(is_gmail_post)).lower()}\n"
         f"user_prompt:\n{(user_prompt or '').strip()}\n\n"
         f"raw_body_text:\n{(raw_body_text or '').strip()}\n\n"
@@ -576,7 +656,7 @@ def _parse_ai_intent_json(text: str) -> dict[str, Any]:
     if not isinstance(parsed, dict):
         return {}
     intent = str(parsed.get("intent") or "").strip()
-    if intent not in {"ticket_generate", "ticket_revise", "general_analysis", "clarification"}:
+    if intent not in {"ticket_generate", "general_analysis", "clarification"}:
         return {}
     return {
         "intent": intent,
@@ -710,8 +790,12 @@ def _run_hypothesis_pipeline(source_text: str, history_key: str, user_instructio
                 + "\n".join(f"- {e}" for e in last_errs[:10])
                 + "\n\nJSONのみ出力。説明文・マークダウン禁止。"
             )
-        raw = _run_agent_query(prompt, history_key)
-        parsed = _parse_ticket_hypothesis_json(raw)
+        # Gemini API direct call (JSON mode) instead of Agent Engine
+        parsed = _call_gemini_json(prompt)
+        if not parsed:
+            # Fallback: try Agent Engine if Gemini direct fails
+            raw = _run_agent_query(prompt, history_key)
+            parsed = _parse_ticket_hypothesis_json(raw)
         ok, errs = _validate_ticket_hypothesis_schema(parsed)
         if ok:
             return parsed
@@ -729,29 +813,6 @@ def _build_thread_root_analysis_prompt(user_prompt: str, root_text: str) -> str:
         f"スレッド元メッセージ:\n{root_text}"
     )
 
-
-def _is_correction_prompt(prompt: str) -> bool:
-    normalized = re.sub(r"\s+", " ", (prompt or "").strip()).lower()
-    if not normalized:
-        return False
-    return any(token in normalized for token in _CORRECTION_TRIGGER_WORDS)
-
-
-def _looks_like_polite_correction_prompt(prompt: str) -> bool:
-    normalized = re.sub(r"\s+", " ", (prompt or "").strip()).lower()
-    if not normalized:
-        return False
-    polite_suffixes = (
-        "してもらえますか",
-        "してください",
-        "してほしい",
-        "お願いします",
-        "お願いできますか",
-        "できますか",
-    )
-    has_target_hint = any(token in normalized for token in ("対象", "詳細", "依頼概要", "cvss", "脆弱性情報", "機器", "アプリ"))
-    has_action_hint = any(token in normalized for token in ("追加", "追記", "変更", "修正", "更新", "反映", "入れ"))
-    return has_target_hint and has_action_hint and any(s in normalized for s in polite_suffixes)
 
 
 def _extract_incident_id(text: str) -> str:
@@ -1125,11 +1186,30 @@ def _run_agent_query(prompt: str, user_id: str) -> str:
         ):
             _collect_text_from_event(event)
 
-    loop = asyncio.new_event_loop()
-    try:
-        loop.run_until_complete(execute_query())
-    finally:
-        loop.close()
+    _MAX_AGENT_RETRIES = 3
+    for _retry_attempt in range(_MAX_AGENT_RETRIES):
+        loop = asyncio.new_event_loop()
+        try:
+            loop.run_until_complete(execute_query())
+            break
+        except Exception as _agent_exc:
+            loop.close()
+            _exc_str = str(_agent_exc).lower()
+            if "429" in _exc_str or "resource_exhausted" in _exc_str or "resource exhausted" in _exc_str:
+                if _retry_attempt < _MAX_AGENT_RETRIES - 1:
+                    _backoff = (2 ** _retry_attempt) + 1
+                    logger.warning(
+                        "Agent Engine 429 (attempt %d/%d), retrying in %ds: %s",
+                        _retry_attempt + 1, _MAX_AGENT_RETRIES, _backoff, _agent_exc,
+                    )
+                    import time
+                    time.sleep(_backoff)
+                    chunks.clear()
+                    continue
+            raise
+        finally:
+            if not loop.is_closed():
+                loop.close()
 
     def _is_noise_line(line: str) -> bool:
         if not line:
@@ -1583,6 +1663,7 @@ def _build_history_ticket_message(record: dict[str, str]) -> str:
     return "\n\n".join(sections).strip()
 
 
+
 def _extract_ticket_sections(text: str) -> tuple[str, str]:
     body = (text or "").strip()
     if not body:
@@ -1687,7 +1768,7 @@ def _remember_turn(key: str, user_prompt: str, assistant_text: str) -> None:
     _RECENT_TURNS[key].append(
         {
             "user": user_prompt.strip()[:1200],
-            "assistant": (assistant_text or "").strip()[:300],
+            "assistant": (assistant_text or "").strip()[:1200],
         }
     )
 
@@ -2126,6 +2207,199 @@ def _get_sbom_almalinux_versions() -> set[str]:
         return set()
 
 
+def _get_sbom_product_names() -> set[str]:
+    """BQ SBOMテーブルから製品名(name列)をDISTINCTで取得。10分キャッシュ。"""
+    cached_names = _SBOM_PRODUCT_CACHE.get("names")
+    fetched_at = _SBOM_PRODUCT_CACHE.get("fetched_at")
+    now = datetime.now(timezone.utc)
+    if isinstance(cached_names, set) and isinstance(fetched_at, datetime):
+        if (now - fetched_at).total_seconds() < 600:
+            return set(cached_names)
+
+    table_id = _get_config("BQ_SBOM_TABLE_ID", "vuln-agent-bq-sbom-table-id", "").strip()
+    if not table_id:
+        return set()
+    try:
+        from google.cloud import bigquery
+
+        client = bigquery.Client(project=_get_project_id() or None)
+        query = f"""
+            SELECT DISTINCT LOWER(name) AS product_name
+            FROM `{table_id}`
+            WHERE type IN ('application', 'os', 'network')
+        """
+        rows = list(client.query(query).result())
+        names = {
+            str((r.get("product_name") if isinstance(r, dict) else getattr(r, "product_name", "")) or "").strip()
+            for r in rows
+        }
+        names = {n for n in names if n}
+        _SBOM_PRODUCT_CACHE["names"] = set(names)
+        _SBOM_PRODUCT_CACHE["fetched_at"] = now
+        return names
+    except Exception as exc:
+        logger.warning("[diag:sbom] Failed to load product names from SBOM table: %s", exc)
+        return set()
+
+
+_PRODUCT_EXTRACT_PATTERNS: list[tuple[str, str]] = [
+    (r"google\s*chrome", "Google Chrome"),
+    (r"\bfirefox\b", "Firefox"),
+    (r"\bthunderbird\b", "Thunderbird"),
+    (r"\bedge\b.*(?:chromium|ブラウザ)", "Microsoft Edge"),
+    (r"\bmacos\b|\bmac\s*os\b", "MacOS"),
+    (r"\bwindows\s*server", "Windows Server"),
+    (r"\bwindows\s*1[01]\b", "Windows"),
+    (r"\besxi\b|\bvmware\b|\bvsphere\b", "ESXi"),
+    (r"\bpostfix\b", "Postfix"),
+    (r"\bsql\s*server\b", "SQL Server"),
+    (r"\bapache\b", "Apache"),
+    (r"\bnginx\b", "nginx"),
+    (r"\bopenssl\b", "openssl"),
+]
+
+
+def _extract_product_names_quick(text: str) -> list[str]:
+    """通知テキストから製品名を軽量抽出（SBOM照合用）。"""
+    lowered = (text or "").lower()
+    products: list[str] = []
+    if "almalinux" in lowered:
+        products.append("AlmaLinux")
+    if re.search(r"fortios|fortigate", lowered):
+        products.append("FortiGate")
+    if re.search(r"cisco\s*asa", lowered):
+        products.append("Cisco")
+    for pattern, name in _PRODUCT_EXTRACT_PATTERNS:
+        if re.search(pattern, lowered):
+            if name not in products:
+                products.append(name)
+    return products
+
+
+def _check_product_in_sbom(product_name: str, sbom_names: set[str]) -> bool:
+    """SIDfmの製品名がSBOMに登録されているか柔軟にマッチング（部分一致・小文字比較）。"""
+    lowered = product_name.lower().strip()
+    if not lowered:
+        return False
+    for sbom_name in sbom_names:
+        if lowered in sbom_name or sbom_name in lowered:
+            return True
+    return False
+
+
+def _check_sbom_registration(source_text: str) -> tuple[bool, list[str], str]:
+    """SBOMに製品が登録されているかチェック。
+
+    Returns:
+        (should_skip, detected_products, reason)
+        - should_skip=True → 対応不要
+        - should_skip=False → チケット生成続行
+    """
+    products = _extract_product_names_quick(source_text)
+    if not products:
+        return False, [], ""  # 製品を特定できない場合は安全のため既存フローに任せる
+    # AlmaLinuxは既存フィルタに任せる（バージョン単位のフィルタがある）
+    if any("almalinux" in p.lower() for p in products):
+        return False, products, ""
+    sbom_names = _get_sbom_product_names()
+    if not sbom_names:
+        return False, products, ""  # SBOMデータ取得失敗 → 安全のため続行
+    matched = any(_check_product_in_sbom(p, sbom_names) for p in products)
+    if matched:
+        return False, products, ""  # SBOM登録あり → チケット生成
+    return True, products, "SBOMに登録されていない製品のため、自社環境に該当なしと判断"
+
+
+def _build_sbom_not_registered_message(products: list[str], reason: str) -> str:
+    """SBOM未登録製品に対する対応不要メッセージを構築。"""
+    products_str = ", ".join(products) if products else "（製品を特定できませんでした）"
+    return (
+        "対応不要と判断しました。\n\n"
+        f"【検出された製品】\n{products_str}\n\n"
+        f"【判断理由】\n{reason}\n\n"
+        "もし対象環境に該当製品がある場合はお知らせください。"
+    )
+
+
+_MSG_FORMAT_SIDFM = "sidfm"
+_MSG_FORMAT_EXPLOITED = "exploited"
+_MSG_FORMAT_UNKNOWN = "unknown"
+
+
+def _classify_message_format(text: str) -> str:
+    """通知メッセージのフォーマットを分類する。"""
+    t = (text or "").strip()
+    # 先頭500文字以内にマーカーがあるか（メール転送ヘッダー考慮）
+    head = t[:500]
+    # 優先順位: exploited > sidfm（悪用済み通知が最優先）
+    if "【悪用された脆弱性】" in head:
+        return _MSG_FORMAT_EXPLOITED
+    if "[SIDfm]" in head:
+        return _MSG_FORMAT_SIDFM
+    return _MSG_FORMAT_UNKNOWN
+
+
+def _analyze_exploited_vuln(source_text: str) -> dict[str, Any]:
+    """【悪用された脆弱性】通知をGeminiで軽量分析。"""
+    prompt = (
+        "以下は「悪用が確認された脆弱性」の通知テキストです。\n"
+        "次の情報をJSON形式で返してください。\n\n"
+        "1. is_windows_or_apple: 対象製品がWindows製品またはApple製品"
+        "（macOS, iOS, iPadOS, Safari, watchOS, tvOS, visionOS等）"
+        "であればtrue、それ以外はfalse\n"
+        "2. product_name: 対象製品名（日本語）\n"
+        "3. cve_ids: 検出されたCVE番号のリスト\n"
+        "4. comment: セキュリティ担当者向けの簡潔な対応コメント（2-3文）\n\n"
+        f"通知テキスト:\n{source_text[:3000]}"
+    )
+    schema = {
+        "type": "object",
+        "properties": {
+            "is_windows_or_apple": {"type": "boolean"},
+            "product_name": {"type": "string"},
+            "cve_ids": {"type": "array", "items": {"type": "string"}},
+            "comment": {"type": "string"},
+        },
+        "required": ["is_windows_or_apple", "product_name", "cve_ids", "comment"],
+    }
+    try:
+        return _call_gemini_json(prompt, response_schema=schema)
+    except Exception as exc:
+        logger.warning("[exploited_vuln] Gemini analysis failed: %s", exc)
+        return {}
+
+
+def _build_exploited_update_message(analysis: dict[str, Any]) -> str:
+    """悪用された脆弱性に対するアップデート推奨メッセージ。"""
+    product = analysis.get("product_name") or "（不明）"
+    cves = analysis.get("cve_ids") or []
+    cve_str = ", ".join(cves) if cves else "（CVE番号なし）"
+    comment = analysis.get("comment") or ""
+    lines = [
+        "⚠ 悪用が確認された脆弱性です。速やかなアップデートを推奨します。",
+        "",
+        f"【対象製品】\n{product}",
+        "",
+        f"【CVE】\n{cve_str}",
+    ]
+    if comment:
+        lines.append("")
+        lines.append(f"【AIコメント】\n{comment}")
+    lines.append("")
+    lines.append("速やかに最新バージョンへのアップデートをお願いします。")
+    return "\n".join(lines)
+
+
+def _build_exploited_not_target_message(analysis: dict[str, Any]) -> str:
+    """悪用された脆弱性だがWindows/Apple以外 → 対応不要メッセージ。"""
+    product = analysis.get("product_name") or "（不明）"
+    return (
+        "対応不要と判断しました。\n\n"
+        f"【検出された製品】\n{product}\n\n"
+        "【判断理由】\nWindows / Apple 以外の製品のため、対応対象外です。"
+    )
+
+
 def _extract_base_date_from_source(source_text: str) -> datetime:
     text = (source_text or "").strip()
     m = re.search(r"SIDfm\s*\((\d{4})/(\d{2})/(\d{2})\)", text)
@@ -2152,10 +2426,10 @@ def _infer_due_date_from_policy(source_text: str, max_cvss: float | None) -> tup
     base = _extract_base_date_from_source(source_text)
     text = (source_text or "").lower()
     exploit_signal = ("悪用実績" in source_text) or ("エクスプロイトコード" in source_text) or ("exploit" in text)
-    is_public_resource = any(token in text for token in ("fortigate", "cisco asa", "zeem", "メールサーバ", "mail server", "公開サーバ", "公開リソース", "インターネット公開", "dmz"))
+    is_public_resource = any(token in text for token in ("fortigate", "cisco asa", "zeem", "メールサーバ", "mail server", "公開サーバ", "公開リソース", "インターネット公開", "dmz", "almalinux 9", "almalinux9"))
 
     if max_cvss is None or max_cvss < 8.0:
-        return "要確認", "CVSS 8.0未満または不明"
+        return "対応不要", "CVSS 8.0未満または不明のため対応不要"
     if is_public_resource and max_cvss >= 9.0 and exploit_signal:
         due = _add_business_days(base, 5)
         return due.strftime("%Y/%m/%d"), "社内方針: 公開リソース×CVSS9.0以上×悪用実績あり(5営業日)"
@@ -2277,6 +2551,11 @@ def _extract_source_facts(source_text: str) -> dict[str, Any]:
         products.append("Amazon Linux")
     if re.search(r"\bios\b|iphone", lowered):
         products.append("Apple iOS")
+    # 汎用パターンで追加検出
+    for _pat, _pname in _PRODUCT_EXTRACT_PATTERNS:
+        if re.search(_pat, lowered) or re.search(_pat, entry_text_for_products.lower()):
+            if _pname not in products:
+                products.append(_pname)
     if not products:
         products.append("要確認")
     products = list(dict.fromkeys(products))
@@ -2309,7 +2588,7 @@ def _extract_source_facts(source_text: str) -> dict[str, Any]:
                 entry_scores, not entry_scores and not sbom_alma_versions, max_score, len(selected_entries))
 
     # Check is_public_resource tokens for diagnostic
-    _pub_tokens = ("fortigate", "cisco asa", "zeem", "メールサーバ", "mail server", "公開サーバ", "公開リソース", "インターネット公開", "dmz")
+    _pub_tokens = ("fortigate", "cisco asa", "zeem", "メールサーバ", "mail server", "公開サーバ", "公開リソース", "インターネット公開", "dmz", "almalinux 9", "almalinux9")
     _matched_pub = [t for t in _pub_tokens if t in lowered]
     logger.warning("[diag:facts] is_public_matched_tokens=%r", _matched_pub)
 
@@ -2427,6 +2706,16 @@ def _audit_ticket_candidate(
 
 def _infer_ticket_detail_from_source(source_text: str) -> str:
     facts = _extract_source_facts(source_text)
+    try:
+        remediation_check = _check_remediation_advice(facts, source_text)
+        if remediation_check.get("suggested_action"):
+            facts["remediation_text"] = remediation_check["suggested_action"]
+        if remediation_check.get("risk_notes"):
+            facts["remediation_risk_notes"] = remediation_check["risk_notes"]
+        if remediation_check.get("reasoning"):
+            facts["remediation_reasoning"] = remediation_check["reasoning"]
+    except Exception as exc:
+        logger.warning("Remediation check in detail-from-source failed: %s", exc)
     return _infer_ticket_detail_from_facts(facts)
 
 
@@ -2454,11 +2743,8 @@ def _infer_ticket_detail_from_facts(facts: dict[str, Any]) -> str:
             grouped_links.setdefault(key, [])
             if url not in grouped_links[key]:
                 grouped_links[key].append(url)
-    # SBOM適用版が複数ある場合、少なくとも対象欄はバージョン列挙に寄せる。
-    sbom_versions = [str(v).strip() for v in (facts.get("sbom_alma_versions") or []) if str(v).strip()]
-    if sbom_versions and len(sbom_versions) >= 2:
-        forced_products = [f"AlmaLinux{v}" for v in sorted(set(sbom_versions), key=lambda x: int(x), reverse=True)]
-        product_line = "\n".join(forced_products)
+    # SBOM適用版が複数ある場合でも、通知本文で言及されたバージョンのみを対象にする。
+    # facts["products"] は通知本文のエントリから抽出されたもの。SBOMで全上書きしない。
     if grouped_links:
         def _sort_key(k: str) -> tuple[int, str]:
             m = re.search(r"([0-9]{1,2})$", k)
@@ -2492,8 +2778,7 @@ def _infer_ticket_detail_from_facts(facts: dict[str, Any]) -> str:
         "【CVSSスコア】\n"
         f"{cvss_line}\n\n"
         "【依頼内容】\n"
-        "上記脆弱性情報をご確認いただき、バージョンアップが低い場合はバージョンアップのご対応お願いいたします。\n"
-        "対応を実施した場合はサーバのホスト名をご教示ください。\n\n"
+        f"{facts.get('remediation_text') or _DEFAULT_REMEDIATION_TEXT}\n\n"
         "【対応完了目標】\n"
         f"{facts.get('due_date') or '要確認'}"
         f"{split_note}"
@@ -2514,7 +2799,7 @@ def _infer_reasoning_from_facts(facts: dict[str, Any]) -> str:
         scores_text = ", ".join(f"{s:.1f}" for s in facts["scores"])
     else:
         scores_text = "要確認"
-    return (
+    base = (
         "【判断理由】\n"
         f"- 通知本文から対象製品を抽出: {product_text}\n"
         f"- 通知本文から脆弱性エントリを抽出: {all_entries_count}件（起票対象: {entries_count}件）\n"
@@ -2523,6 +2808,15 @@ def _infer_reasoning_from_facts(facts: dict[str, Any]) -> str:
         f"- SBOM照合で対象AlmaLinuxバージョンを適用: {', '.join(facts.get('sbom_alma_versions') or ['未適用'])}\n"
         f"- 対応完了目標を算出: {facts.get('due_date') or '要確認'}（{facts.get('due_reason') or '根拠不足'}）"
     )
+    remediation_reasoning = str(facts.get("remediation_reasoning") or "").strip()
+    remediation_risk = str(facts.get("remediation_risk_notes") or "").strip()
+    if remediation_reasoning or remediation_risk:
+        base += "\n\n【依頼内容チェック（AI）】"
+        if remediation_reasoning:
+            base += f"\n判定理由: {remediation_reasoning}"
+        if remediation_risk:
+            base += f"\n注意点: {remediation_risk}"
+    return base
 
 
 def _is_summary_low_quality(summary: str) -> bool:
@@ -2585,9 +2879,360 @@ def _should_rebuild_ticket_text(body: str) -> bool:
 
 def _build_ticket_text_from_source(source_text: str) -> str:
     summary = _infer_request_summary_from_source(source_text)
-    detail = _infer_ticket_detail_from_source(source_text)
-    reasoning = _infer_reasoning_from_source(source_text)
+    facts = _extract_source_facts(source_text)
+    # AI check: validate remediation advice
+    remediation_check = _check_remediation_advice(facts, source_text)
+    if remediation_check.get("suggested_action"):
+        facts["remediation_text"] = remediation_check["suggested_action"]
+    if remediation_check.get("risk_notes"):
+        facts["remediation_risk_notes"] = remediation_check["risk_notes"]
+    if remediation_check.get("reasoning"):
+        facts["remediation_reasoning"] = remediation_check["reasoning"]
+    detail = _infer_ticket_detail_from_facts(facts)
+    reasoning = _infer_reasoning_from_facts(facts)
     return _build_ticket_text_from_parts(summary, detail, reasoning)
+
+
+
+# ====================================================
+# Phase 2: 修正学習システム
+# ====================================================
+
+_TICKET_SECTION_MARKERS = (
+    "【対象の機器/アプリ】",
+    "【脆弱性情報】",
+    "【CVSSスコア】",
+    "【依頼内容】",
+    "【対応完了目標】",
+    "【備考】",
+)
+_TICKET_FIELD_MAP = {
+    "【対象の機器/アプリ】": "target_devices",
+    "【脆弱性情報】": "vuln_links",
+    "【CVSSスコア】": "cvss_score",
+    "【依頼内容】": "remediation_text",
+    "【対応完了目標】": "due_date",
+    "【備考】": "notes",
+}
+
+
+def _split_ticket_into_sections(ticket_text: str) -> dict[str, str]:
+    """起票テンプレートをセクションマーカーで分割し、{field_name: value} のdictを返す。"""
+    result: dict[str, str] = {}
+    body = (ticket_text or "").strip()
+    if not body:
+        return result
+    # 主要セクション以外（大分類、小分類、依頼概要）
+    for line in body.splitlines():
+        stripped = line.strip()
+        if stripped.startswith("依頼概要:"):
+            result["request_summary"] = stripped.split(":", 1)[1].strip()
+        elif stripped.startswith("大分類:"):
+            result["category_major"] = stripped.split(":", 1)[1].strip()
+        elif stripped.startswith("小分類:"):
+            result["category_minor"] = stripped.split(":", 1)[1].strip()
+    # セクションマーカーで分割
+    all_markers = list(_TICKET_SECTION_MARKERS)
+    all_markers.extend(["【判断理由】", "【管理ID】"])
+    positions: list[tuple[int, str]] = []
+    for marker in all_markers:
+        idx = body.find(marker)
+        if idx >= 0:
+            positions.append((idx, marker))
+    positions.sort(key=lambda x: x[0])
+    for i, (pos, marker) in enumerate(positions):
+        end = positions[i + 1][0] if i + 1 < len(positions) else len(body)
+        content = body[pos + len(marker):end].strip()
+        # マーカーの括弧注釈を除去（例:「（リンク貼り付け）」）
+        content = re.sub(r"^（[^）]*）\s*", "", content).strip()
+        field = _TICKET_FIELD_MAP.get(marker, marker)
+        result[field] = content
+    return result
+
+
+_CORRECTION_DETECT_FIELDS = (
+    "remediation_text", "due_date", "target_devices", "cvss_score",
+    "request_summary", "vuln_links", "notes",
+    "category_major", "category_minor",
+)
+
+
+def _detect_correction_fields(original: str, revised: str, instruction: str) -> list[tuple[str, str, str]]:
+    """修正前後のチケットを比較し、変更があった全フィールドを [(field_name, original_value, new_value), ...] で返す。"""
+    orig_sections = _split_ticket_into_sections(original)
+    rev_sections = _split_ticket_into_sections(revised)
+    changes: list[tuple[str, str, str]] = []
+    for field in _CORRECTION_DETECT_FIELDS:
+        orig_val = orig_sections.get(field, "")
+        rev_val = rev_sections.get(field, "")
+        if orig_val != rev_val and rev_val:
+            changes.append((field, orig_val, rev_val))
+    return changes
+
+
+def _detect_correction_field(original: str, revised: str, instruction: str) -> tuple[str, str, str]:
+    """修正前後のチケットを比較し、最初に検出された (field_name, original_value, new_value) を返す。"""
+    changes = _detect_correction_fields(original, revised, instruction)
+    if changes:
+        return changes[0]
+    return "", "", ""
+
+
+def _determine_pattern_key(field_name: str, source_text: str = "", facts: dict[str, Any] | None = None) -> str:
+    """修正フィールドに応じたパターンキーを決定する。"""
+    if not field_name:
+        return "*"
+    if field_name == "due_date" and facts:
+        max_score = facts.get("max_score")
+        if isinstance(max_score, (int, float)):
+            if max_score >= 9.0:
+                return "cvss>=9.0"
+            if max_score >= 7.0:
+                return "cvss>=7.0"
+    if field_name in ("remediation_text", "target_devices"):
+        # 製品名を検出
+        source = source_text or ""
+        for product in ("AlmaLinux", "CentOS", "Ubuntu", "Windows", "Apache", "nginx"):
+            if product.lower() in source.lower():
+                return product
+    return "*"
+
+
+def _save_ticket_preference(
+    space_id: str, field_name: str, pattern_key: str,
+    preferred_value: str, original_value: str, created_by: str,
+) -> None:
+    """修正内容をBQのticket_preferencesテーブルに保存。同一レコードがあればcorrection_countをインクリメント。"""
+    table_id = _get_config("BQ_PREFERENCES_TABLE_ID", "vuln-agent-bq-preferences-table-id", "").strip()
+    if not table_id or not space_id or not field_name:
+        return
+    try:
+        from google.cloud import bigquery
+
+        project_id = _get_project_id() or None
+        client = bigquery.Client(project=project_id)
+        # 既存レコードを検索
+        query = f"""
+            SELECT preference_id, correction_count
+            FROM `{table_id}`
+            WHERE space_id = @space_id
+              AND field_name = @field_name
+              AND pattern_key = @pattern_key
+            ORDER BY updated_at DESC
+            LIMIT 1
+        """
+        job_config = bigquery.QueryJobConfig(
+            query_parameters=[
+                bigquery.ScalarQueryParameter("space_id", "STRING", space_id),
+                bigquery.ScalarQueryParameter("field_name", "STRING", field_name),
+                bigquery.ScalarQueryParameter("pattern_key", "STRING", pattern_key),
+            ]
+        )
+        rows = list(client.query(query, job_config=job_config).result())
+        now = datetime.now(timezone.utc).isoformat()
+        if rows:
+            # 既存レコードをUPDATE（correction_countインクリメント）
+            existing = rows[0]
+            pref_id = str(getattr(existing, "preference_id", ""))
+            count = int(getattr(existing, "correction_count", 0) or 0) + 1
+            update_query = f"""
+                UPDATE `{table_id}`
+                SET preferred_value = @preferred_value,
+                    original_value = @original_value,
+                    correction_count = @correction_count,
+                    updated_at = @updated_at
+                WHERE preference_id = @preference_id
+            """
+            update_config = bigquery.QueryJobConfig(
+                query_parameters=[
+                    bigquery.ScalarQueryParameter("preferred_value", "STRING", preferred_value),
+                    bigquery.ScalarQueryParameter("original_value", "STRING", original_value),
+                    bigquery.ScalarQueryParameter("correction_count", "INT64", count),
+                    bigquery.ScalarQueryParameter("updated_at", "TIMESTAMP", now),
+                    bigquery.ScalarQueryParameter("preference_id", "STRING", pref_id),
+                ]
+            )
+            client.query(update_query, job_config=update_config).result()
+        else:
+            # 新規レコードをINSERT
+            row = {
+                "preference_id": str(uuid.uuid4()),
+                "space_id": space_id,
+                "field_name": field_name,
+                "pattern_key": pattern_key,
+                "preferred_value": preferred_value,
+                "original_value": original_value,
+                "correction_count": 1,
+                "created_at": now,
+                "updated_at": now,
+                "created_by": created_by or "",
+                "extra": "{}",
+            }
+            errors = client.insert_rows_json(table_id, [row])
+            if errors:
+                logger.warning("Failed to insert ticket preference: %s", errors)
+    except Exception as exc:
+        logger.warning("_save_ticket_preference failed: %s", exc)
+
+
+def _save_correction_as_preference(
+    event: dict[str, Any], original_ticket: str, revised_ticket: str, instruction: str,
+) -> None:
+    """修正成功時に自動的に学習データとしてBQに保存する。全変更フィールドを保存。"""
+    changes = _detect_correction_fields(original_ticket, revised_ticket, instruction)
+    if not changes:
+        return
+    message = event.get("message") or {}
+    thread_name = str(((message.get("thread") or {}).get("name") or "")).strip()
+    space_id = _extract_space_name(event, thread_name)
+    if not space_id:
+        return
+    user_name = str((event.get("user") or {}).get("name") or "")
+    for field_name, original_value, new_value in changes:
+        pattern_key = _determine_pattern_key(field_name)
+        _save_ticket_preference(
+            space_id=space_id,
+            field_name=field_name,
+            pattern_key=pattern_key,
+            preferred_value=new_value,
+            original_value=original_value,
+            created_by=user_name,
+        )
+
+
+# ====================================================
+# Phase 3: 学習済みプリファレンスの適用
+# ====================================================
+
+_PREFERENCE_STRONG_THRESHOLD = 3  # correction_count >= 3 でAI上書きしない
+
+
+def _fetch_ticket_preferences(
+    event: dict[str, Any], product_names: list[str] | None = None, cvss_score: float | None = None,
+) -> dict[str, str]:
+    """空間ごとの学習済みプリファレンスをBQから取得し、{field_name: preferred_value} を返す。"""
+    table_id = _get_config("BQ_PREFERENCES_TABLE_ID", "vuln-agent-bq-preferences-table-id", "").strip()
+    if not table_id:
+        return {}
+    message = event.get("message") or {}
+    thread_name = str(((message.get("thread") or {}).get("name") or "")).strip()
+    space_id = _extract_space_name(event, thread_name)
+    if not space_id:
+        return {}
+    try:
+        from google.cloud import bigquery
+
+        project_id = _get_project_id() or None
+        client = bigquery.Client(project=project_id)
+        query = f"""
+            SELECT field_name, pattern_key, preferred_value, correction_count
+            FROM `{table_id}`
+            WHERE space_id = @space_id
+            ORDER BY correction_count DESC, updated_at DESC
+        """
+        job_config = bigquery.QueryJobConfig(
+            query_parameters=[
+                bigquery.ScalarQueryParameter("space_id", "STRING", space_id),
+            ]
+        )
+        rows = list(client.query(query, job_config=job_config).result())
+        if not rows:
+            return {}
+
+        # パターンキーのマッチング: 具体的なもの優先、次に "*"
+        candidate_patterns: list[str] = ["*"]
+        for p in (product_names or []):
+            candidate_patterns.append(p)
+        if isinstance(cvss_score, (int, float)):
+            if cvss_score >= 9.0:
+                candidate_patterns.append("cvss>=9.0")
+            if cvss_score >= 7.0:
+                candidate_patterns.append("cvss>=7.0")
+
+        result: dict[str, str] = {}
+        result_counts: dict[str, int] = {}
+        for row in rows:
+            field = str(getattr(row, "field_name", "") or "").strip()
+            pattern = str(getattr(row, "pattern_key", "") or "").strip()
+            value = str(getattr(row, "preferred_value", "") or "").strip()
+            count = int(getattr(row, "correction_count", 0) or 0)
+            if not field or not value:
+                continue
+            if pattern not in candidate_patterns:
+                continue
+            # 具体的なパターンを優先（"*" より製品名等を優先）
+            existing_count = result_counts.get(field, -1)
+            is_more_specific = pattern != "*" and result.get(field) and result_counts.get(field, 0) <= count
+            is_first = field not in result
+            is_higher_count = count > existing_count
+            if is_first or is_more_specific or (pattern != "*" and is_higher_count):
+                result[field] = value
+                result_counts[field] = count
+        return result
+    except Exception as exc:
+        logger.warning("_fetch_ticket_preferences failed: %s", exc)
+        return {}
+
+
+def _apply_preferences_to_facts(
+    facts: dict[str, Any], preferences: dict[str, str],
+) -> dict[str, Any]:
+    """学習済みプリファレンスをmerged_factsに適用する。"""
+    if not preferences:
+        return facts
+    field_to_fact_key = {
+        "remediation_text": "remediation_text",
+        "due_date": "due_date",
+        "target_devices": "products",
+    }
+    for field, value in preferences.items():
+        fact_key = field_to_fact_key.get(field)
+        if not fact_key:
+            continue
+        if fact_key == "products" and value:
+            # products はリスト型
+            facts[fact_key] = [v.strip() for v in value.split("\n") if v.strip()]
+        else:
+            facts[fact_key] = value
+    return facts
+
+
+def _get_preference_correction_counts(
+    event: dict[str, Any],
+) -> dict[str, int]:
+    """各フィールドのcorrection_countを返す。"""
+    table_id = _get_config("BQ_PREFERENCES_TABLE_ID", "vuln-agent-bq-preferences-table-id", "").strip()
+    if not table_id:
+        return {}
+    message = event.get("message") or {}
+    thread_name = str(((message.get("thread") or {}).get("name") or "")).strip()
+    space_id = _extract_space_name(event, thread_name)
+    if not space_id:
+        return {}
+    try:
+        from google.cloud import bigquery
+
+        project_id = _get_project_id() or None
+        client = bigquery.Client(project=project_id)
+        query = f"""
+            SELECT field_name, MAX(correction_count) AS max_count
+            FROM `{table_id}`
+            WHERE space_id = @space_id
+            GROUP BY field_name
+        """
+        job_config = bigquery.QueryJobConfig(
+            query_parameters=[
+                bigquery.ScalarQueryParameter("space_id", "STRING", space_id),
+            ]
+        )
+        rows = list(client.query(query, job_config=job_config).result())
+        return {
+            str(getattr(r, "field_name", "")): int(getattr(r, "max_count", 0) or 0)
+            for r in rows
+        }
+    except Exception as exc:
+        logger.warning("_get_preference_correction_counts failed: %s", exc)
+        return {}
 
 
 def _build_ticket_text_from_parts(summary: str, detail: str, reasoning: str) -> str:
@@ -2674,6 +3319,56 @@ def _format_ticket_like_response(text: str, source_text: str = "") -> str:
     ).strip()
 
 
+def _handle_paste_back_revision(
+    event: dict[str, Any], pasted_text: str, history_key: str,
+) -> str:
+    """ユーザーがコピペ修正したチケットテンプレートを受け取り、新版として保存する。
+
+    ユーザーの修正フロー:
+    1. ボットが出力したチケットテンプレートをコピー
+    2. チャット入力欄に貼り付けて直接テキストを編集
+    3. 送信 → この関数で受け取る
+
+    Returns:
+        確認メッセージ文字列。
+    """
+    # BQ履歴から直前のチケットを取得（差分検出用）
+    previous_ticket = ""
+    try:
+        bq_record = _fetch_latest_ticket_record_from_history(event)
+        bq_copy = str(bq_record.get("copy_paste_text") or "")
+        bq_reason = str(bq_record.get("reasoning_text") or "")
+        if bq_copy:
+            previous_ticket = bq_copy
+            if bq_reason:
+                previous_ticket += "\n\n" + bq_reason
+    except Exception as exc:
+        logger.warning("paste_back: failed to fetch previous ticket: %s", exc)
+
+    # 修正後チケットをBQ履歴に保存
+    try:
+        _save_ticket_record_to_history(event, pasted_text, source="human_review")
+    except Exception as exc:
+        logger.warning("paste_back: failed to save revised ticket: %s", exc)
+
+    # 修正差分を学習データとして保存
+    if previous_ticket:
+        try:
+            _save_correction_as_preference(event, previous_ticket, pasted_text, "ユーザー直接編集")
+        except Exception as exc:
+            logger.warning("paste_back: failed to save correction preference: %s", exc)
+
+    _remember_turn(history_key, pasted_text, "（修正版チケットを受領しました）")
+
+    return (
+        "修正版チケットを受領しました。以下の内容で更新済みです。\n\n"
+        "━━━━━━━━━━━━━━━\n"
+        f"{pasted_text}\n"
+        "━━━━━━━━━━━━━━━\n\n"
+        "さらに修正が必要な場合は、上記をコピーして編集のうえ再送信してください。"
+    )
+
+
 def _process_message_event(event: dict[str, Any], user_name: str) -> str | None:
     raw_text = str(((event.get("message") or {}).get("text") or "")).strip()
     prompt = _clean_chat_text(event)
@@ -2682,12 +3377,18 @@ def _process_message_event(event: dict[str, Any], user_name: str) -> str | None:
     prefer_ticket_format = False
     save_ticket_history = False
     manual_backfill_mode = False
+    intent = ""
     raw_body_text = _strip_mentions_preserve_lines(raw_text)
     source_text_for_quality = ""
     root_text = _fetch_thread_root_message_text(event)
     if not root_text:
         root_text = _get_cached_thread_root_text(event)
     recent_turns = _get_recent_turns(history_key, max_turns=3)
+
+    # ---- paste-back検出: ユーザーがチケットテンプレートをコピペ編集して再送信 ----
+    if not is_gmail_post and "【起票用（コピペ）】" in raw_body_text:
+        logger.info("paste_back: detected user-edited ticket template in message")
+        return _handle_paste_back_revision(event, raw_body_text, history_key)
 
     if is_gmail_post:
         message_payload_text = _extract_message_text_payload((event.get("message") or {}))
@@ -2718,10 +3419,10 @@ def _process_message_event(event: dict[str, Any], user_name: str) -> str | None:
         )
         if intent == "clarification":
             return _build_clarification_message()
-        if bool(intent_plan.get("needs_ticket_format")) or intent in {"ticket_generate", "ticket_revise"}:
+        if bool(intent_plan.get("needs_ticket_format")) or intent == "ticket_generate":
             prefer_ticket_format = True
             save_ticket_history = True
-            if intent == "ticket_revise" or _contains_manual_ticket_trigger(raw_body_text):
+            if _contains_manual_ticket_trigger(raw_body_text):
                 manual_backfill_mode = True
             # 1) user provided body
             candidate_source = _resolve_manual_backfill_source_text(event, raw_body_text)
@@ -2733,11 +3434,6 @@ def _process_message_event(event: dict[str, Any], user_name: str) -> str | None:
                 history_ticket = _fetch_latest_ticket_record_from_history(event)
                 history_message = _build_history_ticket_message(history_ticket)
                 if history_message:
-                    candidate_source = history_message
-            if intent == "ticket_revise" and candidate_source and not _contains_specific_vuln_signal(candidate_source):
-                history_ticket = _fetch_latest_ticket_record_from_history(event)
-                history_message = _build_history_ticket_message(history_ticket)
-                if history_message and _contains_vulnerability_signal(history_message):
                     candidate_source = history_message
             source_text_for_quality = candidate_source
             if source_text_for_quality:
@@ -2751,12 +3447,37 @@ def _process_message_event(event: dict[str, Any], user_name: str) -> str | None:
                 return _build_clarification_message()
 
     if prefer_ticket_format:
+        # SBOMフィルタリング: 最初に製品をチェックし、未登録なら即スキップ
+        sbom_should_skip, sbom_detected_products, sbom_reason = _check_sbom_registration(source_text_for_quality)
+        if sbom_should_skip:
+            response_text = _build_sbom_not_registered_message(sbom_detected_products, sbom_reason)
+            _remember_turn(history_key, _clean_chat_text(event), response_text)
+            return response_text
+
+        # メッセージフォーマット分類: 【悪用された脆弱性】は専用フローへ
+        msg_format = _classify_message_format(source_text_for_quality)
+        if msg_format == _MSG_FORMAT_EXPLOITED:
+            analysis = _analyze_exploited_vuln(source_text_for_quality)
+            if not analysis:
+                # Gemini障害時は安全側（確認依頼）にフォールバック
+                response_text = (
+                    "⚠ 悪用が確認された脆弱性の通知です（AI分析が利用できませんでした）。\n"
+                    "内容を確認の上、速やかにアップデートの要否を判断してください。"
+                )
+            elif analysis.get("is_windows_or_apple"):
+                response_text = _build_exploited_update_message(analysis)
+            else:
+                response_text = _build_exploited_not_target_message(analysis)
+            _remember_turn(history_key, _clean_chat_text(event), response_text)
+            return response_text
+
         if is_gmail_post and not _contains_specific_vuln_signal(source_text_for_quality):
             return _build_low_quality_ticket_message()
 
         hypothesis_instruction = ""
         if manual_backfill_mode and prompt:
             hypothesis_instruction = prompt
+
         hypothesis = _run_hypothesis_pipeline(source_text_for_quality, history_key, user_instruction=hypothesis_instruction)
         tool_calls_used = 0
         if tool_calls_used >= _TOOL_CALL_LIMIT:
@@ -2766,6 +3487,35 @@ def _process_message_event(event: dict[str, Any], user_name: str) -> str | None:
             return response_text
         merged_facts = _merge_hypothesis_with_tool_facts(hypothesis, source_text_for_quality)
         tool_calls_used += 1
+
+        # --- 学習済みプリファレンスの適用 ---
+        preference_counts: dict[str, int] = {}
+        try:
+            product_names = merged_facts.get("products") or []
+            max_score = merged_facts.get("max_score")
+            preferences = _fetch_ticket_preferences(event, product_names, max_score)
+            if preferences:
+                merged_facts = _apply_preferences_to_facts(merged_facts, preferences)
+                preference_counts = _get_preference_correction_counts(event)
+                logger.info("Applied %d ticket preferences from learning system", len(preferences))
+        except Exception as exc:
+            logger.warning("Preference application failed: %s", exc)
+
+        # --- 【依頼内容】AIチェック ---
+        try:
+            remediation_check = _check_remediation_advice(merged_facts, source_text_for_quality)
+            # correction_count >= 3 のプリファレンスはAI上書きしない
+            remediation_locked = preference_counts.get("remediation_text", 0) >= _PREFERENCE_STRONG_THRESHOLD
+            if not remediation_locked:
+                if remediation_check.get("suggested_action"):
+                    merged_facts["remediation_text"] = remediation_check["suggested_action"]
+            if remediation_check.get("risk_notes"):
+                merged_facts["remediation_risk_notes"] = remediation_check["risk_notes"]
+            if remediation_check.get("reasoning"):
+                merged_facts["remediation_reasoning"] = remediation_check["reasoning"]
+        except Exception as exc:
+            logger.warning("Remediation check in main flow failed: %s", exc)
+
         if manual_backfill_mode and not merged_facts.get("entries") and not _contains_specific_vuln_signal(source_text_for_quality):
             return _build_backfill_guidance_message()
 
