@@ -6,8 +6,7 @@ COPY --from=ghcr.io/astral-sh/uv:latest /uv /bin/uv
 WORKDIR /app
 
 COPY requirements.txt ./
-RUN --mount=type=cache,target=/root/.cache/uv \
-    uv pip install --system --compile-bytecode -r requirements.txt
+RUN uv pip install --system --compile-bytecode -r requirements.txt
 
 # ===== Runtime Stage =====
 FROM python:3.12-slim
