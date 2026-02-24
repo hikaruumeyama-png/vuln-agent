@@ -165,20 +165,15 @@ steps:
         adk_bin=""
         if command -v adk >/dev/null 2>&1; then
           adk_bin="$$(command -v adk)"
-        elif [ -x /workspace/.venv-adk/bin/adk ]; then
-          adk_bin="/workspace/.venv-adk/bin/adk"
         else
-          # uv をインストールして使用（pip の10倍高速）
-          pip install --quiet uv 2>/dev/null || true
+          # uv でシステムに直接インストール（venv不要・pip比10倍高速）
+          pip install --quiet --break-system-packages uv 2>/dev/null || true
           if command -v uv >/dev/null 2>&1; then
-            uv venv /workspace/.venv-adk
-            uv pip install --python /workspace/.venv-adk/bin/python google-adk
+            uv pip install --system google-adk
           else
-            python3 -m venv /workspace/.venv-adk
-            /workspace/.venv-adk/bin/python -m pip install -q --upgrade pip
-            /workspace/.venv-adk/bin/python -m pip install -q google-adk
+            python3 -m pip install -q --break-system-packages google-adk
           fi
-          adk_bin="/workspace/.venv-adk/bin/adk"
+          adk_bin="$$(command -v adk || echo /usr/local/bin/adk)"
         fi
 
         if [ ! -x "$$adk_bin" ]; then
