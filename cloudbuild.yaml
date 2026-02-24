@@ -120,22 +120,30 @@ steps:
           echo "[Step 1/5] Agent が対象外のため .env 生成をスキップします"
           exit 0
         fi
-        echo "[Step 1/5] Secret Manager から .env を生成します"
-        cat > agent/.env <<EOF
-        SBOM_DATA_BACKEND=$(gcloud secrets versions access latest --secret=vuln-agent-sbom-data-backend 2>/dev/null || echo 'sheets')
-        SBOM_SPREADSHEET_ID=$(gcloud secrets versions access latest --secret=vuln-agent-sbom-spreadsheet-id 2>/dev/null || echo '')
-        SBOM_SHEET_NAME=$(gcloud secrets versions access latest --secret=vuln-agent-sbom-sheet-name 2>/dev/null || echo 'SBOM')
-        OWNER_SHEET_NAME=$(gcloud secrets versions access latest --secret=vuln-agent-owner-sheet-name 2>/dev/null || echo '担当者マッピング')
-        BQ_SBOM_TABLE_ID=$(gcloud secrets versions access latest --secret=vuln-agent-bq-sbom-table-id 2>/dev/null || echo '')
-        BQ_OWNER_MAPPING_TABLE_ID=$(gcloud secrets versions access latest --secret=vuln-agent-bq-owner-table-id 2>/dev/null || echo '')
-        DEFAULT_CHAT_SPACE_ID=$(gcloud secrets versions access latest --secret=vuln-agent-chat-space-id 2>/dev/null || echo '')
-        BQ_HISTORY_TABLE_ID=$(gcloud secrets versions access latest --secret=vuln-agent-bq-table-id 2>/dev/null || echo '')
-        REMOTE_AGENT_MASTER=$(gcloud secrets versions access latest --secret=vuln-agent-master-agent-resource-name 2>/dev/null || echo '')
-        REMOTE_AGENT_TEST=$(gcloud secrets versions access latest --secret=vuln-agent-test-dialog-resource-name 2>/dev/null || echo '')
-        AGENT_MODEL=$(gcloud secrets versions access latest --secret=vuln-agent-model-name 2>/dev/null || echo '')
-        GCP_PROJECT_ID=${PROJECT_ID}
-        GCP_LOCATION=${_REGION}
-        EOF
+        echo "[Step 1/5] Secret Manager から .env を生成します（並列取得）"
+        fetch_secret() {
+          local key="$$1" secret="$$2" default="$$3"
+          local val
+          val="$$(gcloud secrets versions access latest --secret="$$secret" 2>/dev/null || echo "$$default")"
+          echo "$${key}=$${val}"
+        }
+
+        fetch_secret "SBOM_DATA_BACKEND" "vuln-agent-sbom-data-backend" "sheets" > /tmp/s01 &
+        fetch_secret "SBOM_SPREADSHEET_ID" "vuln-agent-sbom-spreadsheet-id" "" > /tmp/s02 &
+        fetch_secret "SBOM_SHEET_NAME" "vuln-agent-sbom-sheet-name" "SBOM" > /tmp/s03 &
+        fetch_secret "OWNER_SHEET_NAME" "vuln-agent-owner-sheet-name" "担当者マッピング" > /tmp/s04 &
+        fetch_secret "BQ_SBOM_TABLE_ID" "vuln-agent-bq-sbom-table-id" "" > /tmp/s05 &
+        fetch_secret "BQ_OWNER_MAPPING_TABLE_ID" "vuln-agent-bq-owner-table-id" "" > /tmp/s06 &
+        fetch_secret "DEFAULT_CHAT_SPACE_ID" "vuln-agent-chat-space-id" "" > /tmp/s07 &
+        fetch_secret "BQ_HISTORY_TABLE_ID" "vuln-agent-bq-table-id" "" > /tmp/s08 &
+        fetch_secret "REMOTE_AGENT_MASTER" "vuln-agent-master-agent-resource-name" "" > /tmp/s09 &
+        fetch_secret "REMOTE_AGENT_TEST" "vuln-agent-test-dialog-resource-name" "" > /tmp/s10 &
+        fetch_secret "AGENT_MODEL" "vuln-agent-model-name" "" > /tmp/s11 &
+        wait
+
+        cat /tmp/s01 /tmp/s02 /tmp/s03 /tmp/s04 /tmp/s05 /tmp/s06 /tmp/s07 /tmp/s08 /tmp/s09 /tmp/s10 /tmp/s11 > agent/.env
+        echo "GCP_PROJECT_ID=${PROJECT_ID}" >> agent/.env
+        echo "GCP_LOCATION=${_REGION}" >> agent/.env
     waitFor:
       - detect-changes
 
@@ -156,18 +164,16 @@ steps:
 
         adk_bin=""
         if command -v adk >/dev/null 2>&1; then
-          adk_bin="$(command -v adk)"
-        elif [ -x /workspace/.venv-adk/bin/adk ]; then
-          adk_bin="/workspace/.venv-adk/bin/adk"
+          adk_bin="$$(command -v adk)"
         else
-          if python3 -m venv /workspace/.venv-adk 2>/tmp/venv_err.log; then
-            /workspace/.venv-adk/bin/python -m pip install -q --upgrade pip
-            /workspace/.venv-adk/bin/python -m pip install -q google-adk
-            adk_bin="/workspace/.venv-adk/bin/adk"
+          # uv でシステムに直接インストール（venv不要・pip比10倍高速）
+          python3 -m pip install --quiet --break-system-packages uv 2>/dev/null || true
+          if command -v uv >/dev/null 2>&1; then
+            UV_BREAK_SYSTEM_PACKAGES=1 uv pip install --system google-adk
           else
-            python3 -m pip install -q --user --break-system-packages google-adk
-            adk_bin="$(python3 -m site --user-base)/bin/adk"
+            python3 -m pip install -q --break-system-packages google-adk
           fi
+          adk_bin="$$(command -v adk || echo /usr/local/bin/adk)"
         fi
 
         if [ ! -x "$$adk_bin" ]; then
@@ -211,33 +217,60 @@ steps:
           local model_name="$$2"
           local secret_name="$$3"
 
-          grep -v '^AGENT_MODEL=' .env > .env.variant.tmp || true
-          printf 'AGENT_MODEL=%s\n' "$$model_name" >> .env.variant.tmp
+          # 並列実行時の tmp ディレクトリ衝突を回避するため作業コピーを作成
+          local work_dir="/workspace/variant_$${display_name}"
+          mkdir -p "$$work_dir"
+          cp -r /workspace/agent/* "$$work_dir/"
+
+          local env_tmp="$${work_dir}/.env.variant.tmp"
+          grep -v '^AGENT_MODEL=' /workspace/agent/.env > "$$env_tmp" || true
+          printf 'AGENT_MODEL=%s\n' "$$model_name" >> "$$env_tmp"
+
+          cd "$$work_dir"
           "$$adk_bin" deploy agent_engine \
             --project=${PROJECT_ID} \
             --region=${_REGION} \
             --display_name="$$display_name" \
-            --env_file=.env.variant.tmp .
+            --env_file="$$env_tmp" .
+          cd /workspace/agent
 
           local variant_latest
-          engines_json="$(curl -sSf -H "Authorization: Bearer $$token" \
+          engines_json="$$(curl -sSf -H "Authorization: Bearer $$token" \
             "$$api_base/projects/${PROJECT_ID}/locations/${_REGION}/reasoningEngines")"
-          variant_latest="$(printf '%s' "$$engines_json" | python3 -c 'import json,sys; display_name=sys.argv[1]; engines=json.load(sys.stdin).get("reasoningEngines", []); filtered=[e for e in engines if e.get("displayName")==display_name and e.get("name")]; filtered.sort(key=lambda e: e.get("createTime", ""), reverse=True); print(filtered[0]["name"] if filtered else "")' "$$display_name")"
+          variant_latest="$$(printf '%s' "$$engines_json" | python3 -c 'import json,sys; display_name=sys.argv[1]; engines=json.load(sys.stdin).get("reasoningEngines", []); filtered=[e for e in engines if e.get("displayName")==display_name and e.get("name")]; filtered.sort(key=lambda e: e.get("createTime", ""), reverse=True); print(filtered[0]["name"] if filtered else "")' "$$display_name")"
           if [ -z "$$variant_latest" ]; then
-            engines_json="$(curl -sSf -H "Authorization: Bearer $$token" \
+            sleep 5
+            engines_json="$$(curl -sSf -H "Authorization: Bearer $$token" \
               "$$api_base/projects/${PROJECT_ID}/locations/${_REGION}/reasoningEngines")"
-            variant_latest="$(printf '%s' "$$engines_json" | python3 -c 'import json,sys; display_name=sys.argv[1]; engines=json.load(sys.stdin).get("reasoningEngines", []); filtered=[e for e in engines if e.get("displayName")==display_name and e.get("name")]; filtered.sort(key=lambda e: e.get("createTime", ""), reverse=True); print(filtered[0]["name"] if filtered else "")' "$$display_name")"
+            variant_latest="$$(printf '%s' "$$engines_json" | python3 -c 'import json,sys; display_name=sys.argv[1]; engines=json.load(sys.stdin).get("reasoningEngines", []); filtered=[e for e in engines if e.get("displayName")==display_name and e.get("name")]; filtered.sort(key=lambda e: e.get("createTime", ""), reverse=True); print(filtered[0]["name"] if filtered else "")' "$$display_name")"
           fi
           if [ -z "$$variant_latest" ]; then
             echo "エラー: $$display_name の最新 Engine を特定できませんでした"
             exit 1
           fi
           printf '%s' "$$variant_latest" | gcloud secrets versions add "$$secret_name" --data-file=- >/dev/null
-          rm -f .env.variant.tmp
+          rm -rf "$$work_dir"
         }
 
-        deploy_variant "${_AGENT_NAME}-flash" "gemini-2.5-flash" "vuln-agent-resource-name-flash"
-        deploy_variant "${_AGENT_NAME}-pro" "gemini-2.5-pro" "vuln-agent-resource-name-pro"
+        # Flash と Pro を並列デプロイ
+        deploy_variant "${_AGENT_NAME}-flash" "gemini-2.5-flash" "vuln-agent-resource-name-flash" > /tmp/deploy_flash.log 2>&1 &
+        pid_flash=$$!
+        deploy_variant "${_AGENT_NAME}-pro" "gemini-2.5-pro" "vuln-agent-resource-name-pro" > /tmp/deploy_pro.log 2>&1 &
+        pid_pro=$$!
+
+        # 両方の完了を待つ
+        flash_ok=true
+        pro_ok=true
+        wait $$pid_flash || flash_ok=false
+        wait $$pid_pro || pro_ok=false
+
+        cat /tmp/deploy_flash.log
+        cat /tmp/deploy_pro.log
+
+        if [ "$$flash_ok" = "false" ] || [ "$$pro_ok" = "false" ]; then
+          echo "エラー: バリアントデプロイに失敗しました"
+          exit 1
+        fi
 
         protected_display_names="test-dialog-agent,SecSys Router Engine Tokyo v2"
         retention_count="${_AGENT_ENGINE_RETENTION}"
@@ -253,21 +286,22 @@ steps:
         if [ -n "$$delete_targets" ]; then
           echo "Old Agent Engine cleanup targets:"
           printf '%s\n' "$$delete_targets"
+          pids=()
           while IFS= read -r engine_name; do
             [ -z "$$engine_name" ] && continue
-            deleted=false
-            for attempt in 1 2 3 4 5; do
-              http_code="$(curl -s -o /tmp/engine_delete_response.txt -w "%{http_code}" -X DELETE -H "Authorization: Bearer $$token" "$$api_base/$$engine_name?force=true" || true)"
-              if [ "$$http_code" = "200" ] || [ "$$http_code" = "204" ] || [ "$$http_code" = "404" ]; then
-                deleted=true
-                break
-              fi
-              sleep $$((attempt * 2))
-            done
-            if [ "$$deleted" = "false" ]; then
+            (
+              for attempt in 1 2 3; do
+                http_code="$$(curl -s -o /dev/null -w "%{http_code}" -X DELETE -H "Authorization: Bearer $$token" "$$api_base/$$engine_name?force=true" || true)"
+                if [ "$$http_code" = "200" ] || [ "$$http_code" = "204" ] || [ "$$http_code" = "404" ]; then
+                  exit 0
+                fi
+                sleep $$((attempt * 2))
+              done
               echo "WARN: failed to delete $$engine_name after retries"
-            fi
+            ) &
+            pids+=($$!)
           done <<< "$$delete_targets"
+          for p in "$${pids[@]}"; do wait "$$p" || true; done
         fi
     waitFor:
       - build-env
@@ -413,7 +447,7 @@ steps:
         gsutil web set -m index.html -e index.html $$BUCKET
         gsutil -m rsync -r -d web $$BUCKET
     waitFor:
-      - "-"
+      - detect-changes
 
 options:
   logging: CLOUD_LOGGING_ONLY
