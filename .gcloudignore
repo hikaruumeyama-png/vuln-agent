@@ -1,0 +1,46 @@
+# Git
+.git/
+.github/
+
+# Documentation
+docs/
+*.md
+!requirements.txt
+
+# Local/temp files
+tmp_local/
+__pycache__/
+*.pyc
+*.pyo
+.env
+.env.*
+!.env.example
+
+# IDE/Editor
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# Virtual environments
+.venv/
+.venv-adk/
+venv/
+
+# Claude Code
+.claude/
+
+# Build artifacts
+.deploy_flags
+
+# Node
+node_modules/
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Analysis reports (local only)
+.infra_analysis_report.md
+.pr_body_*.md
