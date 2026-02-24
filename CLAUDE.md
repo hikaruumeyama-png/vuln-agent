@@ -26,7 +26,6 @@ agent/                  # メインエージェント (ADK)
 ├── requirements.txt      # Agent Engine ランタイム依存
 ├── .env.example          # 環境変数テンプレート
 └── tools/                # ツール群
-    ├── gmail_tools.py      # Deprecated（互換のためのプレースホルダ）
     ├── sheets_tools.py     # SBOM検索・担当者マッピング (Sheets/BigQuery両対応)
     ├── chat_tools.py       # Google Chat通知 (カード形式)
     ├── history_tools.py    # BigQuery対応履歴記録
@@ -50,7 +49,6 @@ web/                    # ブラウザUI (静的配信)
 docs/                   # セットアップガイド
 setup_cloud.sh          # 初回セットアップ (全自動)
 cloudbuild.yaml         # CI/CDパイプライン
-setup_gmail_oauth.py    # Deprecated (Gmail経路廃止)
 ```
 
 ## コーディング規約
