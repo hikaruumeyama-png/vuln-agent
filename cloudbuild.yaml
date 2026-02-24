@@ -167,9 +167,9 @@ steps:
           adk_bin="$$(command -v adk)"
         else
           # uv でシステムに直接インストール（venv不要・pip比10倍高速）
-          pip install --quiet --break-system-packages uv 2>/dev/null || true
+          python3 -m pip install --quiet --break-system-packages uv 2>/dev/null || true
           if command -v uv >/dev/null 2>&1; then
-            uv pip install --system google-adk
+            UV_BREAK_SYSTEM_PACKAGES=1 uv pip install --system google-adk
           else
             python3 -m pip install -q --break-system-packages google-adk
           fi
