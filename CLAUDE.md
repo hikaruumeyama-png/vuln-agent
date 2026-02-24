@@ -88,3 +88,6 @@ setup_gmail_oauth.py    # Deprecated (Gmail経路廃止)
 - SBOMデータソースは `SBOM_DATA_BACKEND` で sheets/bigquery/auto を切替可能
 - Agent Engine デプロイ後のリソース名は `vuln-agent-resource-name` シークレットに自動保存
 - Cloud Build の `_AGENT_ENGINE_RETENTION` で古いエンジンの自動削除数を制御
+
+## 言語設定
+- 常に日本語で回答すること。英語での回答は禁止。

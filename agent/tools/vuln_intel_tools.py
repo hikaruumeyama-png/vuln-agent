@@ -7,8 +7,12 @@ Vulnerability Intelligence Tools
 from __future__ import annotations
 
 import json
+import logging
+import time
 from typing import Any
 from urllib import parse, request
+
+logger = logging.getLogger(__name__)
 
 
 def get_nvd_cve_details(cve_id: str) -> dict[str, Any]:
@@ -88,8 +92,7 @@ def search_osv_vulnerabilities(
         method="POST",
     )
     try:
-        with request.urlopen(req, timeout=20) as resp:
-            payload = json.loads(resp.read().decode("utf-8", errors="replace"))
+        payload = json.loads(_fetch_with_retry(req, timeout=20).decode("utf-8", errors="replace"))
     except Exception as exc:
         return {"status": "error", "message": f"osv query failed: {exc}"}
 
@@ -128,8 +131,31 @@ def _http_get_json(url: str) -> dict[str, Any]:
         url,
         headers={"User-Agent": "vuln-agent/1.0 (+https://github.com/hikaruumeyama-png/vuln-agent)"},
     )
-    with request.urlopen(req, timeout=20) as resp:
-        return json.loads(resp.read().decode("utf-8", errors="replace"))
+    return json.loads(_fetch_with_retry(req, timeout=20).decode("utf-8", errors="replace"))
+
+
+def _fetch_with_retry(url_or_req: str | request.Request, timeout: int = 10, max_retries: int = 3) -> bytes:
+    """指数バックオフ付き HTTP リトライ。"""
+    last_exc: Exception | None = None
+    for attempt in range(max_retries):
+        try:
+            with request.urlopen(url_or_req, timeout=timeout) as resp:
+                return resp.read()
+        except Exception as exc:
+            last_exc = exc
+            if attempt < max_retries - 1:
+                wait = 2**attempt
+                logger.warning(
+                    "API fetch failed (attempt %d/%d), retrying in %ds: %s",
+                    attempt + 1,
+                    max_retries,
+                    wait,
+                    exc,
+                )
+                time.sleep(wait)
+    if last_exc is not None:
+        raise last_exc
+    raise RuntimeError("fetch failed without exception")
 
 
 def _pick_description(descriptions: list[dict[str, Any]]) -> str:

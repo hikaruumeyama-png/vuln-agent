@@ -247,9 +247,11 @@ DATASET_ID="vuln_agent"
 HISTORY_TABLE_ID="incident_response_history"
 SBOM_TABLE_ID="sbom_packages"
 OWNER_TABLE_ID="owner_mapping"
+PREFERENCES_TABLE_ID="ticket_preferences"
 FULL_HISTORY_TABLE_ID="${PROJECT_ID}.${DATASET_ID}.${HISTORY_TABLE_ID}"
 FULL_SBOM_TABLE_ID="${PROJECT_ID}.${DATASET_ID}.${SBOM_TABLE_ID}"
 FULL_OWNER_TABLE_ID="${PROJECT_ID}.${DATASET_ID}.${OWNER_TABLE_ID}"
+FULL_PREFERENCES_TABLE_ID="${PROJECT_ID}.${DATASET_ID}.${PREFERENCES_TABLE_ID}"
 
 if bq show --project_id="$PROJECT_ID" "${DATASET_ID}" &>/dev/null; then
   info "データセット既存: ${DATASET_ID}"
@@ -287,6 +289,15 @@ else
   exit 1
 fi
 
+if bq show --project_id="$PROJECT_ID" "${DATASET_ID}.${PREFERENCES_TABLE_ID}" &>/dev/null; then
+  info "テーブル既存: ${PREFERENCES_TABLE_ID}"
+elif bq mk --table "${PROJECT_ID}:${DATASET_ID}.${PREFERENCES_TABLE_ID}"     preference_id:STRING,space_id:STRING,field_name:STRING,pattern_key:STRING,preferred_value:STRING,original_value:STRING,correction_count:INTEGER,created_at:TIMESTAMP,updated_at:TIMESTAMP,created_by:STRING,extra:STRING; then
+  info "テーブル作成: ${PREFERENCES_TABLE_ID}"
+else
+  err "テーブルの作成に失敗しました: ${PREFERENCES_TABLE_ID}"
+  exit 1
+fi
+
 # BQ テーブル ID をシークレットに保存 (未登録なら)
 if ! gcloud secrets describe "vuln-agent-bq-table-id" --project="$PROJECT_ID" &>/dev/null; then
   if ! echo -n "$FULL_HISTORY_TABLE_ID" | gcloud secrets create "vuln-agent-bq-table-id" \
@@ -313,6 +324,15 @@ if ! gcloud secrets describe "vuln-agent-bq-owner-table-id" --project="$PROJECT_
     exit 1
   fi
   info "BigQuery 担当者マッピングテーブル ID を Secret Manager に登録"
+fi
+
+if ! gcloud secrets describe "vuln-agent-bq-preferences-table-id" --project="$PROJECT_ID" &>/dev/null; then
+  if ! echo -n "$FULL_PREFERENCES_TABLE_ID" | gcloud secrets create "vuln-agent-bq-preferences-table-id" \
+    --data-file=- --replication-policy="automatic" --project="$PROJECT_ID"; then
+    err "vuln-agent-bq-preferences-table-id シークレットの作成に失敗しました"
+    exit 1
+  fi
+  info "BigQuery プリファレンステーブル ID を Secret Manager に登録"
 fi
 
 # ====================================================

@@ -14,8 +14,8 @@ substitutions:
   _OIDC_CLIENT_ID: "44373ff2-e89e-4b9d-a9d8-ad0d9972ade8"
   _OIDC_REDIRECT_URI: ""
   _OIDC_SCOPES: "openid profile email"
-  _OIDC_CLIENT_SECRET_SECRET: "vuln-agent-oidc-client-secret"
-  _OIDC_SESSION_SECRET_SECRET: "vuln-agent-oidc-session-secret"
+  _OIDC_CLIENT_SECRET_SECRET: "OIDC_CLIENT_SECRET"
+  _OIDC_SESSION_SECRET_SECRET: "OIDC_SESSION_SECRET"
 
 steps:
   - name: "gcr.io/google.com/cloudsdktool/cloud-sdk"

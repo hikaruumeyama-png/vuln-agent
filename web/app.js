@@ -10,7 +10,6 @@ const disconnectButton = document.getElementById("disconnect-button");
 const loginButton = document.getElementById("login-button");
 const logoutButton = document.getElementById("logout-button");
 const toggleHistoryButton = document.getElementById("toggle-history");
-const gatewayInput = document.getElementById("gateway-url");
 const chatForm = document.getElementById("chat-form");
 const chatInput = document.getElementById("chat-input");
 const messagesArea = document.getElementById("messages");
@@ -50,7 +49,6 @@ const BARGE_IN_COOLDOWN_MS = 900;
 const BARGE_IN_POST_PAUSE_MS = 260;
 const MAX_RENDERED_MESSAGES = 200;
 const HEALTH_PING_INTERVAL_MS = 30000;
-const GATEWAY_URL_STORAGE_KEY = "vuln_agent_gateway_url";
 const CHAT_THREADS_STORAGE_PREFIX = "vuln_agent_chat_threads";
 const CHAT_ACTIVE_THREAD_STORAGE_PREFIX = "vuln_agent_chat_active_thread";
 const MAX_THREADS = 80;
@@ -104,6 +102,9 @@ let threadList = [];
 let activeThreadId = "";
 let threadStorageKey = "";
 let activeThreadStorageKey = "";
+
+const DEFAULT_GATEWAY_BASE_URL = `${window.location.protocol}//${window.location.host}`;
+const DEFAULT_GATEWAY_WS_URL = `${window.location.protocol === "https:" ? "wss:" : "ws:"}//${window.location.host}/ws`;
 
 // ── Utility Functions ───────────────────────────────────
 function escapeHtml(str) {
@@ -193,24 +194,8 @@ function updateActivityHeader(requestId, progress, stepLabel) {
   }
 }
 
-function parseGatewayBaseHttpUrl(rawWsUrl) {
-  try {
-    const parsed = new URL(rawWsUrl);
-    if (parsed.protocol !== "ws:" && parsed.protocol !== "wss:") return null;
-    const nextProtocol = parsed.protocol === "wss:" ? "https:" : "http:";
-    return `${nextProtocol}//${parsed.host}`;
-  } catch {
-    return null;
-  }
-}
-
 async function runHealthPing() {
-  const wsUrl = gatewayInput.value.trim();
-  const baseUrl = parseGatewayBaseHttpUrl(wsUrl);
-  if (!baseUrl) {
-    updateHealthMetrics(null);
-    return;
-  }
+  const baseUrl = DEFAULT_GATEWAY_BASE_URL;
   const startedAt = performance.now();
   try {
     const response = await fetch(`${baseUrl}/ping`, {
@@ -414,9 +399,7 @@ function suppressIncomingLiveAudio(ms = 1200) {
 }
 
 async function fetchAuthState() {
-  const wsUrl = gatewayInput.value.trim();
-  const baseUrl = parseGatewayBaseHttpUrl(wsUrl);
-  if (!baseUrl) return { enabled: false, authenticated: true, user: null };
+  const baseUrl = DEFAULT_GATEWAY_BASE_URL;
   try {
     const res = await fetch(`${baseUrl}/auth/me`, {
       method: "GET",
@@ -1332,41 +1315,20 @@ window.addEventListener("keydown", async (event) => {
 });
 
 // ── WebSocket Connection ────────────────────────────────
-gatewayInput.addEventListener("change", () => {
-  const value = gatewayInput.value.trim();
-  if (value) {
-    window.localStorage.setItem(GATEWAY_URL_STORAGE_KEY, value);
-  }
-  void (async () => {
-    applyAuthState(await fetchAuthState());
-  })();
-});
-
 loginButton?.addEventListener("click", () => {
-  const wsUrl = gatewayInput.value.trim();
-  const baseUrl = parseGatewayBaseHttpUrl(wsUrl);
-  if (!baseUrl) {
-    showToast("Gateway URL を入力してください。", "warning");
-    return;
-  }
+  const baseUrl = DEFAULT_GATEWAY_BASE_URL;
   window.location.href = `${baseUrl}/auth/login?next=${encodeURIComponent("/")}`;
 });
 
 logoutButton?.addEventListener("click", () => {
   void (async () => {
-    const wsUrl = gatewayInput.value.trim();
-    const baseUrl = parseGatewayBaseHttpUrl(wsUrl);
-    if (!baseUrl) {
-      showToast("Gateway URL を入力してください。", "warning");
-      return;
-    }
+    const baseUrl = DEFAULT_GATEWAY_BASE_URL;
     try {
       await fetch(`${baseUrl}/auth/logout`, {
         method: "POST",
         credentials: "include",
       });
-      applyAuthState(await fetchAuthState());
-      showToast("ログアウトしました。", "info");
+      window.location.href = `${baseUrl}/login`;
     } catch {
       showToast("ログアウトに失敗しました。", "error");
     }
@@ -1375,12 +1337,7 @@ logoutButton?.addEventListener("click", () => {
 
 connectButton.addEventListener("click", () => {
   void (async () => {
-  const url = gatewayInput.value.trim();
-  if (!url) {
-    showToast("Gateway URL を入力してください。", "warning");
-    appendMessage("Gateway URL を入力してください。", "system");
-    return;
-  }
+  const url = DEFAULT_GATEWAY_WS_URL;
   applyAuthState(await fetchAuthState());
   if (authState.enabled && !authState.authenticated) {
     showToast("SSOログイン後に接続してください。", "warning");
@@ -1388,7 +1345,6 @@ connectButton.addEventListener("click", () => {
     return;
   }
   manualDisconnectRequested = false;
-  window.localStorage.setItem(GATEWAY_URL_STORAGE_KEY, url);
   const myGeneration = ++socketGeneration;
   if (socket && (socket.readyState === WebSocket.OPEN || socket.readyState === WebSocket.CONNECTING)) {
     socket.close();
@@ -1558,7 +1514,7 @@ connectButton.addEventListener("click", () => {
       "system",
     );
     if (wasError) {
-      showToast("接続エラーが発生しました。Gateway URL と公開設定を確認してください。", "error");
+      showToast("接続エラーが発生しました。Gateway の公開設定を確認してください。", "error");
     }
     manualDisconnectRequested = false;
   });
@@ -1797,10 +1753,6 @@ async function drainPlaybackQueue() {
 }
 
 // ── Initialize ──────────────────────────────────────────
-const savedGatewayUrl = window.localStorage.getItem(GATEWAY_URL_STORAGE_KEY);
-if (savedGatewayUrl) {
-  gatewayInput.value = savedGatewayUrl;
-}
 setStatus(false, "Disconnected");
 setMode("idle");
 updateHealthMetrics(null);
