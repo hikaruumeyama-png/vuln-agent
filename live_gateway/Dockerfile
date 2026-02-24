@@ -1,12 +1,11 @@
 # ===== Builder Stage =====
 FROM python:3.12-slim AS builder
 
-COPY --from=ghcr.io/astral-sh/uv:latest /uv /bin/uv
-
 WORKDIR /app
 
 COPY requirements.txt ./
-RUN uv pip install --system --compile-bytecode -r requirements.txt
+RUN pip install --no-cache-dir uv && \
+    uv pip install --system --compile-bytecode -r requirements.txt
 
 # ===== Runtime Stage =====
 FROM python:3.12-slim

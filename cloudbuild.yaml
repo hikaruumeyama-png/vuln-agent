@@ -217,30 +217,39 @@ steps:
           local model_name="$$2"
           local secret_name="$$3"
 
-          local env_tmp=".env.variant.$${display_name}.tmp"
-          grep -v '^AGENT_MODEL=' .env > "$$env_tmp" || true
+          # 並列実行時の tmp ディレクトリ衝突を回避するため作業コピーを作成
+          local work_dir="/workspace/variant_$${display_name}"
+          mkdir -p "$$work_dir"
+          cp -r /workspace/agent/* "$$work_dir/"
+
+          local env_tmp="$${work_dir}/.env.variant.tmp"
+          grep -v '^AGENT_MODEL=' /workspace/agent/.env > "$$env_tmp" || true
           printf 'AGENT_MODEL=%s\n' "$$model_name" >> "$$env_tmp"
+
+          cd "$$work_dir"
           "$$adk_bin" deploy agent_engine \
             --project=${PROJECT_ID} \
             --region=${_REGION} \
             --display_name="$$display_name" \
             --env_file="$$env_tmp" .
+          cd /workspace/agent
 
           local variant_latest
-          engines_json="$(curl -sSf -H "Authorization: Bearer $$token" \
+          engines_json="$$(curl -sSf -H "Authorization: Bearer $$token" \
             "$$api_base/projects/${PROJECT_ID}/locations/${_REGION}/reasoningEngines")"
-          variant_latest="$(printf '%s' "$$engines_json" | python3 -c 'import json,sys; display_name=sys.argv[1]; engines=json.load(sys.stdin).get("reasoningEngines", []); filtered=[e for e in engines if e.get("displayName")==display_name and e.get("name")]; filtered.sort(key=lambda e: e.get("createTime", ""), reverse=True); print(filtered[0]["name"] if filtered else "")' "$$display_name")"
+          variant_latest="$$(printf '%s' "$$engines_json" | python3 -c 'import json,sys; display_name=sys.argv[1]; engines=json.load(sys.stdin).get("reasoningEngines", []); filtered=[e for e in engines if e.get("displayName")==display_name and e.get("name")]; filtered.sort(key=lambda e: e.get("createTime", ""), reverse=True); print(filtered[0]["name"] if filtered else "")' "$$display_name")"
           if [ -z "$$variant_latest" ]; then
-            engines_json="$(curl -sSf -H "Authorization: Bearer $$token" \
+            sleep 5
+            engines_json="$$(curl -sSf -H "Authorization: Bearer $$token" \
               "$$api_base/projects/${PROJECT_ID}/locations/${_REGION}/reasoningEngines")"
-            variant_latest="$(printf '%s' "$$engines_json" | python3 -c 'import json,sys; display_name=sys.argv[1]; engines=json.load(sys.stdin).get("reasoningEngines", []); filtered=[e for e in engines if e.get("displayName")==display_name and e.get("name")]; filtered.sort(key=lambda e: e.get("createTime", ""), reverse=True); print(filtered[0]["name"] if filtered else "")' "$$display_name")"
+            variant_latest="$$(printf '%s' "$$engines_json" | python3 -c 'import json,sys; display_name=sys.argv[1]; engines=json.load(sys.stdin).get("reasoningEngines", []); filtered=[e for e in engines if e.get("displayName")==display_name and e.get("name")]; filtered.sort(key=lambda e: e.get("createTime", ""), reverse=True); print(filtered[0]["name"] if filtered else "")' "$$display_name")"
           fi
           if [ -z "$$variant_latest" ]; then
             echo "エラー: $$display_name の最新 Engine を特定できませんでした"
             exit 1
           fi
           printf '%s' "$$variant_latest" | gcloud secrets versions add "$$secret_name" --data-file=- >/dev/null
-          rm -f "$$env_tmp"
+          rm -rf "$$work_dir"
         }
 
         # Flash と Pro を並列デプロイ
@@ -442,7 +451,6 @@ steps:
 
 options:
   logging: CLOUD_LOGGING_ONLY
-  machineType: E2_HIGHCPU_32
 timeout: 2400s
 
 
