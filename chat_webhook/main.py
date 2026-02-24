@@ -79,17 +79,6 @@ _CLEAR_CONTEXT_KEYWORDS = (
     "メール",
     "製品",
 )
-_ANALYSIS_TRIGGER_WORDS = (
-    "確認して",
-    "解析して",
-    "解析",
-    "確認",
-    "見て",
-    "チェックして",
-    "analyze",
-    "analyse",
-    "check",
-)
 _MANUAL_TICKET_TRIGGER_WORDS = (
     "この内容で",
     "この本文で",
@@ -100,20 +89,12 @@ _MANUAL_TICKET_TRIGGER_WORDS = (
     "貼り付け",
     "コピペ",
 )
-_THREAD_ROOT_REFERENCE_WORDS = (
-    "スレッド元",
-    "元メッセージ",
-    "このスレッド",
-    "上のメッセージ",
-    "前のメッセージ",
-)
 try:
     _HYPOTHESIS_RETRY_LIMIT = int((os.environ.get("HYPOTHESIS_RETRY_LIMIT") or "2").strip())
 except Exception:
     _HYPOTHESIS_RETRY_LIMIT = 2
 if _HYPOTHESIS_RETRY_LIMIT < 0:
     _HYPOTHESIS_RETRY_LIMIT = 0
-_TOOL_CALL_LIMIT = 3
 _DEFAULT_REMEDIATION_TEXT = (
     "上記脆弱性情報をご確認いただき、バージョンアップが低い場合は"
     "バージョンアップのご対応お願いいたします。\n"
@@ -383,13 +364,6 @@ def _build_clarification_message() -> str:
     )
 
 
-def _is_analysis_trigger_prompt(prompt: str) -> bool:
-    normalized = re.sub(r"\s+", " ", (prompt or "").strip()).lower()
-    if not normalized:
-        return False
-    return any(word in normalized for word in _ANALYSIS_TRIGGER_WORDS)
-
-
 def _contains_vulnerability_signal(text: str) -> bool:
     t = (text or "").lower()
     if not t:
@@ -453,34 +427,6 @@ def _is_manual_ticket_generation_prompt(prompt: str) -> bool:
     if not _contains_manual_ticket_trigger(normalized):
         return False
     return _contains_specific_vuln_signal(prompt) or len(prompt) >= 120
-
-
-def _requests_thread_root_context(prompt: str) -> bool:
-    normalized = re.sub(r"\s+", " ", (prompt or "").strip()).lower()
-    if not normalized:
-        return False
-    return any(token in normalized for token in _THREAD_ROOT_REFERENCE_WORDS)
-
-
-def _build_vulnerability_ticket_prompt(raw_text: str) -> str:
-    return (
-        "以下はGmailアプリがChatに投稿したメール内容です。"
-        "SIDfm以外のフォーマットを含む可能性があるため、まず脆弱性関連通知かを判定してください。"
-        "脆弱性関連なら、以下の依頼票テンプレートを埋めた形式で出力してください。"
-        "必ずプレーンテキストで、コピペしやすい改行を維持してください。"
-        "不明な値は「要確認」と記載してください。\n\n"
-        "【希望納期】\n"
-        "【大分類】017.脆弱性対応（情シス専用）\n"
-        "【小分類】002.IT基盤チーム\n"
-        "【依頼概要】\n"
-        "【対象の機器/アプリ】\n"
-        "【脆弱性情報（リンク貼り付け）】\n"
-        "【CVSSスコア】\n"
-        "【依頼内容】\n"
-        "【対応完了目標】\n\n"
-        "必要なら上記の後ろに補足として「備考」を1段落だけ追加してください。\n\n"
-        f"{raw_text}"
-    )
 
 
 def _call_gemini_json(prompt: str, response_schema: dict[str, Any] | None = None) -> dict[str, Any]:
@@ -804,17 +750,6 @@ def _run_hypothesis_pipeline(source_text: str, history_key: str, user_instructio
     return {}
 
 
-def _build_thread_root_analysis_prompt(user_prompt: str, root_text: str) -> str:
-    return (
-        "以下はスレッド元メッセージです。"
-        "ユーザー指示に従い、根拠を示して解析してください。"
-        "不明点は推測せず「要確認」と明記してください。\n\n"
-        f"ユーザー指示:\n{user_prompt}\n\n"
-        f"スレッド元メッセージ:\n{root_text}"
-    )
-
-
-
 def _extract_incident_id(text: str) -> str:
     raw = (text or "").strip()
     if not raw:
@@ -823,18 +758,6 @@ def _extract_incident_id(text: str) -> str:
     if not match:
         return ""
     return str(match.group(1) or "").strip()
-
-
-def _build_review_prompt_with_incident_id(user_prompt: str, incident_id: str) -> str:
-    return (
-        "以下は起票内容の修正依頼です。"
-        "同一スレッドで解決した incident_id を必ず使用して更新してください。\n"
-        "保存には save_ticket_review_result を使ってください。"
-        "ユーザーが指定した変更点だけ反映し、未指定項目は現在値を維持してください。"
-        "最後に更新後の【起票用（コピペ）】を返してください。\n\n"
-        f"incident_id: {incident_id}\n"
-        f"ユーザー依頼: {user_prompt}"
-    )
 
 
 def _extract_space_name(event: dict[str, Any], thread_name: str) -> str:
@@ -1272,7 +1195,6 @@ def _run_agent_query(prompt: str, user_id: str) -> str:
 _REQUIRED_OUTPUT_SECTIONS = ("結論", "根拠", "不確実性", "次アクション")
 _VULN_KEYWORDS = ("cve", "脆弱性", "cvss", "vulnerability", "脆弱", "パッチ")
 _REFLECTION_ENABLED_KEY = "REFLECTION_ENABLED"
-_REFLECTION_RETRY_LIMIT = 1
 
 
 def _validate_agent_response(response_text: str, original_prompt: str) -> list[str]:
@@ -3479,14 +3401,7 @@ def _process_message_event(event: dict[str, Any], user_name: str) -> str | None:
             hypothesis_instruction = prompt
 
         hypothesis = _run_hypothesis_pipeline(source_text_for_quality, history_key, user_instruction=hypothesis_instruction)
-        tool_calls_used = 0
-        if tool_calls_used >= _TOOL_CALL_LIMIT:
-            logger.warning("Tool call limit reached before fact merge; using source-only output.")
-            response_text = _build_ticket_text_from_source(source_text_for_quality)
-            _remember_turn(history_key, _clean_chat_text(event), response_text)
-            return response_text
         merged_facts = _merge_hypothesis_with_tool_facts(hypothesis, source_text_for_quality)
-        tool_calls_used += 1
 
         # --- 学習済みプリファレンスの適用 ---
         preference_counts: dict[str, int] = {}
