@@ -1615,7 +1615,25 @@ def _extract_ticket_sections(text: str) -> tuple[str, str]:
     return copy_text, reasoning_text
 
 
-def _save_ticket_record_to_history(event: dict[str, Any], response_text: str, source: str = "chat_webhook_manual") -> None:
+def _cvss_to_severity(score: float | None) -> str:
+    """CVSSスコアから重大度文字列へ変換する。"""
+    if score is None:
+        return "要確認"
+    if score >= 9.0:
+        return "緊急"
+    if score >= 7.0:
+        return "高"
+    if score >= 4.0:
+        return "中"
+    return "低"
+
+
+def _save_ticket_record_to_history(
+    event: dict[str, Any],
+    response_text: str,
+    source: str = "chat_webhook_manual",
+    facts: dict[str, Any] | None = None,
+) -> None:
     table_id = _get_config("BQ_HISTORY_TABLE_ID", "vuln-agent-bq-table-id", "").strip()
     if not table_id:
         return
@@ -1643,6 +1661,7 @@ def _save_ticket_record_to_history(event: dict[str, Any], response_text: str, so
             summary = line.split(":", 1)[1].strip() or summary
             break
 
+    f = facts or {}
     extra = {
         "space_id": space_name,
         "thread_name": thread_name,
@@ -1651,19 +1670,30 @@ def _save_ticket_record_to_history(event: dict[str, Any], response_text: str, so
             "reasoning_text": reasoning_text,
         },
     }
+    cve_ids = [e.get("id") for e in (f.get("entries") or []) if e.get("id")]
     row = {
         "incident_id": incident_id,
         "vulnerability_id": vulnerability_id,
         "title": summary[:500],
-        "severity": "要確認",
-        "affected_systems": "[]",
-        "cvss_score": None,
+        "severity": _cvss_to_severity(f.get("max_score")),
+        "affected_systems": json.dumps(f.get("products") or [], ensure_ascii=False),
+        "cvss_score": f.get("max_score"),
         "description": None,
         "remediation": None,
         "owners": "[]",
         "status": "notified",
         "occurred_at": datetime.now(timezone.utc).isoformat(),
         "source": source,
+        # 新カラム
+        "due_date": f.get("due_date"),
+        "due_reason": f.get("due_reason"),
+        "affected_products": json.dumps(f.get("products") or [], ensure_ascii=False),
+        "cve_ids": json.dumps(cve_ids, ensure_ascii=False),
+        "copy_paste_text": copy_text,
+        "reasoning_text": reasoning_text,
+        "thread_name": thread_name,
+        "space_id": space_name,
+        # extra も維持（後方互換）
         "extra": json.dumps(extra, ensure_ascii=False),
     }
     try:
@@ -2114,9 +2144,9 @@ def _get_sbom_almalinux_versions() -> set[str]:
 
         client = bigquery.Client(project=_get_project_id() or None)
         query = f"""
-            SELECT DISTINCT REGEXP_EXTRACT(LOWER(release), r'almalinux([0-9]{{1,2}})') AS alma_ver
+            SELECT DISTINCT os_version AS alma_ver
             FROM `{table_id}`
-            WHERE REGEXP_CONTAINS(LOWER(release), r'almalinux[0-9]{{1,2}}')
+            WHERE os_name = 'almalinux' AND os_version IS NOT NULL
         """
         rows = list(client.query(query).result())
         versions = {str((r.get("alma_ver") if isinstance(r, dict) else getattr(r, "alma_ver", "")) or "").strip() for r in rows}
@@ -2924,7 +2954,7 @@ def _save_ticket_preference(
     space_id: str, field_name: str, pattern_key: str,
     preferred_value: str, original_value: str, created_by: str,
 ) -> None:
-    """修正内容をBQのticket_preferencesテーブルに保存。同一レコードがあればcorrection_countをインクリメント。"""
+    """修正内容をBQのticket_preferencesテーブルに保存。MERGE文で1クエリに統合。"""
     table_id = _get_config("BQ_PREFERENCES_TABLE_ID", "vuln-agent-bq-preferences-table-id", "").strip()
     if not table_id or not space_id or not field_name:
         return
@@ -2933,66 +2963,41 @@ def _save_ticket_preference(
 
         project_id = _get_project_id() or None
         client = bigquery.Client(project=project_id)
-        # 既存レコードを検索
-        query = f"""
-            SELECT preference_id, correction_count
-            FROM `{table_id}`
-            WHERE space_id = @space_id
-              AND field_name = @field_name
-              AND pattern_key = @pattern_key
-            ORDER BY updated_at DESC
-            LIMIT 1
+        now = datetime.now(timezone.utc).isoformat()
+        preference_id = str(uuid.uuid4())
+
+        merge_query = f"""
+            MERGE `{table_id}` T
+            USING (SELECT @space_id AS space_id, @field_name AS field_name, @pattern_key AS pattern_key) S
+            ON T.space_id = S.space_id AND T.field_name = S.field_name AND T.pattern_key = S.pattern_key
+            WHEN MATCHED THEN
+                UPDATE SET
+                    preferred_value = @preferred_value,
+                    original_value = @original_value,
+                    correction_count = T.correction_count + 1,
+                    updated_at = @updated_at
+            WHEN NOT MATCHED THEN
+                INSERT (preference_id, space_id, field_name, pattern_key,
+                        preferred_value, original_value, correction_count,
+                        created_at, updated_at, created_by, extra)
+                VALUES (@preference_id, @space_id, @field_name, @pattern_key,
+                        @preferred_value, @original_value, 1,
+                        @created_at, @updated_at, @created_by, '{{}}')
         """
-        job_config = bigquery.QueryJobConfig(
+        merge_config = bigquery.QueryJobConfig(
             query_parameters=[
                 bigquery.ScalarQueryParameter("space_id", "STRING", space_id),
                 bigquery.ScalarQueryParameter("field_name", "STRING", field_name),
                 bigquery.ScalarQueryParameter("pattern_key", "STRING", pattern_key),
+                bigquery.ScalarQueryParameter("preferred_value", "STRING", preferred_value),
+                bigquery.ScalarQueryParameter("original_value", "STRING", original_value),
+                bigquery.ScalarQueryParameter("updated_at", "TIMESTAMP", now),
+                bigquery.ScalarQueryParameter("preference_id", "STRING", preference_id),
+                bigquery.ScalarQueryParameter("created_at", "TIMESTAMP", now),
+                bigquery.ScalarQueryParameter("created_by", "STRING", created_by or ""),
             ]
         )
-        rows = list(client.query(query, job_config=job_config).result())
-        now = datetime.now(timezone.utc).isoformat()
-        if rows:
-            # 既存レコードをUPDATE（correction_countインクリメント）
-            existing = rows[0]
-            pref_id = str(getattr(existing, "preference_id", ""))
-            count = int(getattr(existing, "correction_count", 0) or 0) + 1
-            update_query = f"""
-                UPDATE `{table_id}`
-                SET preferred_value = @preferred_value,
-                    original_value = @original_value,
-                    correction_count = @correction_count,
-                    updated_at = @updated_at
-                WHERE preference_id = @preference_id
-            """
-            update_config = bigquery.QueryJobConfig(
-                query_parameters=[
-                    bigquery.ScalarQueryParameter("preferred_value", "STRING", preferred_value),
-                    bigquery.ScalarQueryParameter("original_value", "STRING", original_value),
-                    bigquery.ScalarQueryParameter("correction_count", "INT64", count),
-                    bigquery.ScalarQueryParameter("updated_at", "TIMESTAMP", now),
-                    bigquery.ScalarQueryParameter("preference_id", "STRING", pref_id),
-                ]
-            )
-            client.query(update_query, job_config=update_config).result()
-        else:
-            # 新規レコードをINSERT
-            row = {
-                "preference_id": str(uuid.uuid4()),
-                "space_id": space_id,
-                "field_name": field_name,
-                "pattern_key": pattern_key,
-                "preferred_value": preferred_value,
-                "original_value": original_value,
-                "correction_count": 1,
-                "created_at": now,
-                "updated_at": now,
-                "created_by": created_by or "",
-                "extra": "{}",
-            }
-            errors = client.insert_rows_json(table_id, [row])
-            if errors:
-                logger.warning("Failed to insert ticket preference: %s", errors)
+        client.query(merge_query, job_config=merge_config).result()
     except Exception as exc:
         logger.warning("_save_ticket_preference failed: %s", exc)
 
@@ -3451,6 +3456,7 @@ def _process_message_event(event: dict[str, Any], user_name: str) -> str | None:
                 event,
                 response_text,
                 source="chat_webhook_manual" if manual_backfill_mode else "chat_alert",
+                facts=merged_facts,
             )
     else:
         response_text = _run_agent_query_with_reflection(prompt, history_key)

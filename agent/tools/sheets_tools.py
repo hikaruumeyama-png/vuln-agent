@@ -241,7 +241,10 @@ def _load_sbom_from_bigquery() -> list[dict]:
               COALESCE(name, '') AS name,
               COALESCE(version, '') AS version,
               COALESCE(release, '') AS release,
-              COALESCE(purl, '') AS purl
+              COALESCE(purl, '') AS purl,
+              COALESCE(os_name, '') AS os_name,
+              COALESCE(os_version, '') AS os_version,
+              COALESCE(arch, '') AS arch
             FROM `{table_id}`
         """
         rows = client.query(query).result()
@@ -252,6 +255,9 @@ def _load_sbom_from_bigquery() -> list[dict]:
                 "version": row.version,
                 "release": row.release,
                 "purl": row.purl,
+                "os_name": row.os_name,
+                "os_version": row.os_version,
+                "arch": row.arch,
             }
             for row in rows
         ]
@@ -287,9 +293,9 @@ def _load_owner_mapping(force_refresh: bool = False) -> list[dict]:
     else:
         mappings = _load_owner_mapping_from_sheets()
 
-    # より具体的なパターン（長いパターン）を優先するためにソート
-    # ワイルドカード「*」のみは最後に
-    mappings.sort(key=lambda x: (x["pattern"] == "*", -len(x["pattern"])))
+    # BigQuery の場合は ORDER BY priority でソート済み、Sheets の場合は Python でソート
+    if backend != "bigquery":
+        mappings.sort(key=lambda x: (x["pattern"] == "*", -len(x["pattern"])))
 
     _owner_mapping_cache = mappings
     _owner_mapping_cache_timestamp = current_time
@@ -374,6 +380,7 @@ def _load_owner_mapping_from_bigquery() -> list[dict]:
               COALESCE(owner_name, '') AS owner_name,
               COALESCE(notes, '') AS notes
             FROM `{table_id}`
+            ORDER BY COALESCE(priority, 9999) ASC
         """
         rows = client.query(query).result()
         mappings = [

@@ -27,6 +27,14 @@ def log_vulnerability_history(
     occurred_at: str | None = None,
     source: str = "agent",
     extra: dict[str, Any] | None = None,
+    due_date: str | None = None,
+    due_reason: str | None = None,
+    affected_products: list[str] | None = None,
+    cve_ids: list[str] | None = None,
+    copy_paste_text: str | None = None,
+    reasoning_text: str | None = None,
+    thread_name: str | None = None,
+    space_id: str | None = None,
 ) -> dict[str, Any]:
     """
     脆弱性の対応履歴をBigQueryに保存します。
@@ -45,6 +53,14 @@ def log_vulnerability_history(
         occurred_at: 発生日時（ISO8601）。省略時は現在時刻
         source: データの発生源
         extra: 追加情報
+        due_date: 対応完了目標（例: "2026/03/10"）
+        due_reason: 期限の根拠
+        affected_products: 影響製品リスト
+        cve_ids: CVE-ID リスト
+        copy_paste_text: 起票用コピペセクション
+        reasoning_text: 判断理由セクション
+        thread_name: Chat スレッド名
+        space_id: Chat スペースID
 
     Returns:
         保存結果
@@ -91,6 +107,14 @@ def log_vulnerability_history(
         "occurred_at": occurred_at,
         "source": source,
         "extra": json.dumps(extra, ensure_ascii=False) if extra else None,
+        "due_date": due_date,
+        "due_reason": due_reason,
+        "affected_products": json.dumps(affected_products or [], ensure_ascii=False),
+        "cve_ids": json.dumps(cve_ids or [], ensure_ascii=False),
+        "copy_paste_text": copy_paste_text,
+        "reasoning_text": reasoning_text,
+        "thread_name": thread_name,
+        "space_id": space_id,
     }
 
     project = (os.environ.get("GCP_PROJECT_ID") or "").strip() or None

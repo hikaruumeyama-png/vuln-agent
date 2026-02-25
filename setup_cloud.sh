@@ -264,7 +264,7 @@ fi
 
 if bq show --project_id="$PROJECT_ID" "${DATASET_ID}.${HISTORY_TABLE_ID}" &>/dev/null; then
   info "テーブル既存: ${HISTORY_TABLE_ID}"
-elif bq mk --table "${PROJECT_ID}:${DATASET_ID}.${HISTORY_TABLE_ID}"     incident_id:STRING,vulnerability_id:STRING,title:STRING,severity:STRING,affected_systems:STRING,cvss_score:FLOAT,description:STRING,remediation:STRING,owners:STRING,status:STRING,occurred_at:TIMESTAMP,source:STRING,extra:STRING; then
+elif bq mk --table "${PROJECT_ID}:${DATASET_ID}.${HISTORY_TABLE_ID}"     incident_id:STRING,vulnerability_id:STRING,title:STRING,severity:STRING,affected_systems:STRING,cvss_score:FLOAT,description:STRING,remediation:STRING,owners:STRING,status:STRING,occurred_at:TIMESTAMP,source:STRING,extra:STRING,due_date:STRING,due_reason:STRING,affected_products:STRING,cve_ids:STRING,copy_paste_text:STRING,reasoning_text:STRING,thread_name:STRING,space_id:STRING; then
   info "テーブル作成: ${HISTORY_TABLE_ID}"
 else
   err "テーブルの作成に失敗しました: ${HISTORY_TABLE_ID}"
@@ -273,7 +273,7 @@ fi
 
 if bq show --project_id="$PROJECT_ID" "${DATASET_ID}.${SBOM_TABLE_ID}" &>/dev/null; then
   info "テーブル既存: ${SBOM_TABLE_ID}"
-elif bq mk --table "${PROJECT_ID}:${DATASET_ID}.${SBOM_TABLE_ID}"     type:STRING,name:STRING,version:STRING,release:STRING,purl:STRING; then
+elif bq mk --table "${PROJECT_ID}:${DATASET_ID}.${SBOM_TABLE_ID}"     type:STRING,name:STRING,version:STRING,release:STRING,purl:STRING,os_name:STRING,os_version:STRING,arch:STRING; then
   info "テーブル作成: ${SBOM_TABLE_ID}"
 else
   err "テーブルの作成に失敗しました: ${SBOM_TABLE_ID}"
@@ -282,7 +282,7 @@ fi
 
 if bq show --project_id="$PROJECT_ID" "${DATASET_ID}.${OWNER_TABLE_ID}" &>/dev/null; then
   info "テーブル既存: ${OWNER_TABLE_ID}"
-elif bq mk --table "${PROJECT_ID}:${DATASET_ID}.${OWNER_TABLE_ID}"     pattern:STRING,system_name:STRING,owner_email:STRING,owner_name:STRING,notes:STRING; then
+elif bq mk --table "${PROJECT_ID}:${DATASET_ID}.${OWNER_TABLE_ID}"     pattern:STRING,system_name:STRING,owner_email:STRING,owner_name:STRING,notes:STRING,priority:INTEGER; then
   info "テーブル作成: ${OWNER_TABLE_ID}"
 else
   err "テーブルの作成に失敗しました: ${OWNER_TABLE_ID}"
