@@ -382,7 +382,7 @@ class ChatWebhookTests(unittest.TestCase):
             )
 
         self.chat_webhook._run_agent_query = _fake_run
-        self.chat_webhook._save_ticket_record_to_history = lambda event, response_text, source="": saved.append(source)
+        self.chat_webhook._save_ticket_record_to_history = lambda event, response_text, source="", facts=None: saved.append(source)
         payload = {
             "type": "MESSAGE",
             "user": {"name": "users/111"},
@@ -435,7 +435,7 @@ class ChatWebhookTests(unittest.TestCase):
             "reason": "manual_ticket",
             "confidence": "high",
         }
-        self.chat_webhook._save_ticket_record_to_history = lambda event, response_text, source="": None
+        self.chat_webhook._save_ticket_record_to_history = lambda event, response_text, source="", facts=None: None
         self.chat_webhook._run_agent_query = lambda prompt, user_id: "はい、承知いたしました。テンプレートを作成します。"
         payload = {
             "type": "MESSAGE",
@@ -656,7 +656,7 @@ class ChatWebhookTests(unittest.TestCase):
         self.chat_webhook._fetch_thread_root_message_text = (
             lambda event: "【脆弱性情報】\nCVE-2026-1234\nhttps://sid.softek.jp/filter/sinfo/62989"
         )
-        self.chat_webhook._save_ticket_record_to_history = lambda event, response_text, source="": None
+        self.chat_webhook._save_ticket_record_to_history = lambda event, response_text, source="", facts=None: None
         captured: list[str] = []
 
         def _fake_run(prompt, user_id):
@@ -1195,7 +1195,7 @@ class ChatWebhookTests(unittest.TestCase):
                 "- CVEとURLを検知"
             )
         mod._run_agent_query = _fake_run
-        mod._save_ticket_record_to_history = lambda event, response_text, source="": None
+        mod._save_ticket_record_to_history = lambda event, response_text, source="", facts=None: None
         payload = {
             "type": "MESSAGE",
             "user": {"name": "users/111"},
@@ -1219,7 +1219,7 @@ class ChatWebhookTests(unittest.TestCase):
         mod._is_valid_token = lambda event: True
         mod._is_gmail_app_message = lambda event: False
         saved: list[dict] = []
-        mod._save_ticket_record_to_history = lambda event, response_text, source="": saved.append(
+        mod._save_ticket_record_to_history = lambda event, response_text, source="", facts=None: saved.append(
             {"text": response_text, "source": source}
         )
         pasted = (
@@ -1265,7 +1265,7 @@ class ChatWebhookTests(unittest.TestCase):
                 "【判断理由】\n- テスト"
             )
         mod._run_agent_query = _fake_run
-        mod._save_ticket_record_to_history = lambda event, response_text, source="": None
+        mod._save_ticket_record_to_history = lambda event, response_text, source="", facts=None: None
         payload = {
             "type": "MESSAGE",
             "user": {"name": "users/111"},
@@ -1304,7 +1304,7 @@ class ChatWebhookTests(unittest.TestCase):
         mod._save_correction_as_preference = lambda event, original_ticket, revised_ticket, instruction: saved_prefs.append(
             {"original": original_ticket, "revised": revised_ticket, "instruction": instruction}
         )
-        mod._save_ticket_record_to_history = lambda event, response_text, source="": None
+        mod._save_ticket_record_to_history = lambda event, response_text, source="", facts=None: None
         pasted = (
             "【起票用（コピペ）】\n"
             "依頼概要: AlmaLinux の脆弱性対応\n"
@@ -1333,7 +1333,7 @@ class ChatWebhookTests(unittest.TestCase):
         mod = self.chat_webhook
         mod._is_valid_token = lambda event: True
         mod._is_gmail_app_message = lambda event: False
-        mod._save_ticket_record_to_history = lambda event, response_text, source="": None
+        mod._save_ticket_record_to_history = lambda event, response_text, source="", facts=None: None
         pasted = "【起票用（コピペ）】\n依頼概要: テスト\n【判断理由】\n- テスト"
         payload = {
             "type": "MESSAGE",
@@ -1409,7 +1409,7 @@ class ChatWebhookTests(unittest.TestCase):
         mod = self.chat_webhook
         mod._is_valid_token = lambda event: True
         mod._is_gmail_app_message = lambda event: False
-        mod._save_ticket_record_to_history = lambda event, response_text, source="": None
+        mod._save_ticket_record_to_history = lambda event, response_text, source="", facts=None: None
         # Track _save_ticket_preference calls
         pref_calls: list[dict] = []
         mod._save_ticket_preference = lambda **kwargs: pref_calls.append(kwargs)
@@ -1461,7 +1461,7 @@ class ChatWebhookTests(unittest.TestCase):
         mod = self.chat_webhook
         mod._is_valid_token = lambda event: True
         mod._is_gmail_app_message = lambda event: False
-        mod._save_ticket_record_to_history = lambda event, response_text, source="": None
+        mod._save_ticket_record_to_history = lambda event, response_text, source="", facts=None: None
         pref_calls: list[dict] = []
         mod._save_ticket_preference = lambda **kwargs: pref_calls.append(kwargs)
         mod._fetch_latest_ticket_record_from_history = lambda event: {
@@ -1601,7 +1601,7 @@ class ChatWebhookTests(unittest.TestCase):
         mod._fetch_thread_root_message_text = lambda event: ""
         mod._fetch_quoted_message_text = lambda event: ""
         mod._fetch_latest_ticket_record_from_history = lambda event: {}
-        mod._save_ticket_record_to_history = lambda **kw: None
+        mod._save_ticket_record_to_history = lambda *a, **kw: None
         if hasattr(mod, "_run_ai_intent_planner"):
             mod._run_ai_intent_planner = lambda **kwargs: {
                 "intent": "ticket_create",
@@ -1646,7 +1646,7 @@ class ChatWebhookTests(unittest.TestCase):
         mod._fetch_thread_root_message_text = lambda event: ""
         mod._fetch_quoted_message_text = lambda event: ""
         mod._fetch_latest_ticket_record_from_history = lambda event: {}
-        mod._save_ticket_record_to_history = lambda **kw: None
+        mod._save_ticket_record_to_history = lambda *a, **kw: None
         if hasattr(mod, "_run_ai_intent_planner"):
             mod._run_ai_intent_planner = lambda **kwargs: {
                 "intent": "ticket_create",
@@ -1691,8 +1691,8 @@ class ChatWebhookTests(unittest.TestCase):
 
         self.assertEqual(status, 200)
         body = json.loads(raw_body)
-        # 対応不要ではなく、チケットが生成される
-        self.assertNotIn("対応不要", body["text"])
+        # チケットフォーマットが生成される（「対応不要」単独応答ではない）
+        self.assertIn("【起票用（コピペ）】", body["text"])
         self.assertGreaterEqual(len(pipeline_called), 1, "hypothesis pipeline should be called")
 
 
