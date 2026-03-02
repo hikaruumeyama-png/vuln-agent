@@ -1282,7 +1282,27 @@ def _is_message_actionable(event: dict[str, Any]) -> bool:
     prompt = _clean_chat_text(event)
     if _is_gmail_app_message(event):
         return True
+    # 人間からのメッセージは @メンション付きの場合のみ処理
+    # （「すべてのメッセージ受信」設定時にメンバー間の雑談に反応しないため）
+    if sender_type == "HUMAN" and not _has_bot_mention(message):
+        return False
     if raw_text and prompt:
+        return True
+    return False
+
+
+def _has_bot_mention(message: dict[str, Any]) -> bool:
+    """メッセージに Bot への @メンションが含まれるか判定する。"""
+    annotations = message.get("annotations") or []
+    for ann in annotations:
+        if not isinstance(ann, dict):
+            continue
+        if ann.get("type") == "USER_MENTION":
+            mentioned_user = ann.get("userMention", {}).get("user", {})
+            if str(mentioned_user.get("type") or "").upper() == "BOT":
+                return True
+    # argumentText が存在する場合もメンション経由と判断
+    if (message.get("argumentText") or "").strip():
         return True
     return False
 
@@ -3526,9 +3546,10 @@ def handle_chat_event(request):
     if event_type != "MESSAGE":
         return json.dumps({"text": "Unsupported event type"}), 200, {"Content-Type": "application/json"}
 
+    if not _is_message_actionable(event):
+        return json.dumps({}, ensure_ascii=False), 200, {"Content-Type": "application/json"}
+
     if _is_async_response_enabled():
-        if not _is_message_actionable(event):
-            return json.dumps({}, ensure_ascii=False), 200, {"Content-Type": "application/json"}
         if not _register_async_event_once(event):
             return json.dumps({}, ensure_ascii=False), 200, {"Content-Type": "application/json"}
         try:
