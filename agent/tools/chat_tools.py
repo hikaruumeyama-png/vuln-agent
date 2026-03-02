@@ -38,6 +38,24 @@ SEVERITY_DEADLINES = {
     "低": timedelta(days=30),
 }
 
+
+def _cvss_to_severity(cvss_score: float | None) -> str:
+    """CVSSスコアからseverityを確定的に算出する"""
+    if cvss_score is None:
+        return "低"
+    try:
+        score = float(cvss_score)
+    except (TypeError, ValueError):
+        return "低"
+    if score >= 9.0:
+        return "緊急"
+    if score >= 7.0:
+        return "高"
+    if score >= 4.0:
+        return "中"
+    return "低"
+
+
 PUBLIC_RESOURCE_ALIASES = (
     "csmail",
     "ns01",
@@ -334,6 +352,12 @@ def send_vulnerability_alert(
         sent
     """
     try:
+        resolved_space = None
+
+        # severity未指定 or 空文字の場合はCVSSから自動算出
+        if not severity or not severity.strip():
+            severity = _cvss_to_severity(cvss_score)
+
         service = _get_chat_service()
         incident_id = str(uuid.uuid4())
 
@@ -436,7 +460,7 @@ def send_vulnerability_alert(
         return result
 
     except HttpError as http_err:
-        msg = _format_http_error(http_err, resolved_space if "resolved_space" in dir() else space_id)
+        msg = _format_http_error(http_err, resolved_space or space_id)
         logger.error(f"Chat API HttpError: space={space_id}, vuln={vulnerability_id}, error={msg}")
         return {"status": "error", "message": msg, "vulnerability_id": vulnerability_id}
     except Exception as e:
@@ -456,6 +480,7 @@ def send_simple_message(message: str, space_id: str | None = None) -> dict[str, 
         送信結果
     """
     try:
+        resolved_space = None
         service = _get_chat_service()
 
         resolved_space = _resolve_space_id(space_id)
@@ -471,7 +496,7 @@ def send_simple_message(message: str, space_id: str | None = None) -> dict[str, 
         return {"status": "sent", "message_id": response.get("name")}
 
     except HttpError as http_err:
-        msg = _format_http_error(http_err, resolved_space if "resolved_space" in dir() else space_id)
+        msg = _format_http_error(http_err, resolved_space or space_id)
         logger.error(f"Chat API HttpError: space={space_id}, error={msg}")
         return {"status": "error", "message": msg}
     except Exception as e:
@@ -1083,6 +1108,7 @@ def check_chat_connection(space_id: str | None = None) -> dict[str, Any]:
         接続状態とスペース情報
     """
     try:
+        resolved_space = None
         service = _get_chat_service()
 
         resolved_space = _resolve_space_id(space_id)
@@ -1101,7 +1127,7 @@ def check_chat_connection(space_id: str | None = None) -> dict[str, Any]:
         }
 
     except HttpError as http_err:
-        msg = _format_http_error(http_err, resolved_space if "resolved_space" in dir() else space_id)
+        msg = _format_http_error(http_err, resolved_space or space_id)
         logger.error(f"Chat connection check HttpError: space={space_id}, error={msg}")
         return {"status": "error", "message": msg}
     except Exception as e:
@@ -1123,6 +1149,7 @@ def list_space_members(space_id: str | None = None) -> dict[str, Any]:
         メンバー一覧
     """
     try:
+        resolved_space = None
         service = _get_chat_service()
 
         resolved_space = _resolve_space_id(space_id)
@@ -1150,7 +1177,7 @@ def list_space_members(space_id: str | None = None) -> dict[str, Any]:
         }
 
     except HttpError as http_err:
-        msg = _format_http_error(http_err, resolved_space if "resolved_space" in dir() else space_id)
+        msg = _format_http_error(http_err, resolved_space or space_id)
         logger.error(f"List members HttpError: space={space_id}, error={msg}")
         return {"status": "error", "message": msg}
     except Exception as e:

@@ -13,10 +13,16 @@ import re
 import socket
 from html.parser import HTMLParser
 from typing import Any
+import urllib.error
+import urllib.request
 from urllib import parse, request
 
 
-_FORBIDDEN_HOSTS = {"localhost", "127.0.0.1", "::1"}
+_FORBIDDEN_HOSTS = {
+    "localhost", "127.0.0.1", "::1",
+    "169.254.169.254",           # GCE/Cloud Run metadata server
+    "metadata.google.internal",  # GCE metadata hostname
+}
 
 
 class _TextExtractor(HTMLParser):
@@ -165,12 +171,27 @@ def _collect_related_topics(items: list[Any]) -> list[dict[str, str]]:
     return flat
 
 
+class _SafeRedirectHandler(urllib.request.HTTPRedirectHandler):
+    """リダイレクト先URLの安全性を検証するハンドラ"""
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        if not _is_safe_public_url(newurl):
+            raise urllib.error.URLError(
+                f"Redirect to unsafe URL blocked: {newurl}"
+            )
+        return super().redirect_request(req, fp, code, msg, headers, newurl)
+
+
+def _build_safe_opener():
+    return urllib.request.build_opener(_SafeRedirectHandler)
+
+
 def _http_get_json(url: str) -> dict[str, Any]:
     req = request.Request(
         url,
         headers={"User-Agent": "vuln-agent/1.0 (+https://github.com/hikaruumeyama-png/vuln-agent)"},
     )
-    with request.urlopen(req, timeout=15) as resp:
+    opener = _build_safe_opener()
+    with opener.open(req, timeout=15) as resp:
         body = resp.read().decode("utf-8", errors="replace")
     return json.loads(body)
 
@@ -180,7 +201,8 @@ def _http_get_text(url: str) -> tuple[str, str]:
         url,
         headers={"User-Agent": "vuln-agent/1.0 (+https://github.com/hikaruumeyama-png/vuln-agent)"},
     )
-    with request.urlopen(req, timeout=15) as resp:
+    opener = _build_safe_opener()
+    with opener.open(req, timeout=15) as resp:
         content_type = (resp.headers.get("Content-Type") or "").lower()
         body = resp.read().decode("utf-8", errors="replace")
     return body, content_type

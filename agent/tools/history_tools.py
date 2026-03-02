@@ -6,11 +6,17 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import uuid
 from datetime import datetime, timezone
 from typing import Any
 
 from google.cloud import bigquery
+
+_BQ_TABLE_ID_PATTERN = re.compile(
+    r"^[A-Za-z0-9_\-:]+\.[A-Za-z0-9_]+\.[A-Za-z0-9_$]+$"
+    r"|^[A-Za-z0-9_]+\.[A-Za-z0-9_$]+$"
+)
 
 
 def log_vulnerability_history(
@@ -70,6 +76,11 @@ def log_vulnerability_history(
         return {
             "status": "skipped",
             "message": "BQ_HISTORY_TABLE_ID is not set.",
+        }
+    if not _validate_table_id(table_id):
+        return {
+            "status": "error",
+            "message": "BQ_HISTORY_TABLE_ID のフォーマットが不正です。",
         }
 
     vulnerability_id = (vulnerability_id or "").strip()
@@ -170,6 +181,11 @@ def recall_vulnerability_history(
             "status": "skipped",
             "message": "BQ_HISTORY_TABLE_ID is not set.",
         }
+    if not _validate_table_id(table_id):
+        return {
+            "status": "error",
+            "message": "BQ_HISTORY_TABLE_ID のフォーマットが不正です。",
+        }
 
     # サニタイズ
     cve_id = (cve_id or "").strip()
@@ -227,6 +243,11 @@ def recall_vulnerability_history(
             "status": "error",
             "message": f"BigQuery query failed: {exc}",
         }
+
+
+def _validate_table_id(table_id: str) -> bool:
+    """BigQueryテーブルIDのフォーマットを検証"""
+    return bool(_BQ_TABLE_ID_PATTERN.match(table_id))
 
 
 def _normalize_string_list(values: list[str] | tuple[str, ...] | None) -> list[str]:
