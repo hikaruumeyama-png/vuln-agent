@@ -1,5 +1,9 @@
 """
-Google Workspace Events webhook for Chat reaction-triggered analysis.
+Google Workspace Events webhook for Chat event-triggered analysis.
+
+対応イベント:
+  - reaction.created / batchCreated: ？リアクションで元メッセージを解析
+  - message.created / batchCreated: Gmail アプリ投稿（SIDfm通知等）を自動解析
 """
 
 from __future__ import annotations
@@ -26,6 +30,11 @@ _WORKSPACE_REACTION_TYPES = {
     "google.workspace.chat.reaction.v1.created",
     "google.workspace.chat.reaction.v1.batchCreated",
 }
+_WORKSPACE_MESSAGE_TYPES = {
+    "google.workspace.chat.message.v1.created",
+    "google.workspace.chat.message.v1.batchCreated",
+}
+_SUPPORTED_EVENT_TYPES = _WORKSPACE_REACTION_TYPES | _WORKSPACE_MESSAGE_TYPES
 
 
 def _get_project_id() -> str:
@@ -182,6 +191,96 @@ def _analysis_prompt_from_source_message(source_message: dict[str, Any]) -> str:
     )
 
 
+def _looks_like_gmail_message(chat_message: dict[str, Any]) -> bool:
+    """Workspace Events API 経由のメッセージが Gmail アプリ投稿かを判定する。"""
+    sender = chat_message.get("sender") or {}
+    sender_name = str(sender.get("displayName") or "").lower()
+    sender_type = str(sender.get("type") or "").upper()
+
+    if "gmail" in sender_name:
+        return True
+    if sender_type == "BOT" and "gmail" in str(sender.get("name") or "").lower():
+        return True
+
+    text = str(chat_message.get("text") or "").lower()
+    signals = 0
+    if "from:" in text or "差出人:" in text:
+        signals += 1
+    if "subject:" in text or "件名:" in text:
+        signals += 1
+    if re.search(r"^\[[^\]]+\]", str(chat_message.get("text") or "").strip()):
+        signals += 1
+    if "view message" in text:
+        signals += 1
+    if "to view the full email" in text or "google groups" in text:
+        signals += 1
+    if re.search(r"\bcve-\d{4}-\d{4,9}\b", text):
+        signals += 1
+    return signals >= 2
+
+
+def _extract_messages(event_data: dict[str, Any]) -> list[dict[str, Any]]:
+    """Workspace Events API のメッセージイベントからメッセージを抽出する。"""
+    if isinstance(event_data.get("message"), dict):
+        return [event_data["message"]]
+    items = event_data.get("messages") or []
+    messages: list[dict[str, Any]] = []
+    if isinstance(items, list):
+        for item in items:
+            if isinstance(item, dict) and isinstance(item.get("message"), dict):
+                messages.append(item["message"])
+            elif isinstance(item, dict):
+                messages.append(item)
+    return messages
+
+
+def _handle_message_events(
+    event_id: str, event_data: dict[str, Any], service: Any,
+) -> int:
+    """Gmail アプリ投稿のメッセージイベントを処理する。"""
+    messages = _extract_messages(event_data)
+    if not messages:
+        return 0
+
+    processed = 0
+    for msg in messages:
+        if not _looks_like_gmail_message(msg):
+            continue
+
+        message_name = str(msg.get("name") or "").strip()
+        if not message_name:
+            continue
+
+        event_key = f"{event_id}:{message_name}"
+        if _is_duplicate_event(event_key):
+            continue
+
+        space_name = _space_from_message_name(message_name)
+        thread_name = str((msg.get("thread") or {}).get("name") or "").strip()
+        if not space_name:
+            continue
+
+        try:
+            logger.info("Gmail message detected: %s in %s", message_name, space_name)
+            prompt = _analysis_prompt_from_source_message(msg)
+            response_text = _run_agent_query(prompt, "gmail-notification")
+
+            body: dict[str, Any] = {"text": response_text}
+            if thread_name:
+                body["thread"] = {"name": thread_name}
+            service.spaces().messages().create(
+                parent=space_name,
+                body=body,
+                messageReplyOption="REPLY_MESSAGE_FALLBACK_TO_NEW_THREAD",
+            ).execute()
+            processed += 1
+            logger.info("Replied to Gmail message: %s", message_name)
+        except Exception as exc:
+            logger.exception("Failed to process Gmail message event: %s", exc)
+
+    return processed
+
+
 def _is_duplicate_event(event_key: str) -> bool:
     if not event_key:
         return False
@@ -203,16 +302,25 @@ def handle_workspace_event(request):
         payload = {}
 
     event_type, event_id, event_data = _extract_event(payload)
-    if event_type not in _WORKSPACE_REACTION_TYPES:
+    if event_type not in _SUPPORTED_EVENT_TYPES:
         return json.dumps({"status": "ignored", "reason": "unsupported_event"}), 200, {
             "Content-Type": "application/json"
         }
 
+    service = _build_chat_service()
+
+    # --- メッセージイベント: Gmail アプリ投稿を処理 ---
+    if event_type in _WORKSPACE_MESSAGE_TYPES:
+        processed = _handle_message_events(event_id, event_data, service)
+        return json.dumps({"status": "ok", "processed": processed}, ensure_ascii=False), 200, {
+            "Content-Type": "application/json"
+        }
+
+    # --- リアクションイベント: ？リアクションを処理 ---
     reactions = _extract_reactions(event_data)
     if not reactions:
         return json.dumps({"status": "ignored", "reason": "no_reaction"}), 200, {"Content-Type": "application/json"}
 
-    service = _build_chat_service()
     processed = 0
     for reaction in reactions:
         if not _is_question_reaction(reaction):
