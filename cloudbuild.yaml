@@ -390,8 +390,8 @@ steps:
           --trigger-http \
           --service-account=vuln-agent-sa@${PROJECT_ID}.iam.gserviceaccount.com \
           --update-env-vars="GCP_PROJECT_ID=${PROJECT_ID},GCP_LOCATION=${_REGION}" \
-          --remove-env-vars="AGENT_RESOURCE_NAME" \
-          --set-secrets="AGENT_RESOURCE_NAME=vuln-agent-resource-name:latest" \
+          --remove-env-vars="AGENT_RESOURCE_NAME,AGENT_RESOURCE_NAME_FLASH,AGENT_RESOURCE_NAME_PRO" \
+          --set-secrets="AGENT_RESOURCE_NAME=vuln-agent-resource-name:latest,AGENT_RESOURCE_NAME_FLASH=vuln-agent-resource-name-flash:latest,AGENT_RESOURCE_NAME_PRO=vuln-agent-resource-name-pro:latest" \
           --memory=1024MB \
           --timeout=540s \
           --quiet

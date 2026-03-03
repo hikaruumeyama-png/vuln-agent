@@ -162,8 +162,10 @@ def audit_ticket_candidate(
         if phrase.lower() in lowered:
             errors.append(f"forbidden_phrase:{phrase}")
     if isinstance(facts, dict):
-        sbom_versions = [str(v).strip() for v in (facts.get("sbom_alma_versions") or []) if str(v).strip()]
-        if len(sbom_versions) >= 2:
+        # マルチバージョン監査: 通知内に実際に2バージョン以上のエントリがある場合のみ検査
+        grouped = facts.get("grouped_vuln_links") or {}
+        actual_versions_in_ticket = len(grouped) if isinstance(grouped, dict) else 0
+        if actual_versions_in_ticket >= 2:
             alma_lines = re.findall(r"^AlmaLinux[0-9]{1,2}\s*$", detail, flags=re.MULTILINE)
             if len(set(alma_lines)) < 2:
                 errors.append("missing_multiversion_target_lines")
