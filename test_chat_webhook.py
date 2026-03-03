@@ -978,6 +978,59 @@ class ChatWebhookTests(unittest.TestCase):
         reasoning = mod._infer_reasoning_from_facts(facts)
         self.assertNotIn("【依頼内容チェック（AI）】", reasoning)
 
+    def test_reasoning_sbom_line_non_almalinux_product(self):
+        """非AlmaLinux製品ではAlmaLinuxバージョンフィルタ対象外と表示される。"""
+        mod = self.chat_webhook
+        facts = {
+            "products": ["Firefox"],
+            "entries": [{"id": "99999", "cvss": "10.0", "title": "Firefox脆弱性", "url": "https://example.com"}],
+            "max_score": 10.0,
+            "scores": [10.0],
+            "due_date": "2026/04/01",
+            "due_reason": "CVSS9.0以上(1か月)",
+            "vuln_links": ["https://example.com"],
+            "grouped_vuln_links": {},
+            "sbom_alma_versions": ["8", "9"],
+        }
+        reasoning = mod._infer_reasoning_from_facts(facts)
+        self.assertIn("製品レベルで確認済み（AlmaLinuxバージョンフィルタ対象外）", reasoning)
+        self.assertNotIn("対象AlmaLinuxバージョンを適用", reasoning)
+
+    def test_reasoning_sbom_line_almalinux_with_versions(self):
+        """AlmaLinux製品+SBOMバージョン有りで適用バージョンが表示される。"""
+        mod = self.chat_webhook
+        facts = {
+            "products": ["AlmaLinux9"],
+            "entries": [{"id": "12345", "cvss": "8.0", "title": "テスト", "url": "https://example.com"}],
+            "max_score": 8.0,
+            "scores": [8.0],
+            "due_date": "2026/05/01",
+            "due_reason": "CVSS8.0以上(3か月)",
+            "vuln_links": ["https://example.com"],
+            "grouped_vuln_links": {},
+            "sbom_alma_versions": ["8", "9"],
+        }
+        reasoning = mod._infer_reasoning_from_facts(facts)
+        self.assertIn("対象AlmaLinuxバージョンを適用: 8, 9", reasoning)
+
+    def test_reasoning_sbom_line_almalinux_no_versions(self):
+        """AlmaLinux製品+SBOMバージョン無しで情報なしと表示される。"""
+        mod = self.chat_webhook
+        facts = {
+            "products": ["AlmaLinux8"],
+            "entries": [{"id": "12345", "cvss": "7.0", "title": "テスト", "url": "https://example.com"}],
+            "max_score": 7.0,
+            "scores": [7.0],
+            "due_date": "2026/06/01",
+            "due_reason": "CVSS7.0以上(6か月)",
+            "vuln_links": ["https://example.com"],
+            "grouped_vuln_links": {},
+            "sbom_alma_versions": [],
+        }
+        reasoning = mod._infer_reasoning_from_facts(facts)
+        self.assertIn("AlmaLinuxバージョン情報なし", reasoning)
+        self.assertNotIn("対象AlmaLinuxバージョンを適用", reasoning)
+
     def test_hypothesis_pipeline_tries_gemini_direct_first(self):
         """_run_hypothesis_pipeline calls _call_gemini_json before Agent Engine."""
         mod = self.chat_webhook

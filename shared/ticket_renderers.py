@@ -94,13 +94,22 @@ def infer_reasoning_from_facts(facts: dict[str, Any]) -> str:
         scores_text = ", ".join(f"{s:.1f}" for s in facts["scores"])
     else:
         scores_text = "要確認"
+    products = facts.get("products") or []
+    _is_alma = any("almalinux" in p.lower() for p in products)
+    _sbom_vers = facts.get("sbom_alma_versions") or []
+    if _is_alma and _sbom_vers:
+        sbom_line = f"- SBOM照合で対象AlmaLinuxバージョンを適用: {', '.join(_sbom_vers)}\n"
+    elif _is_alma:
+        sbom_line = "- SBOM照合: AlmaLinuxバージョン情報なし\n"
+    else:
+        sbom_line = "- SBOM照合: 製品レベルで確認済み（AlmaLinuxバージョンフィルタ対象外）\n"
     base = (
         "【判断理由】\n"
         f"- 通知本文から対象製品を抽出: {product_text}\n"
         f"- 通知本文から脆弱性エントリを抽出: {all_entries_count}件（起票対象: {entries_count}件）\n"
         f"- 参照URLを抽出: {links_count}件\n"
         f"- CVSSを抽出: {scores_text}\n"
-        f"- SBOM照合で対象AlmaLinuxバージョンを適用: {', '.join(facts.get('sbom_alma_versions') or ['未適用'])}\n"
+        f"{sbom_line}"
         f"- 対応完了目標を算出: {facts.get('due_date') or '要確認'}（{facts.get('due_reason') or '根拠不足'}）"
     )
     remediation_reasoning = str(facts.get("remediation_reasoning") or "").strip()
