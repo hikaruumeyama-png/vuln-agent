@@ -1909,5 +1909,257 @@ class ChatWebhookTests(unittest.TestCase):
         self.assertIn("Windows / Apple 以外", body["text"])
 
 
+    # ---- 【脆弱性情報 更新通知】分類テスト ----
+
+    def test_classify_message_format_update(self):
+        """【脆弱性情報 更新通知】マーカーを含むメッセージは update と分類される。"""
+        mod = self.chat_webhook
+        text = "【脆弱性情報 更新通知】Windows カーネルの脆弱性情報が更新されました"
+        self.assertEqual(mod._classify_message_format(text), mod._MSG_FORMAT_UPDATE)
+
+    def test_classify_message_format_exploited_over_update(self):
+        """【悪用された脆弱性】と【脆弱性情報 更新通知】が共存時は exploited が優先される。"""
+        mod = self.chat_webhook
+        text = "【悪用された脆弱性】【脆弱性情報 更新通知】Windows の脆弱性"
+        self.assertEqual(mod._classify_message_format(text), mod._MSG_FORMAT_EXPLOITED)
+
+    def test_classify_message_format_update_with_forwarded_header(self):
+        """転送ヘッダー付きでも更新通知マーカーが検出される。"""
+        mod = self.chat_webhook
+        header = (
+            "---------- Forwarded message ---------\n"
+            "From: SIDfm <notify@sid.softek.jp>\n"
+            "Date: 2026年3月1日(日) 09:00\n"
+            "Subject: 【脆弱性情報 更新通知】Windows カーネルの脆弱性\n"
+            "To: security-team@example.com\n\n"
+        )
+        text = header + "本文テキスト..."
+        self.assertEqual(mod._classify_message_format(text), mod._MSG_FORMAT_UPDATE)
+
+    # ---- 【脆弱性情報 更新通知】E2Eテスト ----
+
+    def test_update_notification_windows_e2e(self):
+        """E2E: 【脆弱性情報 更新通知】+Windows → 更新通知メッセージ。"""
+        mod = self.chat_webhook
+        import unittest.mock as mock
+
+        mod._is_valid_token = lambda event: True
+        mod._is_gmail_app_message = lambda event: True
+        mod._fetch_thread_root_message_text = lambda event: ""
+        mod._fetch_quoted_message_text = lambda event: ""
+        mod._fetch_latest_ticket_record_from_history = lambda event: {}
+
+        sbom_names = {"windows server 2022", "almalinux"}
+        update_text = (
+            "【脆弱性情報 更新通知】Windows カーネルの特権昇格の脆弱性\n"
+            "CVE-2026-8888\nCVSS: 8.5\nhttps://sid.softek.jp/88888"
+        )
+        payload = {
+            "type": "MESSAGE",
+            "user": {"name": "users/111"},
+            "message": {
+                "sender": {"displayName": "Gmail", "type": "BOT", "name": "users/gmail"},
+                "text": update_text,
+                "thread": {"name": "spaces/AAA/threads/UPD1"},
+            },
+            "space": {"name": "spaces/AAA"},
+        }
+
+        gemini_result = {
+            "is_windows_or_apple": True,
+            "product_name": "Windows カーネル",
+            "cve_ids": ["CVE-2026-8888"],
+            "comment": "特権昇格の脆弱性情報が更新されました。パッチ適用を検討してください。",
+        }
+
+        with mock.patch.object(mod, "_get_sbom_product_names", return_value=sbom_names):
+            with mock.patch.object(mod, "_call_gemini_json", return_value=gemini_result):
+                raw_body, status, _headers = mod.handle_chat_event(_FakeRequest(payload))
+
+        self.assertEqual(status, 200)
+        body = json.loads(raw_body)
+        self.assertIn("更新通知", body["text"])
+        self.assertIn("Windows カーネル", body["text"])
+        self.assertIn("CVE-2026-8888", body["text"])
+        self.assertNotIn("悪用", body["text"])
+
+    def test_update_notification_other_e2e(self):
+        """E2E: 【脆弱性情報 更新通知】+Chrome(Windows/Apple以外) → 対応不要メッセージ。"""
+        mod = self.chat_webhook
+        import unittest.mock as mock
+
+        mod._is_valid_token = lambda event: True
+        mod._is_gmail_app_message = lambda event: True
+        mod._fetch_thread_root_message_text = lambda event: ""
+        mod._fetch_quoted_message_text = lambda event: ""
+        mod._fetch_latest_ticket_record_from_history = lambda event: {}
+
+        sbom_names = {"google chrome (ウェブブラウザ)", "almalinux"}
+        update_text = (
+            "【脆弱性情報 更新通知】Google Chrome の脆弱性\n"
+            "CVE-2026-9999\nCVSS: 7.5\nhttps://sid.softek.jp/99999"
+        )
+        payload = {
+            "type": "MESSAGE",
+            "user": {"name": "users/111"},
+            "message": {
+                "sender": {"displayName": "Gmail", "type": "BOT", "name": "users/gmail"},
+                "text": update_text,
+                "thread": {"name": "spaces/AAA/threads/UPD2"},
+            },
+            "space": {"name": "spaces/AAA"},
+        }
+
+        gemini_result = {
+            "is_windows_or_apple": False,
+            "product_name": "Google Chrome",
+            "cve_ids": ["CVE-2026-9999"],
+            "comment": "Chrome固有の脆弱性情報更新です。",
+        }
+
+        with mock.patch.object(mod, "_get_sbom_product_names", return_value=sbom_names):
+            with mock.patch.object(mod, "_call_gemini_json", return_value=gemini_result):
+                raw_body, status, _headers = mod.handle_chat_event(_FakeRequest(payload))
+
+        self.assertEqual(status, 200)
+        body = json.loads(raw_body)
+        self.assertIn("ℹ️ 対応不要", body["text"])
+        self.assertIn("Google Chrome", body["text"])
+        self.assertIn("Windows / Apple 以外", body["text"])
+
+    def test_update_notification_gemini_failure_e2e(self):
+        """E2E: 【脆弱性情報 更新通知】+Gemini障害 → 安全側フォールバック。"""
+        mod = self.chat_webhook
+        import unittest.mock as mock
+
+        mod._is_valid_token = lambda event: True
+        mod._is_gmail_app_message = lambda event: True
+        mod._fetch_thread_root_message_text = lambda event: ""
+        mod._fetch_quoted_message_text = lambda event: ""
+        mod._fetch_latest_ticket_record_from_history = lambda event: {}
+
+        sbom_names = {"windows server 2022", "almalinux"}
+        update_text = (
+            "【脆弱性情報 更新通知】Windows カーネルの脆弱性\n"
+            "CVE-2026-8888\nCVSS: 8.5\nhttps://sid.softek.jp/88888"
+        )
+        payload = {
+            "type": "MESSAGE",
+            "user": {"name": "users/111"},
+            "message": {
+                "sender": {"displayName": "Gmail", "type": "BOT", "name": "users/gmail"},
+                "text": update_text,
+                "thread": {"name": "spaces/AAA/threads/UPD_FAIL"},
+            },
+            "space": {"name": "spaces/AAA"},
+        }
+
+        with mock.patch.object(mod, "_get_sbom_product_names", return_value=sbom_names):
+            with mock.patch.object(mod, "_call_gemini_json", return_value={}):
+                raw_body, status, _headers = mod.handle_chat_event(_FakeRequest(payload))
+
+        self.assertEqual(status, 200)
+        body = json.loads(raw_body)
+        self.assertIn("更新通知", body["text"])
+        self.assertIn("AI分析が利用できませんでした", body["text"])
+        self.assertNotIn("悪用", body["text"])
+
+    # ---- 対応不要メッセージ視認性テスト ----
+
+    def test_sbom_not_registered_message_has_info_prefix(self):
+        """SBOM未登録の対応不要メッセージに ℹ️ 対応不要 プレフィックスがある。"""
+        mod = self.chat_webhook
+        msg = mod._build_sbom_not_registered_message(["FortiGate"], "SBOMに未登録")
+        self.assertTrue(msg.startswith("ℹ️ 対応不要"))
+
+    def test_exploited_not_target_message_has_info_prefix(self):
+        """悪用脆弱性の対応不要メッセージに ℹ️ 対応不要 プレフィックスがある。"""
+        mod = self.chat_webhook
+        msg = mod._build_exploited_not_target_message({"product_name": "Linux Kernel"})
+        self.assertTrue(msg.startswith("ℹ️ 対応不要"))
+
+    def test_sbom_version_not_applicable_message(self):
+        """SBOMバージョン不一致時のメッセージが正しく構築される。"""
+        mod = self.chat_webhook
+        msg = mod._build_sbom_version_not_applicable_message(
+            ["AlmaLinux10"], {"8", "9"},
+        )
+        self.assertTrue(msg.startswith("ℹ️ 対応不要"))
+        self.assertIn("AlmaLinux10", msg)
+        self.assertIn("8, 9", msg)
+
+    def test_sbom_version_filter_skips_ticket_e2e(self):
+        """E2E: AlmaLinux10のみの通知 + SBOM(8,9) → SBOMバージョン不一致で対応不要。"""
+        mod = self.chat_webhook
+        import unittest.mock as mock
+
+        mod._is_valid_token = lambda event: True
+        mod._is_gmail_app_message = lambda event: True
+        mod._fetch_thread_root_message_text = lambda event: ""
+        mod._fetch_quoted_message_text = lambda event: ""
+        mod._fetch_latest_ticket_record_from_history = lambda event: {}
+        mod._save_ticket_record_to_history = lambda *a, **kw: None
+        mod._run_agent_query = lambda prompt, user_id: "{}"
+        if hasattr(mod, "_run_ai_intent_planner"):
+            mod._run_ai_intent_planner = lambda **kwargs: {
+                "intent": "ticket_create",
+                "needs_ticket_format": True,
+                "prefer_thread_root": False,
+                "prefer_history": False,
+                "reason": "test",
+                "confidence": "high",
+            }
+
+        sbom_names = {"almalinux"}
+        alma10_text = (
+            "[SIDfm] AlmaLinux 10 の脆弱性\n"
+            "1 63416 8.1 AlmaLinux 10 の freerdp に任意のコードを実行される問題\n"
+            "https://sid.softek.jp/filter/sinfo/63416"
+        )
+        payload = {
+            "type": "MESSAGE",
+            "user": {"name": "users/111"},
+            "message": {
+                "sender": {"displayName": "Gmail", "type": "BOT", "name": "users/gmail"},
+                "text": alma10_text,
+                "thread": {"name": "spaces/AAA/threads/ALMA10"},
+            },
+            "space": {"name": "spaces/AAA"},
+        }
+
+        # 実際の環境では extract_sidfm_entries が AlmaLinux10 エントリを抽出し、
+        # SBOM バージョンフィルタ(8,9)で除去されて entries=[] になる。
+        # テスト環境ではテキスト結合で抽出が変わるため、
+        # _merge_hypothesis_with_tool_facts をモックして実シナリオを再現。
+        mock_facts = {
+            "entries": [],
+            "all_entries_count": 1,
+            "selected_entries_count": 0,
+            "due_group_count": 1,
+            "products": ["AlmaLinux10"],
+            "vuln_links": ["https://sid.softek.jp/filter/sinfo/63416"],
+            "grouped_vuln_links": {},
+            "scores": [],
+            "max_score": None,
+            "due_date": "対応不要",
+            "due_reason": "CVSS 8.0未満または不明のため対応不要",
+            "sbom_alma_versions": ["8", "9"],
+        }
+
+        with mock.patch.object(mod, "_get_sbom_product_names", return_value=sbom_names):
+            with mock.patch.object(mod, "_get_sbom_almalinux_versions", return_value={"8", "9"}):
+                with mock.patch.object(mod, "_call_gemini_json", return_value={}):
+                    with mock.patch.object(mod, "_merge_hypothesis_with_tool_facts", return_value=mock_facts):
+                        raw_body, status, _headers = mod.handle_chat_event(_FakeRequest(payload))
+
+        self.assertEqual(status, 200)
+        body = json.loads(raw_body)
+        self.assertIn("ℹ️ 対応不要", body["text"])
+        self.assertIn("8, 9", body["text"])
+        # フル起票テンプレートが含まれないことを確認
+        self.assertNotIn("【起票用（コピペ）】", body["text"])
+        self.assertNotIn("【CVSSスコア】", body["text"])
+
+
 if __name__ == "__main__":
     unittest.main()

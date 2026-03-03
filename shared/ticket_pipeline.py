@@ -12,7 +12,7 @@ import logging
 import re
 from typing import Any, Callable
 
-from shared.constants import MSG_FORMAT_EXPLOITED, PRODUCT_EXTRACT_PATTERNS
+from shared.constants import MSG_FORMAT_EXPLOITED, MSG_FORMAT_UPDATE, PRODUCT_EXTRACT_PATTERNS
 from shared.gemini_direct import (
     analyze_exploited_vuln,
     call_gemini_json,
@@ -20,6 +20,7 @@ from shared.gemini_direct import (
 )
 from shared.sbom_lookup import (
     build_sbom_not_registered_message,
+    build_sbom_version_not_applicable_message,
     check_sbom_registration,
     get_sbom_almalinux_versions,
 )
@@ -47,6 +48,8 @@ from shared.ticket_renderers import (
     build_exploited_update_message,
     build_low_quality_ticket_message,
     build_ticket_text_from_parts,
+    build_update_not_target_message,
+    build_update_notification_message,
     infer_reasoning_from_facts,
     infer_ticket_detail_from_facts,
 )
@@ -58,7 +61,8 @@ logger = logging.getLogger(__name__)
 class TicketResult:
     """generate_ticket() の戻り値。"""
     status: str      # "ticket" | "sbom_skip" | "exploited_update" |
-                     # "exploited_not_target" | "low_quality" | "error"
+                     # "exploited_not_target" | "update_notification" |
+                     # "update_not_target" | "low_quality" | "error"
     text: str        # 応答テキスト（起票テンプレート or スキップメッセージ）
     facts: dict[str, Any] | None = None
     audit_ok: bool = True
@@ -423,6 +427,26 @@ def generate_ticket(
                 text=build_exploited_not_target_message(analysis),
             )
 
+        if msg_format == MSG_FORMAT_UPDATE:
+            analysis = analyze_exploited_vuln(source_text, notification_type="update")
+            if not analysis:
+                return TicketResult(
+                    status="update_notification",
+                    text=(
+                        "脆弱性情報の更新通知です（AI分析が利用できませんでした）。\n"
+                        "内容を確認の上、アップデートの要否を判断してください。"
+                    ),
+                )
+            if analysis.get("is_windows_or_apple"):
+                return TicketResult(
+                    status="update_notification",
+                    text=build_update_notification_message(analysis),
+                )
+            return TicketResult(
+                status="update_not_target",
+                text=build_update_not_target_message(analysis),
+            )
+
         # 3. 脆弱性シグナルチェック
         if not contains_specific_vuln_signal(source_text):
             return TicketResult(
@@ -435,6 +459,19 @@ def generate_ticket(
 
         # 5. ファクトマージ
         merged_facts = merge_hypothesis_with_tool_facts(hypothesis, source_text)
+
+        # 5.1. SBOMバージョンフィルタで全エントリ除去 → 対応不要
+        _all_count = int(merged_facts.get("all_entries_count") or 0)
+        _post_count = len(merged_facts.get("entries") or [])
+        _sbom_vers = merged_facts.get("sbom_alma_versions") or []
+        if _all_count > 0 and _post_count == 0 and _sbom_vers:
+            return TicketResult(
+                status="sbom_skip",
+                text=build_sbom_version_not_applicable_message(
+                    merged_facts.get("products") or [],
+                    set(_sbom_vers),
+                ),
+            )
 
         # 5.5. 学習システム: プリファレンス適用
         if space_id:

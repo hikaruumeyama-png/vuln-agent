@@ -280,6 +280,39 @@ def build_exploited_not_target_message(analysis: dict[str, Any]) -> str:
     """悪用された脆弱性だがWindows/Apple以外 → 対応不要メッセージ。"""
     product = analysis.get("product_name") or "（不明）"
     return (
+        "ℹ️ 対応不要\n\n"
+        "対応不要と判断しました。\n\n"
+        f"【検出された製品】\n{product}\n\n"
+        "【判断理由】\nWindows / Apple 以外の製品のため、対応対象外です。"
+    )
+
+
+def build_update_notification_message(analysis: dict[str, Any]) -> str:
+    """脆弱性情報の更新通知に対するアップデート確認メッセージ。"""
+    product = analysis.get("product_name") or "（不明）"
+    cves = analysis.get("cve_ids") or []
+    cve_str = ", ".join(cves) if cves else "（CVE番号なし）"
+    comment = analysis.get("comment") or ""
+    lines = [
+        "脆弱性情報の更新通知です。内容を確認の上、アップデートの要否を判断してください。",
+        "",
+        f"【対象製品】\n{product}",
+        "",
+        f"【CVE】\n{cve_str}",
+    ]
+    if comment:
+        lines.append("")
+        lines.append(f"【AIコメント】\n{comment}")
+    lines.append("")
+    lines.append("必要に応じて最新バージョンへのアップデートをご検討ください。")
+    return "\n".join(lines)
+
+
+def build_update_not_target_message(analysis: dict[str, Any]) -> str:
+    """脆弱性情報の更新通知だがWindows/Apple以外 → 対応不要メッセージ。"""
+    product = analysis.get("product_name") or "（不明）"
+    return (
+        "ℹ️ 対応不要\n\n"
         "対応不要と判断しました。\n\n"
         f"【検出された製品】\n{product}\n\n"
         "【判断理由】\nWindows / Apple 以外の製品のため、対応対象外です。"

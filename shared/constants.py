@@ -21,6 +21,7 @@ TICKET_FORBIDDEN_PHRASES = (
 # メッセージフォーマット分類
 MSG_FORMAT_SIDFM = "sidfm"
 MSG_FORMAT_EXPLOITED = "exploited"
+MSG_FORMAT_UPDATE = "update"
 MSG_FORMAT_UNKNOWN = "unknown"
 
 # 製品名抽出用パターン
