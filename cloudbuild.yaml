@@ -74,6 +74,9 @@ steps:
               workspace_events_webhook/*)
                 DEPLOY_WORKSPACE_EVENTS=true
                 ;;
+              shared/*)
+                DEPLOY_WORKSPACE_EVENTS=true
+                ;;
               web/*)
                 DEPLOY_GATEWAY=true
                 DEPLOY_WEB=true
@@ -411,6 +414,7 @@ steps:
           echo "エラー: vuln-agent-resource-name が存在しません"
           exit 1
         fi
+        cp -r shared/ workspace_events_webhook/shared/
         gcloud functions deploy vuln-agent-workspace-events-webhook \
           --gen2 \
           --runtime=python312 \

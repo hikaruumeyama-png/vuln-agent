@@ -23,3 +23,6 @@ Thumbs.db
 
 # テスト
 test_agent.py
+
+# デプロイ時にCloud Buildがコピーするsharedモジュール
+workspace_events_webhook/shared/

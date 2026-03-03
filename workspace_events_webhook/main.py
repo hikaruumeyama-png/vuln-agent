@@ -1,10 +1,16 @@
 """
-Google Workspace Events webhook for Chat reaction-triggered analysis.
+Google Workspace Events webhook for Chat event-triggered analysis.
+
+対応イベント:
+  - reaction.created / batchCreated: ？リアクションで元メッセージを解析
+  - message.created / batchCreated: Gmail アプリ投稿（SIDfm通知等）を自動解析
+
+サブスクリプション自動更新:
+  Cloud Scheduler から /renew パスで呼び出すとサブスクリプションを再作成する。
 """
 
 from __future__ import annotations
 
-import asyncio
 import base64
 import json
 import logging
@@ -14,8 +20,10 @@ from typing import Any
 
 import functions_framework
 import google.auth
+import google.auth.transport.requests
 from googleapiclient.discovery import build
-import vertexai
+
+from shared.ticket_pipeline import generate_ticket
 
 logger = logging.getLogger(__name__)
 
@@ -26,6 +34,17 @@ _WORKSPACE_REACTION_TYPES = {
     "google.workspace.chat.reaction.v1.created",
     "google.workspace.chat.reaction.v1.batchCreated",
 }
+_WORKSPACE_MESSAGE_TYPES = {
+    "google.workspace.chat.message.v1.created",
+    "google.workspace.chat.message.v1.batchCreated",
+}
+_SUPPORTED_EVENT_TYPES = _WORKSPACE_REACTION_TYPES | _WORKSPACE_MESSAGE_TYPES
+
+_WORKSPACE_EVENTS_API = "https://workspaceevents.googleapis.com/v1/subscriptions"
+_DEFAULT_SUBSCRIPTION_EVENT_TYPES = [
+    "google.workspace.chat.message.v1.created",
+    "google.workspace.chat.reaction.v1.created",
+]
 
 
 def _get_project_id() -> str:
@@ -37,54 +56,28 @@ def _get_project_id() -> str:
     )
 
 
-def _run_agent_query(prompt: str, user_id: str) -> str:
-    project_id = _get_project_id()
-    location = os.environ.get("GCP_LOCATION", "asia-northeast1")
-    agent_name = (os.environ.get("AGENT_RESOURCE_NAME") or "").strip()
-    if not project_id or not agent_name:
-        raise RuntimeError("GCP_PROJECT_ID and AGENT_RESOURCE_NAME are required")
-
-    vertexai.init(project=project_id, location=location)
-    from vertexai import Client
-
-    client = Client(project=project_id, location=location)
-    app = client.agent_engines.get(name=agent_name)
-    chunks: list[str] = []
-
-    async def execute_query() -> None:
-        async for event in app.async_stream_query(
-            user_id=user_id or "workspace-events-user",
-            message=prompt,
-        ):
-            content = getattr(event, "content", None)
-            parts = []
-            if isinstance(content, dict):
-                parts = content.get("parts", []) or []
-            elif content is not None:
-                parts = getattr(content, "parts", []) or []
-            for part in parts:
-                if isinstance(part, dict):
-                    text = part.get("text", "")
-                else:
-                    text = getattr(part, "text", "")
-                if isinstance(text, str) and text.strip():
-                    chunks.append(text.strip())
-
-    loop = asyncio.new_event_loop()
-    try:
-        loop.run_until_complete(execute_query())
-    finally:
-        loop.close()
-
-    text = "\n".join([line.strip() for line in chunks if line and line.strip()]).strip()
-    if not text:
-        return "回答を生成できませんでした。もう一度お試しください。"
-    return text[:3500]
+def _extract_source_text(source_message: dict[str, Any]) -> str:
+    """Chat メッセージからソーステキストを抽出する。"""
+    raw_text = str(source_message.get("text") or source_message.get("formattedText") or "").strip()
+    if not raw_text:
+        raw_text = json.dumps(source_message, ensure_ascii=False)
+    return raw_text
 
 
 def _build_chat_service():
+    """Bot 認証の Chat サービス（メッセージ送信用）。"""
     credentials, _ = google.auth.default(scopes=["https://www.googleapis.com/auth/chat.bot"])
     return build("chat", "v1", credentials=credentials, cache_discovery=False)
+
+
+def _build_chat_reader_service():
+    """OAuth ユーザー認証の Chat サービス（メッセージ読み取り用）。
+
+    chat.bot スコープではBot自身のメッセージしか読めないため、
+    他ユーザーのメッセージ取得には OAuth ユーザー認証が必要。
+    """
+    creds = _get_oauth_credentials()
+    return build("chat", "v1", credentials=creds, cache_discovery=False)
 
 
 def _extract_event(payload: dict[str, Any]) -> tuple[str, str, dict[str, Any]]:
@@ -160,26 +153,95 @@ def _space_from_message_name(message_name: str) -> str:
     return f"{parts[0]}/{parts[1]}"
 
 
-def _analysis_prompt_from_source_message(source_message: dict[str, Any]) -> str:
-    raw_text = str(source_message.get("text") or source_message.get("formattedText") or "").strip()
-    if not raw_text:
-        raw_text = json.dumps(source_message, ensure_ascii=False)
-    return (
-        "以下はGoogle Chatのスレッド元メッセージです。"
-        "脆弱性関連通知かを判定し、該当する場合は依頼票テンプレートを埋めて出力してください。"
-        "必ずプレーンテキストで、コピペしやすい改行を維持してください。"
-        "不明な値は「要確認」と記載してください。\n\n"
-        "【希望納期】\n"
-        "【大分類】017.脆弱性対応（情シス専用）\n"
-        "【小分類】002.IT基盤チーム\n"
-        "【依頼概要】\n"
-        "【対象の機器/アプリ】\n"
-        "【脆弱性情報（リンク貼り付け）】\n"
-        "【CVSSスコア】\n"
-        "【依頼内容】\n"
-        "【対応完了目標】\n\n"
-        f"{raw_text}"
-    )
+def _looks_like_gmail_message(chat_message: dict[str, Any]) -> bool:
+    """Workspace Events API 経由のメッセージが Gmail アプリ投稿かを判定する。"""
+    sender = chat_message.get("sender") or {}
+    sender_name = str(sender.get("displayName") or "").lower()
+    sender_type = str(sender.get("type") or "").upper()
+
+    if "gmail" in sender_name:
+        return True
+    if sender_type == "BOT" and "gmail" in str(sender.get("name") or "").lower():
+        return True
+
+    text = str(chat_message.get("text") or "").lower()
+    signals = 0
+    if "from:" in text or "差出人:" in text:
+        signals += 1
+    if "subject:" in text or "件名:" in text:
+        signals += 1
+    if re.search(r"^\[[^\]]+\]", str(chat_message.get("text") or "").strip()):
+        signals += 1
+    if "view message" in text:
+        signals += 1
+    if "to view the full email" in text or "google groups" in text:
+        signals += 1
+    if re.search(r"\bcve-\d{4}-\d{4,9}\b", text):
+        signals += 1
+    return signals >= 2
+
+
+def _extract_messages(event_data: dict[str, Any]) -> list[dict[str, Any]]:
+    """Workspace Events API のメッセージイベントからメッセージを抽出する。"""
+    if isinstance(event_data.get("message"), dict):
+        return [event_data["message"]]
+    items = event_data.get("messages") or []
+    messages: list[dict[str, Any]] = []
+    if isinstance(items, list):
+        for item in items:
+            if isinstance(item, dict) and isinstance(item.get("message"), dict):
+                messages.append(item["message"])
+            elif isinstance(item, dict):
+                messages.append(item)
+    return messages
+
+
+def _handle_message_events(
+    event_id: str, event_data: dict[str, Any], service: Any,
+) -> int:
+    """Gmail アプリ投稿のメッセージイベントを処理する。"""
+    messages = _extract_messages(event_data)
+    if not messages:
+        return 0
+
+    processed = 0
+    for msg in messages:
+        if not _looks_like_gmail_message(msg):
+            continue
+
+        message_name = str(msg.get("name") or "").strip()
+        if not message_name:
+            continue
+
+        event_key = f"{event_id}:{message_name}"
+        if _is_duplicate_event(event_key):
+            continue
+
+        space_name = _space_from_message_name(message_name)
+        thread_name = str((msg.get("thread") or {}).get("name") or "").strip()
+        if not space_name:
+            continue
+
+        try:
+            logger.info("Gmail message detected: %s in %s", message_name, space_name)
+            source_text = _extract_source_text(msg)
+            result = generate_ticket(source_text=source_text)
+            response_text = result.text
+
+            body: dict[str, Any] = {"text": response_text}
+            if thread_name:
+                body["thread"] = {"name": thread_name}
+            service.spaces().messages().create(
+                parent=space_name,
+                body=body,
+                messageReplyOption="REPLY_MESSAGE_FALLBACK_TO_NEW_THREAD",
+            ).execute()
+            processed += 1
+            logger.info("Replied to Gmail message: %s (status=%s)", message_name, result.status)
+        except Exception as exc:
+            logger.exception("Failed to process Gmail message event: %s", exc)
+
+    return processed
 
 
 def _is_duplicate_event(event_key: str) -> bool:
@@ -195,24 +257,160 @@ def _is_duplicate_event(event_key: str) -> bool:
     return False
 
 
+def _get_oauth_credentials():
+    """Secret Manager からユーザー OAuth 認証情報を取得する。"""
+    from google.cloud import secretmanager
+    from google.oauth2.credentials import Credentials as OAuthCredentials
+
+    project_id = _get_project_id()
+    secret_name = os.environ.get(
+        "WORKSPACE_EVENTS_OAUTH_SECRET",
+        "vuln-agent-workspace-events-oauth-token",
+    )
+    client = secretmanager.SecretManagerServiceClient()
+    resource = f"projects/{project_id}/secrets/{secret_name}/versions/latest"
+    response = client.access_secret_version(request={"name": resource})
+    token_data = json.loads(response.payload.data.decode("utf-8"))
+
+    creds = OAuthCredentials.from_authorized_user_info(token_data)
+    if not creds.valid:
+        creds.refresh(google.auth.transport.requests.Request())
+    return creds
+
+
+def _renew_subscription() -> dict[str, Any]:
+    """Workspace Events API サブスクリプションを再作成する。
+
+    Workspace Events API はユーザー OAuth 認証が必須のため、
+    Secret Manager に保存された OAuth トークンを使用する。
+
+    環境変数:
+      WORKSPACE_EVENTS_SPACE_ID: 対象スペース (デフォルト: spaces/AAAA--pjkDQ)
+      WORKSPACE_EVENTS_PUBSUB_TOPIC: Pub/Sub トピック
+      WORKSPACE_EVENTS_OAUTH_SECRET: OAuth トークンのシークレット名
+    """
+    import urllib.request
+    import urllib.error
+
+    project_id = _get_project_id()
+    space_id = os.environ.get("WORKSPACE_EVENTS_SPACE_ID", "spaces/AAAA--pjkDQ")
+    topic = os.environ.get(
+        "WORKSPACE_EVENTS_PUBSUB_TOPIC",
+        f"projects/{project_id}/topics/vuln-agent-workspace-events",
+    )
+
+    creds = _get_oauth_credentials()
+
+    body = {
+        "targetResource": f"//chat.googleapis.com/{space_id}",
+        "eventTypes": _DEFAULT_SUBSCRIPTION_EVENT_TYPES,
+        "notificationEndpoint": {"pubsubTopic": topic},
+        "payloadOptions": {"includeResource": True},
+    }
+
+    headers = {
+        "Authorization": f"Bearer {creds.token}",
+        "Content-Type": "application/json",
+    }
+
+    def _create() -> dict[str, Any]:
+        req = urllib.request.Request(
+            _WORKSPACE_EVENTS_API,
+            data=json.dumps(body).encode("utf-8"),
+            headers=headers,
+            method="POST",
+        )
+        with urllib.request.urlopen(req, timeout=30) as resp:
+            return json.loads(resp.read().decode("utf-8"))
+
+    def _delete_subscription(sub_name: str) -> None:
+        del_url = f"https://workspaceevents.googleapis.com/v1/{sub_name}"
+        del_req = urllib.request.Request(del_url, headers=headers, method="DELETE")
+        with urllib.request.urlopen(del_req, timeout=30) as resp:
+            resp.read()
+        logger.info("Deleted existing subscription: %s", sub_name)
+
+    # 作成を試み、409 なら既存を削除してリトライ
+    try:
+        result = _create()
+        logger.info("Subscription renewed: %s", result.get("name", ""))
+        return {"status": "renewed", "result": result}
+    except urllib.error.HTTPError as e:
+        if e.code != 409:
+            error_body = e.read().decode("utf-8", errors="replace")
+            logger.error("Subscription renewal failed (%s): %s", e.code, error_body)
+            return {"status": "error", "code": e.code, "message": error_body}
+
+        # 409: 既存サブスクリプション名をエラーレスポンスから取得して削除
+        error_body = e.read().decode("utf-8", errors="replace")
+        try:
+            error_data = json.loads(error_body)
+            details = error_data.get("error", {}).get("details", [])
+            existing_sub = ""
+            for detail in details:
+                metadata = detail.get("metadata", {})
+                if metadata.get("current_subscription"):
+                    existing_sub = metadata["current_subscription"]
+                    break
+            if existing_sub:
+                _delete_subscription(existing_sub)
+        except Exception as del_exc:
+            logger.warning("Failed to delete existing subscription: %s", del_exc)
+
+    # リトライ
+    try:
+        result = _create()
+        logger.info("Subscription renewed (retry): %s", result.get("name", ""))
+        return {"status": "renewed", "result": result}
+    except urllib.error.HTTPError as e:
+        error_body = e.read().decode("utf-8", errors="replace")
+        logger.error("Subscription renewal failed on retry (%s): %s", e.code, error_body)
+        return {"status": "error", "code": e.code, "message": error_body}
+
+
 @functions_framework.http
 def handle_workspace_event(request):
+    # --- サブスクリプション自動更新 (Cloud Scheduler から呼び出し) ---
+    if request.path.rstrip("/").endswith("/renew"):
+        result = _renew_subscription()
+        status_code = 200 if result.get("status") != "error" else 500
+        return json.dumps(result, ensure_ascii=False), status_code, {
+            "Content-Type": "application/json"
+        }
+
     try:
         payload = request.get_json(silent=True) or {}
     except Exception:
         payload = {}
 
     event_type, event_id, event_data = _extract_event(payload)
-    if event_type not in _WORKSPACE_REACTION_TYPES:
+    if event_type not in _SUPPORTED_EVENT_TYPES:
         return json.dumps({"status": "ignored", "reason": "unsupported_event"}), 200, {
             "Content-Type": "application/json"
         }
 
+    # --- event_id レベルの早期重複排除 ---
+    # Pub/Sub リトライで同一イベントが複数回配信される場合の防御。
+    if event_id and _is_duplicate_event(f"top:{event_id}"):
+        logger.info("Duplicate event_id detected at entry, skipping: %s", event_id)
+        return json.dumps({"status": "duplicate", "event_id": event_id}), 200, {
+            "Content-Type": "application/json"
+        }
+
+    service = _build_chat_service()
+
+    # --- メッセージイベント: Gmail アプリ投稿を処理 ---
+    if event_type in _WORKSPACE_MESSAGE_TYPES:
+        processed = _handle_message_events(event_id, event_data, service)
+        return json.dumps({"status": "ok", "processed": processed}, ensure_ascii=False), 200, {
+            "Content-Type": "application/json"
+        }
+
+    # --- リアクションイベント: ？リアクションを処理 ---
     reactions = _extract_reactions(event_data)
     if not reactions:
         return json.dumps({"status": "ignored", "reason": "no_reaction"}), 200, {"Content-Type": "application/json"}
 
-    service = _build_chat_service()
     processed = 0
     for reaction in reactions:
         if not _is_question_reaction(reaction):
@@ -228,14 +426,16 @@ def handle_workspace_event(request):
             continue
 
         try:
-            source_message = service.spaces().messages().get(name=message_name).execute()
+            reader = _build_chat_reader_service()
+            source_message = reader.spaces().messages().get(name=message_name).execute()
             thread_name = str(((source_message.get("thread") or {}).get("name") or "")).strip()
             space_name = _space_from_message_name(message_name)
             if not space_name:
                 continue
 
-            prompt = _analysis_prompt_from_source_message(source_message)
-            response_text = _run_agent_query(prompt, _user_id_from_reaction(reaction))
+            source_text = _extract_source_text(source_message)
+            result = generate_ticket(source_text=source_text)
+            response_text = result.text
 
             body: dict[str, Any] = {"text": response_text}
             if thread_name:
@@ -246,10 +446,10 @@ def handle_workspace_event(request):
                 messageReplyOption="REPLY_MESSAGE_FALLBACK_TO_NEW_THREAD",
             ).execute()
             processed += 1
+            logger.info("Replied to reaction: %s (status=%s)", message_name, result.status)
         except Exception as exc:
             logger.exception("Failed to process reaction event: %s", exc)
 
     return json.dumps({"status": "ok", "processed": processed}, ensure_ascii=False), 200, {
         "Content-Type": "application/json"
     }
-

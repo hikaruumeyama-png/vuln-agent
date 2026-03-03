@@ -65,30 +65,7 @@ _EXPORT_SPECS: list[tuple[str, list[str]]] = [
     (
         "granular_tools",
         [
-            "get_chat_space_info",
-            "list_chat_member_emails",
-            "build_history_record_preview",
-            "list_registered_agent_ids",
-            "get_registered_agent_details",
-            "get_configured_bigquery_tables",
-            "check_bigquery_readability_summary",
-            "list_web_search_urls",
-            "get_web_content_excerpt",
-            "get_nvd_cvss_summary",
-            "list_osv_vulnerability_ids",
-            "save_vulnerability_history_minimal",
             "save_ticket_review_result",
-        ],
-    ),
-    (
-        "orchestration_tools",
-        [
-            "list_predefined_operations",
-            "list_operation_catalog_health",
-            "get_authorized_operations_overview",
-            "decide_execution_mode",
-            "generate_tool_workflow_code",
-            "execute_tool_workflow_plan",
         ],
     ),
     (
