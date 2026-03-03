@@ -234,13 +234,26 @@ def _looks_like_gmail_message(chat_message: dict[str, Any]) -> bool:
     if sender_type == "BOT" and "gmail" in str(sender.get("name") or "").lower():
         return True
 
-    text = str(chat_message.get("text") or "").lower()
+    # text が空の場合は cardsV2 からテキストを抽出して判定する
+    # (Gmail App は text を空にし cardsV2 にメール本文を格納する)
+    raw_text = str(chat_message.get("text") or "")
+    text = raw_text.lower()
+    if not text.strip():
+        cards_text = _extract_text_from_cards(chat_message)
+        if cards_text:
+            text = cards_text.lower()
+            raw_text = cards_text
+
+    # BOT + cardsV2 が存在する = Gmail App の可能性が高い
+    if sender_type == "BOT" and chat_message.get("cardsV2"):
+        return True
+
     signals = 0
     if "from:" in text or "差出人:" in text:
         signals += 1
     if "subject:" in text or "件名:" in text:
         signals += 1
-    if re.search(r"^\[[^\]]+\]", str(chat_message.get("text") or "").strip()):
+    if re.search(r"^\[[^\]]+\]", raw_text.strip()):
         signals += 1
     if "view message" in text:
         signals += 1
