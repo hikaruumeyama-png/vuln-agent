@@ -12,6 +12,7 @@ Google Workspace Events webhook for Chat event-triggered analysis.
 from __future__ import annotations
 
 import base64
+import html as html_mod
 import json
 import logging
 import os
@@ -23,6 +24,7 @@ import google.auth
 import google.auth.transport.requests
 from googleapiclient.discovery import build
 
+from shared.agent_query import run_agent_query
 from shared.ticket_pipeline import generate_ticket
 
 logger = logging.getLogger(__name__)
@@ -56,10 +58,78 @@ def _get_project_id() -> str:
     )
 
 
+def _extract_text_from_cards(source_message: dict[str, Any]) -> str:
+    """cardsV2 構造からメール本文・件名・From 行を抽出する。
+
+    Gmail App が Google Chat に投稿するメッセージは text フィールドが空で、
+    メール本文が cardsV2 内の textParagraph.text / decoratedText に格納される。
+    """
+    cards_v2 = source_message.get("cardsV2")
+    if not isinstance(cards_v2, list) or not cards_v2:
+        return ""
+
+    parts: list[str] = []
+    footer_patterns = re.compile(
+        r"to view the full email|view the full email|この完全なメール",
+        re.IGNORECASE,
+    )
+
+    for card_wrapper in cards_v2:
+        if not isinstance(card_wrapper, dict):
+            continue
+        card = card_wrapper.get("card") or {}
+        sections = card.get("sections") or []
+        for section in sections:
+            if not isinstance(section, dict):
+                continue
+            for widget in (section.get("widgets") or []):
+                if not isinstance(widget, dict):
+                    continue
+                # textParagraph → メール本文
+                tp = widget.get("textParagraph")
+                if isinstance(tp, dict):
+                    text = str(tp.get("text") or "").strip()
+                    if text:
+                        parts.append(text)
+                # decoratedText → 件名 / From 行
+                dt = widget.get("decoratedText")
+                if isinstance(dt, dict):
+                    dt_text = str(dt.get("text") or "").strip()
+                    dt_bottom = str(dt.get("bottomLabel") or "").strip()
+                    # フッター行（"To view the full email..."）は除外
+                    if dt_text and not footer_patterns.search(dt_text):
+                        parts.append(dt_text)
+                    if dt_bottom and not footer_patterns.search(dt_bottom):
+                        parts.append(dt_bottom)
+
+    if not parts:
+        return ""
+
+    combined = "\n".join(parts)
+    # リテラル \r\n を実改行に変換
+    combined = combined.replace("\\r\\n", "\n").replace("\\n", "\n")
+    # HTML エンティティを復元
+    combined = html_mod.unescape(combined)
+    return combined.strip()
+
+
 def _extract_source_text(source_message: dict[str, Any]) -> str:
-    """Chat メッセージからソーステキストを抽出する。"""
-    raw_text = str(source_message.get("text") or source_message.get("formattedText") or "").strip()
-    if not raw_text:
+    """Chat メッセージからソーステキストを抽出する。
+
+    優先順位: cardsV2 → text/formattedText → json.dumps フォールバック。
+    cardsV2 と text の両方がある場合は長い方を採用する。
+    """
+    cards_text = _extract_text_from_cards(source_message)
+    plain_text = str(source_message.get("text") or source_message.get("formattedText") or "").strip()
+
+    # 両方ある場合は長い方を採用
+    if cards_text and plain_text:
+        raw_text = cards_text if len(cards_text) >= len(plain_text) else plain_text
+    elif cards_text:
+        raw_text = cards_text
+    elif plain_text:
+        raw_text = plain_text
+    else:
         raw_text = json.dumps(source_message, ensure_ascii=False)
     return raw_text
 
@@ -164,13 +234,26 @@ def _looks_like_gmail_message(chat_message: dict[str, Any]) -> bool:
     if sender_type == "BOT" and "gmail" in str(sender.get("name") or "").lower():
         return True
 
-    text = str(chat_message.get("text") or "").lower()
+    # text が空の場合は cardsV2 からテキストを抽出して判定する
+    # (Gmail App は text を空にし cardsV2 にメール本文を格納する)
+    raw_text = str(chat_message.get("text") or "")
+    text = raw_text.lower()
+    if not text.strip():
+        cards_text = _extract_text_from_cards(chat_message)
+        if cards_text:
+            text = cards_text.lower()
+            raw_text = cards_text
+
+    # BOT + cardsV2 が存在する = Gmail App の可能性が高い
+    if sender_type == "BOT" and chat_message.get("cardsV2"):
+        return True
+
     signals = 0
     if "from:" in text or "差出人:" in text:
         signals += 1
     if "subject:" in text or "件名:" in text:
         signals += 1
-    if re.search(r"^\[[^\]]+\]", str(chat_message.get("text") or "").strip()):
+    if re.search(r"^\[[^\]]+\]", raw_text.strip()):
         signals += 1
     if "view message" in text:
         signals += 1
@@ -225,7 +308,13 @@ def _handle_message_events(
         try:
             logger.info("Gmail message detected: %s in %s", message_name, space_name)
             source_text = _extract_source_text(msg)
-            result = generate_ticket(source_text=source_text)
+            result = generate_ticket(
+                source_text=source_text,
+                agent_query_fn=run_agent_query,
+                history_key="workspace_gmail",
+                space_id=space_name,
+                thread_name=thread_name,
+            )
             response_text = result.text
 
             body: dict[str, Any] = {"text": response_text}
@@ -434,7 +523,13 @@ def handle_workspace_event(request):
                 continue
 
             source_text = _extract_source_text(source_message)
-            result = generate_ticket(source_text=source_text)
+            result = generate_ticket(
+                source_text=source_text,
+                agent_query_fn=run_agent_query,
+                history_key="workspace_reaction",
+                space_id=space_name,
+                thread_name=thread_name,
+            )
             response_text = result.text
 
             body: dict[str, Any] = {"text": response_text}

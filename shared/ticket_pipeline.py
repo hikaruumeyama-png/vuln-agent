@@ -12,7 +12,7 @@ import logging
 import re
 from typing import Any, Callable
 
-from shared.constants import MSG_FORMAT_EXPLOITED, PRODUCT_EXTRACT_PATTERNS
+from shared.constants import MSG_FORMAT_EXPLOITED, MSG_FORMAT_UPDATE, PRODUCT_EXTRACT_PATTERNS
 from shared.gemini_direct import (
     analyze_exploited_vuln,
     call_gemini_json,
@@ -20,6 +20,7 @@ from shared.gemini_direct import (
 )
 from shared.sbom_lookup import (
     build_sbom_not_registered_message,
+    build_sbom_version_not_applicable_message,
     check_sbom_registration,
     get_sbom_almalinux_versions,
 )
@@ -34,6 +35,12 @@ from shared.ticket_parsers import (
     infer_request_summary_from_source,
     is_summary_low_quality,
 )
+from shared.ticket_history import save_ticket_record_to_history
+from shared.ticket_preferences import (
+    PREFERENCE_STRONG_THRESHOLD,
+    apply_preferences_to_facts,
+    fetch_ticket_preferences,
+)
 from shared.ticket_renderers import (
     ai_final_review_with_value_lock,
     audit_ticket_candidate,
@@ -41,6 +48,8 @@ from shared.ticket_renderers import (
     build_exploited_update_message,
     build_low_quality_ticket_message,
     build_ticket_text_from_parts,
+    build_update_not_target_message,
+    build_update_notification_message,
     infer_reasoning_from_facts,
     infer_ticket_detail_from_facts,
 )
@@ -52,7 +61,8 @@ logger = logging.getLogger(__name__)
 class TicketResult:
     """generate_ticket() の戻り値。"""
     status: str      # "ticket" | "sbom_skip" | "exploited_update" |
-                     # "exploited_not_target" | "low_quality" | "error"
+                     # "exploited_not_target" | "update_notification" |
+                     # "update_not_target" | "low_quality" | "error"
     text: str        # 応答テキスト（起票テンプレート or スキップメッセージ）
     facts: dict[str, Any] | None = None
     audit_ok: bool = True
@@ -127,7 +137,18 @@ def extract_source_facts(source_text: str) -> dict[str, Any]:
         selected_entries = []
 
     entry_links = [str(e.get("url") or "").strip() for e in selected_entries if str(e.get("url") or "").strip()]
-    vuln_links = entry_links or sid_links or links
+    # Google URL はノイズとして除外（Gmail App カード由来の URL 等）
+    _google_noise_re = re.compile(
+        r"https?://(?:groups|docs|support|mail|chat|drive|calendar)\.google\.com",
+        re.IGNORECASE,
+    )
+    def _filter_noise_urls(urls: list[str]) -> list[str]:
+        return [u for u in urls if not _google_noise_re.match(u)]
+
+    filtered_entry_links = _filter_noise_urls(entry_links)
+    filtered_sid_links = _filter_noise_urls(sid_links)
+    filtered_links = _filter_noise_urls(links)
+    vuln_links = filtered_entry_links or filtered_sid_links or filtered_links or ["要確認"]
 
     grouped_links_by_version: dict[str, list[str]] = {}
     for e in (selected_entries or entries):
@@ -357,6 +378,8 @@ def generate_ticket(
     source_text: str,
     agent_query_fn: Callable[[str, str], str] | None = None,
     history_key: str = "pipeline",
+    space_id: str = "",
+    thread_name: str = "",
 ) -> TicketResult:
     """脆弱性通知テキストから起票テンプレートを生成する。
 
@@ -364,6 +387,8 @@ def generate_ticket(
         source_text: 脆弱性通知の本文テキスト。
         agent_query_fn: Agent Engine 呼び出し関数 (DI)。None なら最終AIレビューをスキップ。
         history_key: 履歴キー（ログ用）。
+        space_id: Google Chat スペースID（学習・履歴に使用）。
+        thread_name: Google Chat スレッド名（履歴に使用）。
 
     Returns:
         TicketResult
@@ -402,6 +427,26 @@ def generate_ticket(
                 text=build_exploited_not_target_message(analysis),
             )
 
+        if msg_format == MSG_FORMAT_UPDATE:
+            analysis = analyze_exploited_vuln(source_text, notification_type="update")
+            if not analysis:
+                return TicketResult(
+                    status="update_notification",
+                    text=(
+                        "脆弱性情報の更新通知です（AI分析が利用できませんでした）。\n"
+                        "内容を確認の上、アップデートの要否を判断してください。"
+                    ),
+                )
+            if analysis.get("is_windows_or_apple"):
+                return TicketResult(
+                    status="update_notification",
+                    text=build_update_notification_message(analysis),
+                )
+            return TicketResult(
+                status="update_not_target",
+                text=build_update_not_target_message(analysis),
+            )
+
         # 3. 脆弱性シグナルチェック
         if not contains_specific_vuln_signal(source_text):
             return TicketResult(
@@ -415,7 +460,34 @@ def generate_ticket(
         # 5. ファクトマージ
         merged_facts = merge_hypothesis_with_tool_facts(hypothesis, source_text)
 
-        # 6. 【依頼内容】AIチェック
+        # 5.1. SBOMバージョンフィルタで全エントリ除去 → 対応不要
+        _all_count = int(merged_facts.get("all_entries_count") or 0)
+        _post_count = len(merged_facts.get("entries") or [])
+        _sbom_vers = merged_facts.get("sbom_alma_versions") or []
+        if _all_count > 0 and _post_count == 0 and _sbom_vers:
+            return TicketResult(
+                status="sbom_skip",
+                text=build_sbom_version_not_applicable_message(
+                    merged_facts.get("products") or [],
+                    set(_sbom_vers),
+                ),
+            )
+
+        # 5.5. 学習システム: プリファレンス適用
+        if space_id:
+            try:
+                preferences = fetch_ticket_preferences(
+                    space_id=space_id,
+                    product_names=merged_facts.get("products"),
+                    cvss_score=merged_facts.get("max_score"),
+                )
+                if preferences:
+                    merged_facts = apply_preferences_to_facts(merged_facts, preferences)
+                    logger.info("Applied %d preferences for space %s", len(preferences), space_id)
+            except Exception as exc:
+                logger.warning("Preference fetch/apply failed: %s", exc)
+
+        # 6. 【依頼内容】AIチェック（学習で強ロックされていない場合のみ）
         try:
             remediation_check = check_remediation_advice(merged_facts, source_text)
             if remediation_check.get("suggested_action"):
@@ -439,7 +511,6 @@ def generate_ticket(
         ok, audit_errors = audit_ticket_candidate(summary, detail, reasoning, facts=merged_facts)
         if not ok:
             logger.warning("Ticket audit failed, fallback to source-derived output: %s", ", ".join(audit_errors))
-            # 監査失敗時: ファクトから直接組立（仮説スキップ）
             fallback_facts = extract_source_facts(source_text)
             try:
                 rc = check_remediation_advice(fallback_facts, source_text)
@@ -455,6 +526,18 @@ def generate_ticket(
             fb_detail = infer_ticket_detail_from_facts(fallback_facts)
             fb_reasoning = infer_reasoning_from_facts(fallback_facts)
             response_text = build_ticket_text_from_parts(fb_summary, fb_detail, fb_reasoning)
+            # 10. 履歴保存（監査失敗時も保存）
+            if space_id:
+                try:
+                    save_ticket_record_to_history(
+                        space_id=space_id,
+                        thread_name=thread_name,
+                        response_text=response_text,
+                        source=f"pipeline_audit_fallback:{history_key}",
+                        facts=fallback_facts,
+                    )
+                except Exception as hist_exc:
+                    logger.warning("History save failed: %s", hist_exc)
             return TicketResult(
                 status="ticket",
                 text=response_text,
@@ -469,6 +552,19 @@ def generate_ticket(
             agent_query_fn=agent_query_fn,
             history_key=history_key,
         )
+
+        # 10. 履歴保存
+        if space_id:
+            try:
+                save_ticket_record_to_history(
+                    space_id=space_id,
+                    thread_name=thread_name,
+                    response_text=response_text,
+                    source=f"pipeline:{history_key}",
+                    facts=merged_facts,
+                )
+            except Exception as hist_exc:
+                logger.warning("History save failed: %s", hist_exc)
 
         return TicketResult(
             status="ticket",

@@ -2282,10 +2282,29 @@ def _check_sbom_registration(source_text: str) -> tuple[bool, list[str], str]:
     return True, products, "SBOMに登録されていない製品のため、自社環境に該当なしと判断"
 
 
+def _build_sbom_version_not_applicable_message(
+    detected_products: list[str],
+    sbom_versions: set[str],
+) -> str:
+    """SBOMバージョン不一致（全エントリがフィルタ除去）時の対応不要メッセージ。"""
+    products_str = ", ".join(detected_products) if detected_products else "AlmaLinux"
+    sbom_ver_str = ", ".join(sorted(sbom_versions, key=lambda v: int(v) if v.isdigit() else 0))
+    return (
+        "ℹ️ 対応不要\n\n"
+        "対応不要と判断しました。\n\n"
+        f"【検出された製品】\n{products_str}\n\n"
+        "【判断理由】\n"
+        f"SBOMに登録されているAlmaLinuxバージョンは {sbom_ver_str} ですが、"
+        "通知内の脆弱性は対象外バージョンのため、自社環境に該当なしと判断しました。\n\n"
+        "もし対象環境に該当バージョンがある場合はお知らせください。"
+    )
+
+
 def _build_sbom_not_registered_message(products: list[str], reason: str) -> str:
     """SBOM未登録製品に対する対応不要メッセージを構築。"""
     products_str = ", ".join(products) if products else "（製品を特定できませんでした）"
     return (
+        "ℹ️ 対応不要\n\n"
         "対応不要と判断しました。\n\n"
         f"【検出された製品】\n{products_str}\n\n"
         f"【判断理由】\n{reason}\n\n"
@@ -2295,6 +2314,7 @@ def _build_sbom_not_registered_message(products: list[str], reason: str) -> str:
 
 _MSG_FORMAT_SIDFM = "sidfm"
 _MSG_FORMAT_EXPLOITED = "exploited"
+_MSG_FORMAT_UPDATE = "update"
 _MSG_FORMAT_UNKNOWN = "unknown"
 
 
@@ -2306,15 +2326,21 @@ def _classify_message_format(text: str) -> str:
     # 優先順位: exploited > sidfm（悪用済み通知が最優先）
     if "【悪用された脆弱性】" in head:
         return _MSG_FORMAT_EXPLOITED
+    if "【脆弱性情報 更新通知】" in head:
+        return _MSG_FORMAT_UPDATE
     if "[SIDfm]" in head:
         return _MSG_FORMAT_SIDFM
     return _MSG_FORMAT_UNKNOWN
 
 
-def _analyze_exploited_vuln(source_text: str) -> dict[str, Any]:
-    """【悪用された脆弱性】通知をGeminiで軽量分析。"""
+def _analyze_exploited_vuln(source_text: str, notification_type: str = "exploited") -> dict[str, Any]:
+    """【悪用された脆弱性】/【脆弱性情報 更新通知】をGeminiで軽量分析。"""
+    if notification_type == "update":
+        intro = "以下は「脆弱性情報の更新通知」のテキストです。\n"
+    else:
+        intro = "以下は「悪用が確認された脆弱性」の通知テキストです。\n"
     prompt = (
-        "以下は「悪用が確認された脆弱性」の通知テキストです。\n"
+        intro +
         "次の情報をJSON形式で返してください。\n\n"
         "1. is_windows_or_apple: 対象製品がWindows製品またはApple製品"
         "（macOS, iOS, iPadOS, Safari, watchOS, tvOS, visionOS等）"
@@ -2366,6 +2392,39 @@ def _build_exploited_not_target_message(analysis: dict[str, Any]) -> str:
     """悪用された脆弱性だがWindows/Apple以外 → 対応不要メッセージ。"""
     product = analysis.get("product_name") or "（不明）"
     return (
+        "ℹ️ 対応不要\n\n"
+        "対応不要と判断しました。\n\n"
+        f"【検出された製品】\n{product}\n\n"
+        "【判断理由】\nWindows / Apple 以外の製品のため、対応対象外です。"
+    )
+
+
+def _build_update_notification_message(analysis: dict[str, Any]) -> str:
+    """脆弱性情報の更新通知に対するアップデート確認メッセージ。"""
+    product = analysis.get("product_name") or "（不明）"
+    cves = analysis.get("cve_ids") or []
+    cve_str = ", ".join(cves) if cves else "（CVE番号なし）"
+    comment = analysis.get("comment") or ""
+    lines = [
+        "脆弱性情報の更新通知です。内容を確認の上、アップデートの要否を判断してください。",
+        "",
+        f"【対象製品】\n{product}",
+        "",
+        f"【CVE】\n{cve_str}",
+    ]
+    if comment:
+        lines.append("")
+        lines.append(f"【AIコメント】\n{comment}")
+    lines.append("")
+    lines.append("必要に応じて最新バージョンへのアップデートをご検討ください。")
+    return "\n".join(lines)
+
+
+def _build_update_not_target_message(analysis: dict[str, Any]) -> str:
+    """脆弱性情報の更新通知だがWindows/Apple以外 → 対応不要メッセージ。"""
+    product = analysis.get("product_name") or "（不明）"
+    return (
+        "ℹ️ 対応不要\n\n"
         "対応不要と判断しました。\n\n"
         f"【検出された製品】\n{product}\n\n"
         "【判断理由】\nWindows / Apple 以外の製品のため、対応対象外です。"
@@ -2771,13 +2830,22 @@ def _infer_reasoning_from_facts(facts: dict[str, Any]) -> str:
         scores_text = ", ".join(f"{s:.1f}" for s in facts["scores"])
     else:
         scores_text = "要確認"
+    products = facts.get("products") or []
+    _is_alma = any("almalinux" in p.lower() for p in products)
+    _sbom_vers = facts.get("sbom_alma_versions") or []
+    if _is_alma and _sbom_vers:
+        sbom_line = f"- SBOM照合で対象AlmaLinuxバージョンを適用: {', '.join(_sbom_vers)}\n"
+    elif _is_alma:
+        sbom_line = "- SBOM照合: AlmaLinuxバージョン情報なし\n"
+    else:
+        sbom_line = "- SBOM照合: 製品レベルで確認済み（AlmaLinuxバージョンフィルタ対象外）\n"
     base = (
         "【判断理由】\n"
         f"- 通知本文から対象製品を抽出: {product_text}\n"
         f"- 通知本文から脆弱性エントリを抽出: {all_entries_count}件（起票対象: {entries_count}件）\n"
         f"- 参照URLを抽出: {links_count}件\n"
         f"- CVSSを抽出: {scores_text}\n"
-        f"- SBOM照合で対象AlmaLinuxバージョンを適用: {', '.join(facts.get('sbom_alma_versions') or ['未適用'])}\n"
+        f"{sbom_line}"
         f"- 対応完了目標を算出: {facts.get('due_date') or '要確認'}（{facts.get('due_reason') or '根拠不足'}）"
     )
     remediation_reasoning = str(facts.get("remediation_reasoning") or "").strip()
@@ -3418,6 +3486,20 @@ def _process_message_event(event: dict[str, Any], user_name: str) -> str | None:
             _remember_turn(history_key, _clean_chat_text(event), response_text)
             return response_text
 
+        if msg_format == _MSG_FORMAT_UPDATE:
+            analysis = _analyze_exploited_vuln(source_text_for_quality, notification_type="update")
+            if not analysis:
+                response_text = (
+                    "脆弱性情報の更新通知です（AI分析が利用できませんでした）。\n"
+                    "内容を確認の上、アップデートの要否を判断してください。"
+                )
+            elif analysis.get("is_windows_or_apple"):
+                response_text = _build_update_notification_message(analysis)
+            else:
+                response_text = _build_update_not_target_message(analysis)
+            _remember_turn(history_key, _clean_chat_text(event), response_text)
+            return response_text
+
         if is_gmail_post and not _contains_specific_vuln_signal(source_text_for_quality):
             return _build_low_quality_ticket_message()
 
@@ -3427,6 +3509,18 @@ def _process_message_event(event: dict[str, Any], user_name: str) -> str | None:
 
         hypothesis = _run_hypothesis_pipeline(source_text_for_quality, history_key, user_instruction=hypothesis_instruction)
         merged_facts = _merge_hypothesis_with_tool_facts(hypothesis, source_text_for_quality)
+
+        # --- SBOMバージョンフィルタで全エントリ除去 → 対応不要 ---
+        _all_count = int(merged_facts.get("all_entries_count") or 0)
+        _post_count = len(merged_facts.get("entries") or [])
+        _sbom_vers = merged_facts.get("sbom_alma_versions") or []
+        if _all_count > 0 and _post_count == 0 and _sbom_vers:
+            response_text = _build_sbom_version_not_applicable_message(
+                merged_facts.get("products") or [],
+                set(_sbom_vers),
+            )
+            _remember_turn(history_key, _clean_chat_text(event), response_text)
+            return response_text
 
         # --- 学習済みプリファレンスの適用 ---
         preference_counts: dict[str, int] = {}

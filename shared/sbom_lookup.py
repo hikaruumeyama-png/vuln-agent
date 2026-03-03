@@ -103,10 +103,29 @@ def check_sbom_registration(source_text: str) -> tuple[bool, list[str], str]:
     return True, products, "SBOMに登録されていない製品のため、自社環境に該当なしと判断"
 
 
+def build_sbom_version_not_applicable_message(
+    detected_products: list[str],
+    sbom_versions: set[str],
+) -> str:
+    """SBOMバージョン不一致（全エントリがフィルタ除去）時の対応不要メッセージ。"""
+    products_str = ", ".join(detected_products) if detected_products else "AlmaLinux"
+    sbom_ver_str = ", ".join(sorted(sbom_versions, key=lambda v: int(v) if v.isdigit() else 0))
+    return (
+        "ℹ️ 対応不要\n\n"
+        "対応不要と判断しました。\n\n"
+        f"【検出された製品】\n{products_str}\n\n"
+        "【判断理由】\n"
+        f"SBOMに登録されているAlmaLinuxバージョンは {sbom_ver_str} ですが、"
+        "通知内の脆弱性は対象外バージョンのため、自社環境に該当なしと判断しました。\n\n"
+        "もし対象環境に該当バージョンがある場合はお知らせください。"
+    )
+
+
 def build_sbom_not_registered_message(products: list[str], reason: str) -> str:
     """SBOM未登録製品に対する対応不要メッセージを構築。"""
     products_str = ", ".join(products) if products else "（製品を特定できませんでした）"
     return (
+        "ℹ️ 対応不要\n\n"
         "対応不要と判断しました。\n\n"
         f"【検出された製品】\n{products_str}\n\n"
         f"【判断理由】\n{reason}\n\n"

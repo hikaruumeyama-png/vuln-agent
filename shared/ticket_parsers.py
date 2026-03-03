@@ -11,6 +11,7 @@ from shared.constants import (
     MSG_FORMAT_EXPLOITED,
     MSG_FORMAT_SIDFM,
     MSG_FORMAT_UNKNOWN,
+    MSG_FORMAT_UPDATE,
     PRODUCT_EXTRACT_PATTERNS,
 )
 
@@ -127,6 +128,8 @@ def classify_message_format(text: str) -> str:
     head = t[:500]
     if "【悪用された脆弱性】" in head:
         return MSG_FORMAT_EXPLOITED
+    if "【脆弱性情報 更新通知】" in head:
+        return MSG_FORMAT_UPDATE
     if "[SIDfm]" in head:
         return MSG_FORMAT_SIDFM
     return MSG_FORMAT_UNKNOWN

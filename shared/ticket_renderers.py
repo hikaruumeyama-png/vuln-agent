@@ -94,13 +94,22 @@ def infer_reasoning_from_facts(facts: dict[str, Any]) -> str:
         scores_text = ", ".join(f"{s:.1f}" for s in facts["scores"])
     else:
         scores_text = "要確認"
+    products = facts.get("products") or []
+    _is_alma = any("almalinux" in p.lower() for p in products)
+    _sbom_vers = facts.get("sbom_alma_versions") or []
+    if _is_alma and _sbom_vers:
+        sbom_line = f"- SBOM照合で対象AlmaLinuxバージョンを適用: {', '.join(_sbom_vers)}\n"
+    elif _is_alma:
+        sbom_line = "- SBOM照合: AlmaLinuxバージョン情報なし\n"
+    else:
+        sbom_line = "- SBOM照合: 製品レベルで確認済み（AlmaLinuxバージョンフィルタ対象外）\n"
     base = (
         "【判断理由】\n"
         f"- 通知本文から対象製品を抽出: {product_text}\n"
         f"- 通知本文から脆弱性エントリを抽出: {all_entries_count}件（起票対象: {entries_count}件）\n"
         f"- 参照URLを抽出: {links_count}件\n"
         f"- CVSSを抽出: {scores_text}\n"
-        f"- SBOM照合で対象AlmaLinuxバージョンを適用: {', '.join(facts.get('sbom_alma_versions') or ['未適用'])}\n"
+        f"{sbom_line}"
         f"- 対応完了目標を算出: {facts.get('due_date') or '要確認'}（{facts.get('due_reason') or '根拠不足'}）"
     )
     remediation_reasoning = str(facts.get("remediation_reasoning") or "").strip()
@@ -162,8 +171,10 @@ def audit_ticket_candidate(
         if phrase.lower() in lowered:
             errors.append(f"forbidden_phrase:{phrase}")
     if isinstance(facts, dict):
-        sbom_versions = [str(v).strip() for v in (facts.get("sbom_alma_versions") or []) if str(v).strip()]
-        if len(sbom_versions) >= 2:
+        # マルチバージョン監査: 通知内に実際に2バージョン以上のエントリがある場合のみ検査
+        grouped = facts.get("grouped_vuln_links") or {}
+        actual_versions_in_ticket = len(grouped) if isinstance(grouped, dict) else 0
+        if actual_versions_in_ticket >= 2:
             alma_lines = re.findall(r"^AlmaLinux[0-9]{1,2}\s*$", detail, flags=re.MULTILINE)
             if len(set(alma_lines)) < 2:
                 errors.append("missing_multiversion_target_lines")
@@ -278,6 +289,39 @@ def build_exploited_not_target_message(analysis: dict[str, Any]) -> str:
     """悪用された脆弱性だがWindows/Apple以外 → 対応不要メッセージ。"""
     product = analysis.get("product_name") or "（不明）"
     return (
+        "ℹ️ 対応不要\n\n"
+        "対応不要と判断しました。\n\n"
+        f"【検出された製品】\n{product}\n\n"
+        "【判断理由】\nWindows / Apple 以外の製品のため、対応対象外です。"
+    )
+
+
+def build_update_notification_message(analysis: dict[str, Any]) -> str:
+    """脆弱性情報の更新通知に対するアップデート確認メッセージ。"""
+    product = analysis.get("product_name") or "（不明）"
+    cves = analysis.get("cve_ids") or []
+    cve_str = ", ".join(cves) if cves else "（CVE番号なし）"
+    comment = analysis.get("comment") or ""
+    lines = [
+        "脆弱性情報の更新通知です。内容を確認の上、アップデートの要否を判断してください。",
+        "",
+        f"【対象製品】\n{product}",
+        "",
+        f"【CVE】\n{cve_str}",
+    ]
+    if comment:
+        lines.append("")
+        lines.append(f"【AIコメント】\n{comment}")
+    lines.append("")
+    lines.append("必要に応じて最新バージョンへのアップデートをご検討ください。")
+    return "\n".join(lines)
+
+
+def build_update_not_target_message(analysis: dict[str, Any]) -> str:
+    """脆弱性情報の更新通知だがWindows/Apple以外 → 対応不要メッセージ。"""
+    product = analysis.get("product_name") or "（不明）"
+    return (
+        "ℹ️ 対応不要\n\n"
         "対応不要と判断しました。\n\n"
         f"【検出された製品】\n{product}\n\n"
         "【判断理由】\nWindows / Apple 以外の製品のため、対応対象外です。"

@@ -1,4 +1,11 @@
+"""workspace_events_webhook/main.py のユニットテスト。
+
+shared.ticket_pipeline.generate_ticket をモックして、
+webhook ハンドラのルーティング・重複排除・Chat API 呼び出しを検証する。
+"""
+
 import base64
+import dataclasses
 import importlib.util
 import json
 from pathlib import Path
@@ -11,18 +18,55 @@ ROOT = Path(__file__).resolve().parent
 MODULE_PATH = ROOT / "workspace_events_webhook" / "main.py"
 
 
+# ---------------------------------------------------------------------------
+# generate_ticket のモック用 TicketResult
+# ---------------------------------------------------------------------------
+@dataclasses.dataclass
+class _MockTicketResult:
+    status: str = "ticket"
+    text: str = "【起票用（コピペ）】\nテスト起票テンプレート"
+    facts: dict | None = None
+    audit_ok: bool = True
+    audit_errors: list = dataclasses.field(default_factory=list)
+
+
+_generate_ticket_calls: list[dict] = []
+
+
+def _mock_generate_ticket(source_text: str, **kwargs) -> _MockTicketResult:
+    _generate_ticket_calls.append({"source_text": source_text, **kwargs})
+    return _MockTicketResult()
+
+
+def _mock_run_agent_query(prompt: str, user_id: str) -> str:
+    return "mocked agent response"
+
+
+# ---------------------------------------------------------------------------
+# 依存スタブ
+# ---------------------------------------------------------------------------
 def _stub_dependencies():
+    # functions_framework
     ff = types.ModuleType("functions_framework")
     ff.http = lambda fn: fn
     sys.modules["functions_framework"] = ff
 
-    google = types.ModuleType("google")
-    auth = types.ModuleType("google.auth")
-    auth.default = lambda scopes=None: (object(), "test-project")
-    google.auth = auth
-    sys.modules["google"] = google
-    sys.modules["google.auth"] = auth
+    # google.auth
+    google_mod = types.ModuleType("google")
+    auth_mod = types.ModuleType("google.auth")
+    transport_mod = types.ModuleType("google.auth.transport")
+    requests_mod = types.ModuleType("google.auth.transport.requests")
+    requests_mod.Request = object
+    transport_mod.requests = requests_mod
+    auth_mod.default = lambda scopes=None: (object(), "test-project")
+    auth_mod.transport = transport_mod
+    google_mod.auth = auth_mod
+    sys.modules["google"] = google_mod
+    sys.modules["google.auth"] = auth_mod
+    sys.modules["google.auth.transport"] = transport_mod
+    sys.modules["google.auth.transport.requests"] = requests_mod
 
+    # googleapiclient
     ga = types.ModuleType("googleapiclient")
     discovery = types.ModuleType("googleapiclient.discovery")
     discovery.build = lambda *args, **kwargs: object()
@@ -30,10 +74,23 @@ def _stub_dependencies():
     sys.modules["googleapiclient"] = ga
     sys.modules["googleapiclient.discovery"] = discovery
 
-    vertexai = types.ModuleType("vertexai")
-    vertexai.init = lambda **kwargs: None
-    vertexai.Client = object
-    sys.modules["vertexai"] = vertexai
+    # shared (全モジュールをモック)
+    shared_mod = types.ModuleType("shared")
+    shared_mod.__path__ = []
+    sys.modules["shared"] = shared_mod
+
+    # shared.agent_query
+    aq_mod = types.ModuleType("shared.agent_query")
+    aq_mod.run_agent_query = _mock_run_agent_query
+    shared_mod.agent_query = aq_mod
+    sys.modules["shared.agent_query"] = aq_mod
+
+    # shared.ticket_pipeline
+    tp_mod = types.ModuleType("shared.ticket_pipeline")
+    tp_mod.generate_ticket = _mock_generate_ticket
+    tp_mod.TicketResult = _MockTicketResult
+    shared_mod.ticket_pipeline = tp_mod
+    sys.modules["shared.ticket_pipeline"] = tp_mod
 
 
 def _load_module(name: str, path: Path):
@@ -44,9 +101,13 @@ def _load_module(name: str, path: Path):
     return module
 
 
+# ---------------------------------------------------------------------------
+# テスト用フェイク
+# ---------------------------------------------------------------------------
 class _FakeRequest:
-    def __init__(self, payload):
+    def __init__(self, payload, path="/"):
         self._payload = payload
+        self.path = path
 
     def get_json(self, silent=True):
         _ = silent
@@ -58,7 +119,7 @@ class _MessagesResource:
         self.created_calls = []
         self.source_message = {
             "name": "spaces/AAA/messages/BBB",
-            "text": "From: sidfm-notification@rakus.co.jp\nCVE-2026-1234",
+            "text": "From: sidfm-notification@rakus.co.jp\nSubject: CVE-2026-1234\nCVE-2026-1234 脆弱性通知",
             "thread": {"name": "spaces/AAA/threads/TTT"},
         }
 
@@ -89,6 +150,9 @@ class _ChatService:
         return self.spaces_resource
 
 
+# ---------------------------------------------------------------------------
+# テストケース
+# ---------------------------------------------------------------------------
 class WorkspaceEventsWebhookTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
@@ -97,7 +161,9 @@ class WorkspaceEventsWebhookTests(unittest.TestCase):
 
     def setUp(self):
         self.mod._EVENT_CACHE.clear()
+        _generate_ticket_calls.clear()
 
+    # --- イベント抽出 ---
     def test_extract_event_from_pubsub_push(self):
         data = {"reaction": {"name": "spaces/AAA/messages/BBB/reactions/R1"}}
         encoded = base64.b64encode(json.dumps(data).encode("utf-8")).decode("utf-8")
@@ -115,10 +181,12 @@ class WorkspaceEventsWebhookTests(unittest.TestCase):
         self.assertEqual(event_id, "evt-1")
         self.assertEqual(event_data["reaction"]["name"], "spaces/AAA/messages/BBB/reactions/R1")
 
-    def test_handle_workspace_event_processes_question_reaction(self):
+    # --- ？リアクション → generate_ticket ---
+    def test_question_reaction_calls_generate_ticket(self):
         service = _ChatService()
+        reader_service = _ChatService()
         self.mod._build_chat_service = lambda: service
-        self.mod._run_agent_query = lambda prompt, user_id: f"ok:{user_id}:{'【希望納期】' in prompt}"
+        self.mod._build_chat_reader_service = lambda: reader_service
 
         event_data = {
             "reaction": {
@@ -142,16 +210,29 @@ class WorkspaceEventsWebhookTests(unittest.TestCase):
         self.assertEqual(status, 200)
         body = json.loads(raw_body)
         self.assertEqual(body["processed"], 1)
-        self.assertEqual(len(service.spaces().messages().created_calls), 1)
-        created = service.spaces().messages().created_calls[0]
-        self.assertEqual(created["parent"], "spaces/AAA")
-        self.assertEqual(created["body"]["thread"]["name"], "spaces/AAA/threads/TTT")
-        self.assertIn("ok:999:True", created["body"]["text"])
 
-    def test_handle_workspace_event_ignores_non_question_reaction(self):
+        # generate_ticket が呼ばれたか
+        self.assertEqual(len(_generate_ticket_calls), 1)
+        call = _generate_ticket_calls[0]
+        self.assertIn("CVE-2026-1234", call["source_text"])
+        # agent_query_fn が渡されているか
+        self.assertIsNotNone(call.get("agent_query_fn"))
+        # space_id と thread_name が渡されているか
+        self.assertEqual(call.get("space_id"), "spaces/AAA")
+        self.assertEqual(call.get("thread_name"), "spaces/AAA/threads/TTT")
+        self.assertEqual(call.get("history_key"), "workspace_reaction")
+
+        # Chat API にメッセージが送信されたか
+        created = service.spaces().messages().created_calls
+        self.assertEqual(len(created), 1)
+        self.assertEqual(created[0]["parent"], "spaces/AAA")
+        self.assertEqual(created[0]["body"]["thread"]["name"], "spaces/AAA/threads/TTT")
+        self.assertIn("【起票用（コピペ）】", created[0]["body"]["text"])
+
+    # --- 非？リアクション → スキップ ---
+    def test_non_question_reaction_is_ignored(self):
         service = _ChatService()
         self.mod._build_chat_service = lambda: service
-        self.mod._run_agent_query = lambda prompt, user_id: "ok"
 
         event_data = {
             "reaction": {
@@ -174,9 +255,259 @@ class WorkspaceEventsWebhookTests(unittest.TestCase):
         self.assertEqual(status, 200)
         body = json.loads(raw_body)
         self.assertEqual(body["processed"], 0)
-        self.assertEqual(len(service.spaces().messages().created_calls), 0)
+        self.assertEqual(len(_generate_ticket_calls), 0)
+
+    # --- 重複イベント排除 ---
+    def test_duplicate_event_is_skipped(self):
+        service = _ChatService()
+        reader_service = _ChatService()
+        self.mod._build_chat_service = lambda: service
+        self.mod._build_chat_reader_service = lambda: reader_service
+
+        event_data = {
+            "reaction": {
+                "name": "spaces/AAA/messages/BBB/reactions/R1",
+                "emoji": {"unicode": "❓"},
+                "user": {"name": "users/999"},
+            }
+        }
+        encoded = base64.b64encode(json.dumps(event_data).encode("utf-8")).decode("utf-8")
+        payload = {
+            "message": {
+                "data": encoded,
+                "attributes": {
+                    "ce-type": "google.workspace.chat.reaction.v1.created",
+                    "ce-id": "evt-dup",
+                },
+            }
+        }
+
+        # 1回目: 処理される
+        raw1, s1, _ = self.mod.handle_workspace_event(_FakeRequest(payload))
+        self.assertEqual(json.loads(raw1)["processed"], 1)
+
+        # 2回目: event_id レベルで重複排除
+        raw2, s2, _ = self.mod.handle_workspace_event(_FakeRequest(payload))
+        self.assertEqual(json.loads(raw2)["status"], "duplicate")
+
+    # --- Gmail メッセージイベント ---
+    def test_gmail_message_event_calls_generate_ticket(self):
+        service = _ChatService()
+        self.mod._build_chat_service = lambda: service
+
+        msg = {
+            "name": "spaces/AAA/messages/GGG",
+            "text": "From: sidfm-notification@example.com\nSubject: CVE-2026-9999\nView message",
+            "sender": {"displayName": "Gmail", "type": "BOT"},
+            "thread": {"name": "spaces/AAA/threads/TTT2"},
+        }
+        event_data = {"message": msg}
+        encoded = base64.b64encode(json.dumps(event_data).encode("utf-8")).decode("utf-8")
+        payload = {
+            "message": {
+                "data": encoded,
+                "attributes": {
+                    "ce-type": "google.workspace.chat.message.v1.created",
+                    "ce-id": "evt-gmail-1",
+                },
+            }
+        }
+
+        raw_body, status, _ = self.mod.handle_workspace_event(_FakeRequest(payload))
+        self.assertEqual(status, 200)
+        body = json.loads(raw_body)
+        self.assertEqual(body["processed"], 1)
+        self.assertEqual(len(_generate_ticket_calls), 1)
+
+        # Gmail メッセージでも agent_query_fn, space_id, thread_name が渡されるか
+        call = _generate_ticket_calls[0]
+        self.assertIsNotNone(call.get("agent_query_fn"))
+        self.assertEqual(call.get("space_id"), "spaces/AAA")
+        self.assertEqual(call.get("thread_name"), "spaces/AAA/threads/TTT2")
+        self.assertEqual(call.get("history_key"), "workspace_gmail")
+
+    # --- サポートされていないイベントタイプ ---
+    def test_unsupported_event_type_is_ignored(self):
+        event_data = {"space": {"name": "spaces/AAA"}}
+        encoded = base64.b64encode(json.dumps(event_data).encode("utf-8")).decode("utf-8")
+        payload = {
+            "message": {
+                "data": encoded,
+                "attributes": {
+                    "ce-type": "google.workspace.chat.space.v1.updated",
+                    "ce-id": "evt-unsupported",
+                },
+            }
+        }
+        raw_body, status, _ = self.mod.handle_workspace_event(_FakeRequest(payload))
+        self.assertEqual(status, 200)
+        body = json.loads(raw_body)
+        self.assertEqual(body["status"], "ignored")
+
+    # --- /renew パス ---
+    def test_renew_path_calls_renew_subscription(self):
+        renew_called = []
+        self.mod._renew_subscription = lambda: (
+            renew_called.append(True) or {"status": "renewed", "result": {}}
+        )
+        raw_body, status, _ = self.mod.handle_workspace_event(
+            _FakeRequest({}, path="/renew")
+        )
+        self.assertEqual(status, 200)
+        self.assertEqual(len(renew_called), 1)
+
+    # --- _looks_like_gmail_message ---
+    def test_looks_like_gmail_message_by_sender(self):
+        msg = {"sender": {"displayName": "Gmail", "type": "BOT"}, "text": "hello"}
+        self.assertTrue(self.mod._looks_like_gmail_message(msg))
+
+    def test_looks_like_gmail_message_by_signals(self):
+        msg = {
+            "sender": {"displayName": "SomeBot"},
+            "text": "From: test@example.com\nSubject: Alert\nView message",
+        }
+        self.assertTrue(self.mod._looks_like_gmail_message(msg))
+
+    def test_not_gmail_message(self):
+        msg = {"sender": {"displayName": "User"}, "text": "こんにちは"}
+        self.assertFalse(self.mod._looks_like_gmail_message(msg))
+
+    # --- cardsV2 テキスト抽出 ---
+    def test_extract_text_from_cards_v2(self):
+        """Gmail App の cardsV2 メッセージからテキストが正しく抽出される。"""
+        msg = {
+            "name": "spaces/AAA/messages/CCC",
+            "text": "",
+            "cardsV2": [{
+                "cardId": "forward_email_message",
+                "card": {
+                    "sections": [
+                        {
+                            "widgets": [{
+                                "decoratedText": {
+                                    "text": "[SIDfm] 脆弱性通知テスト",
+                                    "bottomLabel": "From: sidfm@example.com",
+                                }
+                            }]
+                        },
+                        {
+                            "widgets": [
+                                {
+                                    "textParagraph": {
+                                        "text": "━━━ SIDfm通知本文 ━━━\\r\\n1 63416  8.1 AlmaLinux 10 CVE-2026-1234"
+                                    }
+                                },
+                                {
+                                    "decoratedText": {
+                                        "bottomLabel": "To view the full email, go to Gmail"
+                                    }
+                                },
+                            ]
+                        },
+                    ]
+                }
+            }],
+            "sender": {"displayName": "Gmail", "type": "BOT"},
+            "thread": {"name": "spaces/AAA/threads/TTT3"},
+        }
+
+        result = self.mod._extract_source_text(msg)
+        # cardsV2 から件名・From 行・本文が抽出されること
+        self.assertIn("[SIDfm] 脆弱性通知テスト", result)
+        self.assertIn("From: sidfm@example.com", result)
+        self.assertIn("CVE-2026-1234", result)
+        self.assertIn("AlmaLinux 10", result)
+        # リテラル \r\n が実改行に変換されること
+        self.assertNotIn("\\r\\n", result)
+        # フッター行が除外されること
+        self.assertNotIn("To view the full email", result)
+        # json.dumps フォールバックが使われていないこと
+        self.assertNotIn('"cardsV2"', result)
+
+    def test_extract_text_from_cards_v2_with_html_entities(self):
+        """HTML エンティティが正しく復元される。"""
+        msg = {
+            "text": "",
+            "cardsV2": [{
+                "cardId": "test",
+                "card": {
+                    "sections": [{
+                        "widgets": [{
+                            "textParagraph": {
+                                "text": "脆弱性 &amp; セキュリティ &lt;重要&gt;"
+                            }
+                        }]
+                    }]
+                }
+            }],
+        }
+        result = self.mod._extract_source_text(msg)
+        self.assertIn("脆弱性 & セキュリティ <重要>", result)
+
+    def test_extract_source_text_prefers_longer(self):
+        """cardsV2 と text の両方がある場合、長い方が採用される。"""
+        long_body = "━━━ 本文 ━━━\n" + "A" * 200
+        msg = {
+            "text": "短いテキスト",
+            "cardsV2": [{
+                "cardId": "test",
+                "card": {
+                    "sections": [{
+                        "widgets": [{
+                            "textParagraph": {"text": long_body}
+                        }]
+                    }]
+                }
+            }],
+        }
+        result = self.mod._extract_source_text(msg)
+        self.assertIn("━━━ 本文 ━━━", result)
+
+    def test_gmail_cards_v2_message_event_extracts_body(self):
+        """Gmail App cardsV2 メッセージイベントで generate_ticket に正しいテキストが渡される。"""
+        service = _ChatService()
+        self.mod._build_chat_service = lambda: service
+
+        msg = {
+            "name": "spaces/AAA/messages/CARD1",
+            "text": "",
+            "cardsV2": [{
+                "cardId": "forward_email_message",
+                "card": {
+                    "sections": [
+                        {"widgets": [{"decoratedText": {"text": "[SIDfm] CVE通知"}}]},
+                        {"widgets": [{"textParagraph": {"text": "1 99999  9.8 AlmaLinux 10 CVE-2026-5678"}}]},
+                    ]
+                }
+            }],
+            "sender": {"displayName": "Gmail", "type": "BOT"},
+            "thread": {"name": "spaces/AAA/threads/TTT4"},
+        }
+        event_data = {"message": msg}
+        encoded = base64.b64encode(json.dumps(event_data).encode("utf-8")).decode("utf-8")
+        payload = {
+            "message": {
+                "data": encoded,
+                "attributes": {
+                    "ce-type": "google.workspace.chat.message.v1.created",
+                    "ce-id": "evt-gmail-card-1",
+                },
+            }
+        }
+
+        raw_body, status, _ = self.mod.handle_workspace_event(_FakeRequest(payload))
+        self.assertEqual(status, 200)
+        body = json.loads(raw_body)
+        self.assertEqual(body["processed"], 1)
+
+        # generate_ticket に cardsV2 から抽出したテキストが渡されるか
+        self.assertEqual(len(_generate_ticket_calls), 1)
+        call = _generate_ticket_calls[0]
+        self.assertIn("CVE-2026-5678", call["source_text"])
+        self.assertIn("[SIDfm] CVE通知", call["source_text"])
+        # json.dumps フォールバックが使われていないこと
+        self.assertNotIn('"cardsV2"', call["source_text"])
 
 
 if __name__ == "__main__":
     unittest.main()
-

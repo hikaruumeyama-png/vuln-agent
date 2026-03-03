@@ -98,10 +98,14 @@ def check_remediation_advice(facts: dict[str, Any], source_text: str) -> dict[st
         return {}
 
 
-def analyze_exploited_vuln(source_text: str) -> dict[str, Any]:
-    """【悪用された脆弱性】通知をGeminiで軽量分析。"""
+def analyze_exploited_vuln(source_text: str, notification_type: str = "exploited") -> dict[str, Any]:
+    """【悪用された脆弱性】/【脆弱性情報 更新通知】をGeminiで軽量分析。"""
+    if notification_type == "update":
+        intro = "以下は「脆弱性情報の更新通知」のテキストです。\n"
+    else:
+        intro = "以下は「悪用が確認された脆弱性」の通知テキストです。\n"
     prompt = (
-        "以下は「悪用が確認された脆弱性」の通知テキストです。\n"
+        intro +
         "次の情報をJSON形式で返してください。\n\n"
         "1. is_windows_or_apple: 対象製品がWindows製品またはApple製品"
         "（macOS, iOS, iPadOS, Safari, watchOS, tvOS, visionOS等）"
