@@ -4,10 +4,15 @@ Workspace Events API サブスクリプション作成スクリプト
 Google Chat スペースのメッセージ・リアクションイベントを
 Pub/Sub トピック経由で受信するためのサブスクリプションを作成します。
 
-使い方:
-  python scripts/create_workspace_subscription.py \
-    --space-id "spaces/AAAA--pjkDQ" \
-    --topic "projects/info-sec-ai-platform/topics/vuln-agent-workspace-events"
+PowerShell での使い方:
+  # 依存パッケージインストール（初回のみ）
+  pip install google-auth google-auth-oauthlib
+
+  # 初回実行（OAuth クライアント ID JSON が必要）
+  python scripts\create_workspace_subscription.py --client-secrets C:\path\to\client_secret.json
+
+  # 2回目以降（トークンがキャッシュされるので --client-secrets 不要）
+  python scripts\create_workspace_subscription.py
 
 注意:
   - OAuth ユーザー認証が必要（サービスアカウントでは不可）
@@ -119,13 +124,13 @@ def main() -> None:
     )
     parser.add_argument(
         "--space-id",
-        required=True,
-        help="Google Chat スペースID (例: spaces/AAAA--pjkDQ)",
+        default="spaces/AAAA--pjkDQ",
+        help="Google Chat スペースID (デフォルト: spaces/AAAA--pjkDQ)",
     )
     parser.add_argument(
         "--topic",
-        required=True,
-        help="Pub/Sub トピック (例: projects/PROJECT/topics/TOPIC)",
+        default="projects/info-sec-ai-platform/topics/vuln-agent-workspace-events",
+        help="Pub/Sub トピック (デフォルト: info-sec-ai-platform のトピック)",
     )
     parser.add_argument(
         "--client-secrets",
