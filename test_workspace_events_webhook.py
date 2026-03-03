@@ -372,6 +372,142 @@ class WorkspaceEventsWebhookTests(unittest.TestCase):
         msg = {"sender": {"displayName": "User"}, "text": "こんにちは"}
         self.assertFalse(self.mod._looks_like_gmail_message(msg))
 
+    # --- cardsV2 テキスト抽出 ---
+    def test_extract_text_from_cards_v2(self):
+        """Gmail App の cardsV2 メッセージからテキストが正しく抽出される。"""
+        msg = {
+            "name": "spaces/AAA/messages/CCC",
+            "text": "",
+            "cardsV2": [{
+                "cardId": "forward_email_message",
+                "card": {
+                    "sections": [
+                        {
+                            "widgets": [{
+                                "decoratedText": {
+                                    "text": "[SIDfm] 脆弱性通知テスト",
+                                    "bottomLabel": "From: sidfm@example.com",
+                                }
+                            }]
+                        },
+                        {
+                            "widgets": [
+                                {
+                                    "textParagraph": {
+                                        "text": "━━━ SIDfm通知本文 ━━━\\r\\n1 63416  8.1 AlmaLinux 10 CVE-2026-1234"
+                                    }
+                                },
+                                {
+                                    "decoratedText": {
+                                        "bottomLabel": "To view the full email, go to Gmail"
+                                    }
+                                },
+                            ]
+                        },
+                    ]
+                }
+            }],
+            "sender": {"displayName": "Gmail", "type": "BOT"},
+            "thread": {"name": "spaces/AAA/threads/TTT3"},
+        }
+
+        result = self.mod._extract_source_text(msg)
+        # cardsV2 から件名・From 行・本文が抽出されること
+        self.assertIn("[SIDfm] 脆弱性通知テスト", result)
+        self.assertIn("From: sidfm@example.com", result)
+        self.assertIn("CVE-2026-1234", result)
+        self.assertIn("AlmaLinux 10", result)
+        # リテラル \r\n が実改行に変換されること
+        self.assertNotIn("\\r\\n", result)
+        # フッター行が除外されること
+        self.assertNotIn("To view the full email", result)
+        # json.dumps フォールバックが使われていないこと
+        self.assertNotIn('"cardsV2"', result)
+
+    def test_extract_text_from_cards_v2_with_html_entities(self):
+        """HTML エンティティが正しく復元される。"""
+        msg = {
+            "text": "",
+            "cardsV2": [{
+                "cardId": "test",
+                "card": {
+                    "sections": [{
+                        "widgets": [{
+                            "textParagraph": {
+                                "text": "脆弱性 &amp; セキュリティ &lt;重要&gt;"
+                            }
+                        }]
+                    }]
+                }
+            }],
+        }
+        result = self.mod._extract_source_text(msg)
+        self.assertIn("脆弱性 & セキュリティ <重要>", result)
+
+    def test_extract_source_text_prefers_longer(self):
+        """cardsV2 と text の両方がある場合、長い方が採用される。"""
+        long_body = "━━━ 本文 ━━━\n" + "A" * 200
+        msg = {
+            "text": "短いテキスト",
+            "cardsV2": [{
+                "cardId": "test",
+                "card": {
+                    "sections": [{
+                        "widgets": [{
+                            "textParagraph": {"text": long_body}
+                        }]
+                    }]
+                }
+            }],
+        }
+        result = self.mod._extract_source_text(msg)
+        self.assertIn("━━━ 本文 ━━━", result)
+
+    def test_gmail_cards_v2_message_event_extracts_body(self):
+        """Gmail App cardsV2 メッセージイベントで generate_ticket に正しいテキストが渡される。"""
+        service = _ChatService()
+        self.mod._build_chat_service = lambda: service
+
+        msg = {
+            "name": "spaces/AAA/messages/CARD1",
+            "text": "",
+            "cardsV2": [{
+                "cardId": "forward_email_message",
+                "card": {
+                    "sections": [
+                        {"widgets": [{"decoratedText": {"text": "[SIDfm] CVE通知"}}]},
+                        {"widgets": [{"textParagraph": {"text": "1 99999  9.8 AlmaLinux 10 CVE-2026-5678"}}]},
+                    ]
+                }
+            }],
+            "sender": {"displayName": "Gmail", "type": "BOT"},
+            "thread": {"name": "spaces/AAA/threads/TTT4"},
+        }
+        event_data = {"message": msg}
+        encoded = base64.b64encode(json.dumps(event_data).encode("utf-8")).decode("utf-8")
+        payload = {
+            "message": {
+                "data": encoded,
+                "attributes": {
+                    "ce-type": "google.workspace.chat.message.v1.created",
+                    "ce-id": "evt-gmail-card-1",
+                },
+            }
+        }
+
+        raw_body, status, _ = self.mod.handle_workspace_event(_FakeRequest(payload))
+        self.assertEqual(status, 200)
+        body = json.loads(raw_body)
+        self.assertEqual(body["processed"], 1)
+
+        # generate_ticket に cardsV2 から抽出したテキストが渡されるか
+        self.assertEqual(len(_generate_ticket_calls), 1)
+        call = _generate_ticket_calls[0]
+        self.assertIn("CVE-2026-5678", call["source_text"])
+        self.assertIn("[SIDfm] CVE通知", call["source_text"])
+        # json.dumps フォールバックが使われていないこと
+        self.assertNotIn('"cardsV2"', call["source_text"])
+
 
 if __name__ == "__main__":
     unittest.main()

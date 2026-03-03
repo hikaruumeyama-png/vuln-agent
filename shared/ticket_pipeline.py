@@ -133,7 +133,18 @@ def extract_source_facts(source_text: str) -> dict[str, Any]:
         selected_entries = []
 
     entry_links = [str(e.get("url") or "").strip() for e in selected_entries if str(e.get("url") or "").strip()]
-    vuln_links = entry_links or sid_links or links
+    # Google URL はノイズとして除外（Gmail App カード由来の URL 等）
+    _google_noise_re = re.compile(
+        r"https?://(?:groups|docs|support|mail|chat|drive|calendar)\.google\.com",
+        re.IGNORECASE,
+    )
+    def _filter_noise_urls(urls: list[str]) -> list[str]:
+        return [u for u in urls if not _google_noise_re.match(u)]
+
+    filtered_entry_links = _filter_noise_urls(entry_links)
+    filtered_sid_links = _filter_noise_urls(sid_links)
+    filtered_links = _filter_noise_urls(links)
+    vuln_links = filtered_entry_links or filtered_sid_links or filtered_links or ["要確認"]
 
     grouped_links_by_version: dict[str, list[str]] = {}
     for e in (selected_entries or entries):
