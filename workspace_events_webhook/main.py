@@ -23,6 +23,7 @@ import google.auth
 import google.auth.transport.requests
 from googleapiclient.discovery import build
 
+from shared.agent_query import run_agent_query
 from shared.ticket_pipeline import generate_ticket
 
 logger = logging.getLogger(__name__)
@@ -225,7 +226,13 @@ def _handle_message_events(
         try:
             logger.info("Gmail message detected: %s in %s", message_name, space_name)
             source_text = _extract_source_text(msg)
-            result = generate_ticket(source_text=source_text)
+            result = generate_ticket(
+                source_text=source_text,
+                agent_query_fn=run_agent_query,
+                history_key="workspace_gmail",
+                space_id=space_name,
+                thread_name=thread_name,
+            )
             response_text = result.text
 
             body: dict[str, Any] = {"text": response_text}
@@ -434,7 +441,13 @@ def handle_workspace_event(request):
                 continue
 
             source_text = _extract_source_text(source_message)
-            result = generate_ticket(source_text=source_text)
+            result = generate_ticket(
+                source_text=source_text,
+                agent_query_fn=run_agent_query,
+                history_key="workspace_reaction",
+                space_id=space_name,
+                thread_name=thread_name,
+            )
             response_text = result.text
 
             body: dict[str, Any] = {"text": response_text}

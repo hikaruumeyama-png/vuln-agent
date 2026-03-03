@@ -34,6 +34,12 @@ from shared.ticket_parsers import (
     infer_request_summary_from_source,
     is_summary_low_quality,
 )
+from shared.ticket_history import save_ticket_record_to_history
+from shared.ticket_preferences import (
+    PREFERENCE_STRONG_THRESHOLD,
+    apply_preferences_to_facts,
+    fetch_ticket_preferences,
+)
 from shared.ticket_renderers import (
     ai_final_review_with_value_lock,
     audit_ticket_candidate,
@@ -357,6 +363,8 @@ def generate_ticket(
     source_text: str,
     agent_query_fn: Callable[[str, str], str] | None = None,
     history_key: str = "pipeline",
+    space_id: str = "",
+    thread_name: str = "",
 ) -> TicketResult:
     """脆弱性通知テキストから起票テンプレートを生成する。
 
@@ -364,6 +372,8 @@ def generate_ticket(
         source_text: 脆弱性通知の本文テキスト。
         agent_query_fn: Agent Engine 呼び出し関数 (DI)。None なら最終AIレビューをスキップ。
         history_key: 履歴キー（ログ用）。
+        space_id: Google Chat スペースID（学習・履歴に使用）。
+        thread_name: Google Chat スレッド名（履歴に使用）。
 
     Returns:
         TicketResult
@@ -415,7 +425,21 @@ def generate_ticket(
         # 5. ファクトマージ
         merged_facts = merge_hypothesis_with_tool_facts(hypothesis, source_text)
 
-        # 6. 【依頼内容】AIチェック
+        # 5.5. 学習システム: プリファレンス適用
+        if space_id:
+            try:
+                preferences = fetch_ticket_preferences(
+                    space_id=space_id,
+                    product_names=merged_facts.get("products"),
+                    cvss_score=merged_facts.get("max_score"),
+                )
+                if preferences:
+                    merged_facts = apply_preferences_to_facts(merged_facts, preferences)
+                    logger.info("Applied %d preferences for space %s", len(preferences), space_id)
+            except Exception as exc:
+                logger.warning("Preference fetch/apply failed: %s", exc)
+
+        # 6. 【依頼内容】AIチェック（学習で強ロックされていない場合のみ）
         try:
             remediation_check = check_remediation_advice(merged_facts, source_text)
             if remediation_check.get("suggested_action"):
@@ -439,7 +463,6 @@ def generate_ticket(
         ok, audit_errors = audit_ticket_candidate(summary, detail, reasoning, facts=merged_facts)
         if not ok:
             logger.warning("Ticket audit failed, fallback to source-derived output: %s", ", ".join(audit_errors))
-            # 監査失敗時: ファクトから直接組立（仮説スキップ）
             fallback_facts = extract_source_facts(source_text)
             try:
                 rc = check_remediation_advice(fallback_facts, source_text)
@@ -455,6 +478,18 @@ def generate_ticket(
             fb_detail = infer_ticket_detail_from_facts(fallback_facts)
             fb_reasoning = infer_reasoning_from_facts(fallback_facts)
             response_text = build_ticket_text_from_parts(fb_summary, fb_detail, fb_reasoning)
+            # 10. 履歴保存（監査失敗時も保存）
+            if space_id:
+                try:
+                    save_ticket_record_to_history(
+                        space_id=space_id,
+                        thread_name=thread_name,
+                        response_text=response_text,
+                        source=f"pipeline_audit_fallback:{history_key}",
+                        facts=fallback_facts,
+                    )
+                except Exception as hist_exc:
+                    logger.warning("History save failed: %s", hist_exc)
             return TicketResult(
                 status="ticket",
                 text=response_text,
@@ -469,6 +504,19 @@ def generate_ticket(
             agent_query_fn=agent_query_fn,
             history_key=history_key,
         )
+
+        # 10. 履歴保存
+        if space_id:
+            try:
+                save_ticket_record_to_history(
+                    space_id=space_id,
+                    thread_name=thread_name,
+                    response_text=response_text,
+                    source=f"pipeline:{history_key}",
+                    facts=merged_facts,
+                )
+            except Exception as hist_exc:
+                logger.warning("History save failed: %s", hist_exc)
 
         return TicketResult(
             status="ticket",
