@@ -5,7 +5,7 @@ WORKDIR /app
 COPY requirements.txt ./
 RUN pip install --no-cache-dir -r requirements.txt
 
-COPY app.py live_api.py ./
+COPY app.py live_api.py sbom_admin_api.py ./
 COPY ui ./ui
 
 ENV PORT=8080
