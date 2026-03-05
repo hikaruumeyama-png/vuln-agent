@@ -1332,13 +1332,29 @@ async def api_admin_sbom_update(request: Request):
 
 
 @app.delete("/api/admin/sbom")
-def api_admin_sbom_delete(request: Request, purl: str = ""):
-    """SBOMエントリを削除する（クエリパラメータ ?purl=... で指定）"""
+def api_admin_sbom_delete(
+    request: Request,
+    purl: str = "",
+    name: str = "",
+    type: str = "",
+    version: str = "",
+    release: str = "",
+    os_name: str = "",
+    os_version: str = "",
+    arch: str = "",
+):
+    """SBOMエントリを削除する。
+    purl が指定されている場合は purl で特定。
+    purl が空の場合は name/type 等のフィールドで特定（PURL未設定データ対応）。
+    """
     _require_admin_auth(request)
     if not _admin_api_available:
         from fastapi import HTTPException
         raise HTTPException(status_code=503, detail="Admin API unavailable")
-    return delete_sbom_entry(purl=purl)
+    return delete_sbom_entry(
+        purl=purl, name=name, type=type, version=version, release=release,
+        os_name=os_name, os_version=os_version, arch=arch,
+    )
 
 
 # -- 担当者マッピング CRUD -------------------------------------------

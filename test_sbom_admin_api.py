@@ -339,11 +339,20 @@ class SbomUpdateDeleteTests(unittest.TestCase):
         result = self.mod.delete_sbom_entry("pkg:maven/a@1.0")
         self.assertEqual(result["status"], "error")
 
-    def test_delete_empty_purl_returns_error(self):
+    def test_delete_empty_purl_no_fallback_fields_returns_error(self):
+        """PURLも name/type も全て空の場合はエラー"""
         os.environ["BQ_SBOM_TABLE_ID"] = "proj.ds.tbl"
-        result = self.mod.delete_sbom_entry("")
+        result = self.mod.delete_sbom_entry(purl="")
         self.assertEqual(result["status"], "error")
-        self.assertIn("purl", result["message"])
+
+    def test_delete_by_name_type_when_purl_empty(self):
+        """PURLが空でも name+type があれば削除できる"""
+        os.environ["BQ_SBOM_TABLE_ID"] = "proj.ds.tbl"
+        result = self.mod.delete_sbom_entry(purl="", name="Firefox", type="application")
+        self.assertEqual(result["status"], "success")
+        sqls = " ".join(_ConfigurableBQClient.recorded_sql)
+        self.assertIn("DELETE", sqls)
+        self.assertIn("COALESCE(purl,'') = ''", sqls)  # PURLなしのみを対象
 
     def test_delete_succeeds(self):
         os.environ["BQ_SBOM_TABLE_ID"] = "proj.ds.tbl"

@@ -297,12 +297,32 @@ def update_sbom_entry(old_purl: str, entry: dict[str, Any]) -> dict[str, Any]:
         return {"status": "error", "message": str(e)}
 
 
-def delete_sbom_entry(purl: str) -> dict[str, Any]:
+def delete_sbom_entry(
+    purl: str = "",
+    name: str = "",
+    type: str = "",
+    version: str = "",
+    release: str = "",
+    os_name: str = "",
+    os_version: str = "",
+    arch: str = "",
+) -> dict[str, Any]:
     """
-    SBOMエントリを削除する
+    SBOMエントリを削除する。
+
+    purl が指定されている場合は WHERE purl = @purl で削除。
+    purl が空の場合は name / type / version / release の組み合わせで削除
+    (PURL未設定の古いデータ対応)。
 
     Args:
-        purl: 削除対象のPURL
+        purl:       削除対象のPURL（空の場合はフォールバックキーを使用）
+        name:       フォールバック識別キー
+        type:       フォールバック識別キー
+        version:    フォールバック識別キー
+        release:    フォールバック識別キー
+        os_name:    フォールバック識別キー（任意）
+        os_version: フォールバック識別キー（任意）
+        arch:       フォールバック識別キー（任意）
 
     Returns:
         {"status": "success"} or {"status": "error", "message": "..."}
@@ -314,18 +334,69 @@ def delete_sbom_entry(purl: str) -> dict[str, Any]:
         return {"status": "error", "message": "BQ_SBOM_TABLE_ID が未設定です"}
 
     purl = (purl or "").strip()
-    if not purl:
-        return {"status": "error", "message": "purl は必須です"}
 
     try:
         client = _get_bq_client()
-        delete_sql = "DELETE FROM `{t}` WHERE purl = @purl".format(t=table_id)
-        params = [bigquery.ScalarQueryParameter("purl", "STRING", purl)]
+
+        if purl:
+            # 通常パス: PURLで一意に特定
+            delete_sql = "DELETE FROM `{t}` WHERE purl = @purl".format(t=table_id)
+            params = [bigquery.ScalarQueryParameter("purl", "STRING", purl)]
+            logger.info("delete_sbom_entry by purl: %s", purl)
+        else:
+            # フォールバック: name + type の組み合わせで削除
+            name = (name or "").strip()
+            type_ = (type or "").strip()
+            if not name and not type_:
+                return {"status": "error", "message": "purl または name/type のいずれかが必要です"}
+
+            conditions: list[str] = []
+            params: list[bigquery.ScalarQueryParameter] = []
+
+            if name:
+                conditions.append("COALESCE(name,'') = @name")
+                params.append(bigquery.ScalarQueryParameter("name", "STRING", name))
+            if type_:
+                conditions.append("COALESCE(type,'') = @type")
+                params.append(bigquery.ScalarQueryParameter("type", "STRING", type_))
+
+            version_ = (version or "").strip()
+            if version_:
+                conditions.append("COALESCE(version,'') = @version")
+                params.append(bigquery.ScalarQueryParameter("version", "STRING", version_))
+
+            release_ = (release or "").strip()
+            if release_:
+                conditions.append("COALESCE(release,'') = @release")
+                params.append(bigquery.ScalarQueryParameter("release", "STRING", release_))
+
+            os_name_ = (os_name or "").strip()
+            if os_name_:
+                conditions.append("COALESCE(os_name,'') = @os_name")
+                params.append(bigquery.ScalarQueryParameter("os_name", "STRING", os_name_))
+
+            os_version_ = (os_version or "").strip()
+            if os_version_:
+                conditions.append("COALESCE(os_version,'') = @os_version")
+                params.append(bigquery.ScalarQueryParameter("os_version", "STRING", os_version_))
+
+            arch_ = (arch or "").strip()
+            if arch_:
+                conditions.append("COALESCE(arch,'') = @arch")
+                params.append(bigquery.ScalarQueryParameter("arch", "STRING", arch_))
+
+            # PURLが空のエントリのみ対象（PURLありを誤って削除しない）
+            conditions.append("COALESCE(purl,'') = ''")
+
+            delete_sql = "DELETE FROM `{t}` WHERE {w}".format(
+                t=table_id, w=" AND ".join(conditions)
+            )
+            logger.info("delete_sbom_entry by fields: name=%s type=%s version=%s", name, type_, version_)
+
         client.query(
             delete_sql,
             job_config=bigquery.QueryJobConfig(query_parameters=params)
         ).result()
-        logger.info("delete_sbom_entry: purl=%s", purl)
         return {"status": "success"}
     except Exception as e:
         logger.error("delete_sbom_entry error: %s", e)

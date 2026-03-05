@@ -203,9 +203,20 @@ async function saveSbom() {
 async function confirmDeleteSbom(idx) {
   const entry = window._sbomEntries?.[idx];
   if (!entry) return;
-  if (!confirm(`以下のSBOMエントリを削除しますか?\n\n${entry.purl}`)) return;
+  const label = entry.purl || `${entry.name} ${entry.version}`.trim() || "(不明)";
+  if (!confirm(`以下のSBOMエントリを削除しますか?\n\n${label}`)) return;
   try {
-    const params = new URLSearchParams({ purl: entry.purl });
+    // PURLが空の場合はフォールバックフィールドも送信して削除
+    const params = new URLSearchParams({
+      purl:       entry.purl       || "",
+      name:       entry.name       || "",
+      type:       entry.type       || "",
+      version:    entry.version    || "",
+      release:    entry.release    || "",
+      os_name:    entry.os_name    || "",
+      os_version: entry.os_version || "",
+      arch:       entry.arch       || "",
+    });
     await apiFetch(`/api/admin/sbom?${params}`, { method: "DELETE" });
     showToast("削除しました", "success");
     loadSbom();
