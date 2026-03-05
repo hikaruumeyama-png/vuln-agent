@@ -16,13 +16,11 @@
     <div class="app-layout">
       <!-- Header -->
       <header class="app-header">
-        <div class="header-left">
-          <div class="app-logo">
-            <i data-lucide="shield" class="logo-icon"></i>
-            <div>
-              <h1 class="app-title">Vulnerability Agent</h1>
-              <p class="app-subtitle">AI-powered vulnerability management</p>
-            </div>
+        <div class="app-logo">
+          <i data-lucide="shield" class="logo-icon"></i>
+          <div>
+            <h1 class="app-title">Vulnerability Agent</h1>
+            <p class="app-subtitle">AI-powered vulnerability management</p>
           </div>
         </div>
         <div class="header-right">
@@ -30,48 +28,43 @@
             <span class="connection-dot" id="status-indicator"></span>
             <span class="connection-label" id="status-text">Disconnected</span>
           </div>
-          <div class="connection-metrics">
-            <span id="ping-latency">Ping: -- ms</span>
-            <span id="reconnect-count">Reconnects: 0</span>
+          <div class="header-actions">
+            <button id="connect-button" class="btn-header" title="接続">
+              <i data-lucide="wifi"></i>
+            </button>
+            <button id="disconnect-button" class="btn-header" disabled title="切断">
+              <i data-lucide="wifi-off"></i>
+            </button>
+            <div class="header-divider"></div>
+            <button id="login-button" class="btn-header" type="button" title="ログイン">
+              <i data-lucide="log-in"></i>
+            </button>
+            <button id="logout-button" class="btn-header" type="button" title="ログアウト">
+              <i data-lucide="log-out"></i>
+            </button>
+            <div class="header-divider"></div>
+            <a href="/admin" class="btn-header" title="SBOM・担当者管理">
+              <i data-lucide="database"></i>
+            </a>
+            <button id="toggle-a2a-trace" class="btn-header" type="button" title="A2Aトレースを表示/非表示">
+              <i data-lucide="network"></i>
+            </button>
           </div>
+          <!-- Hidden metrics: IDs kept for JS compatibility -->
+          <span id="ping-latency" hidden></span>
+          <span id="reconnect-count" hidden></span>
         </div>
       </header>
 
-      <!-- Connection bar -->
-      <section class="connection-bar">
-        <div class="connection-form">
-          <button id="connect-button" class="btn btn-primary">
-            <i data-lucide="wifi"></i>
-            <span>Connect</span>
-          </button>
-          <button id="disconnect-button" class="btn btn-outline" disabled>
-            <i data-lucide="wifi-off"></i>
-            <span>Disconnect</span>
-          </button>
-          <button id="login-button" class="btn btn-outline" type="button">
-            <i data-lucide="log-in"></i>
-            <span>Login</span>
-          </button>
-          <button id="logout-button" class="btn btn-outline" type="button">
-            <i data-lucide="log-out"></i>
-            <span>Logout</span>
-          </button>
-          <a href="/admin" class="btn btn-outline" title="SBOM・担当者管理">
-            <i data-lucide="database"></i>
-            <span>Admin</span>
-          </a>
-        </div>
-      </section>
-
-      <!-- Main content: three-panel layout -->
+      <!-- Main content: 2-col layout (history + chat), A2A panel opens on demand -->
       <div class="main-content">
         <!-- Left: Personal history panel -->
         <section class="history-panel" id="history-panel">
           <div class="panel-header">
             <i data-lucide="history"></i>
             <span>Chat Threads</span>
-            <span class="history-user" id="history-user">User: anonymous</span>
-            <button id="toggle-history" class="history-toggle-btn" type="button" title="History panel toggle" aria-label="Toggle history">
+            <span class="history-user" id="history-user"></span>
+            <button id="toggle-history" class="history-toggle-btn" type="button" title="履歴パネルを折り畳む" aria-label="Toggle history">
               <i data-lucide="panel-left"></i>
             </button>
           </div>
@@ -82,12 +75,12 @@
           <div id="history-feed" class="history-feed">
             <div class="activity-empty">
               <i data-lucide="history" class="empty-icon"></i>
-              <p>このユーザーの過去スレッドがここに表示されます。</p>
+              <p>過去のチャットスレッドがここに表示されます。</p>
             </div>
           </div>
         </section>
 
-        <!-- Center: Chat panel -->
+        <!-- Center: Chat panel (hero) -->
         <section class="chat-panel">
           <div class="panel-header">
             <i data-lucide="message-square"></i>
@@ -97,10 +90,10 @@
 
           <!-- Audio controls -->
           <div class="audio-bar" id="audio-bar">
-            <button id="start-audio" class="btn btn-audio" disabled title="Start Audio">
+            <button id="start-audio" class="btn btn-audio" disabled title="音声開始">
               <i data-lucide="mic"></i>
             </button>
-            <button id="stop-audio" class="btn btn-audio btn-audio-stop" disabled title="Stop Audio">
+            <button id="stop-audio" class="btn btn-audio btn-audio-stop" disabled title="音声停止">
               <i data-lucide="mic-off"></i>
             </button>
             <div class="voice-orb voice-orb-idle" id="voice-orb" aria-label="Agent voice status">
@@ -121,18 +114,18 @@
               required
               rows="1"
             ></textarea>
-            <button type="submit" class="btn btn-send" title="Send">
+            <button type="submit" class="btn btn-send" title="送信">
               <i data-lucide="send"></i>
             </button>
           </form>
         </section>
 
-        <!-- Right: A2A trace panel -->
+        <!-- Right: A2A trace panel (hidden by default, shown with body.trace-open) -->
         <section class="a2a-panel" id="a2a-panel">
           <div class="panel-header">
             <i data-lucide="network"></i>
             <span>A2A Trace</span>
-            <button class="btn btn-outline btn-clear" id="clear-a2a-trace" title="Clear A2A Trace">
+            <button class="btn btn-outline btn-clear" id="clear-a2a-trace" title="トレースをクリア">
               <span>Clear</span>
             </button>
           </div>
@@ -145,6 +138,8 @@
         </section>
       </div>
     </div>
+
+    <!-- Voice session overlay -->
     <div class="voice-session-overlay" id="voice-session-overlay" aria-live="polite">
       <div class="voice-session-content">
         <div class="voice-orb-large" id="voice-orb-large">
@@ -159,6 +154,7 @@
         </button>
       </div>
     </div>
+
     <div id="toast-container" class="toast-container" aria-live="polite" aria-atomic="true"></div>
 
     <script src="https://unpkg.com/lucide@0.460.0/dist/umd/lucide.min.js"></script>
