@@ -1225,6 +1225,188 @@ def auth_logout():
     return response
 
 
+# ── Admin API (SBOM・担当者マッピング CRUD) ──────────────────
+try:
+    try:
+        from .sbom_admin_api import (
+            list_sbom,
+            insert_sbom_entry,
+            update_sbom_entry,
+            delete_sbom_entry,
+            list_owner_mappings,
+            insert_owner_mapping,
+            update_owner_mapping,
+            delete_owner_mapping,
+        )
+    except ImportError:
+        from sbom_admin_api import (  # noqa: F401
+            list_sbom,
+            insert_sbom_entry,
+            update_sbom_entry,
+            delete_sbom_entry,
+            list_owner_mappings,
+            insert_owner_mapping,
+            update_owner_mapping,
+            delete_owner_mapping,
+        )
+    _admin_api_available = True
+except Exception as _admin_import_err:
+    _admin_api_available = False
+    logger.warning("sbom_admin_api unavailable: %s", _admin_import_err)
+
+
+def _require_admin_auth(request: Request) -> dict[str, Any]:
+    """OIDC認証チェック。未認証なら 401 を送出する。"""
+    from fastapi import HTTPException
+    if not OIDC_ENABLED:
+        return {"sub": "anonymous"}
+    user = _get_session_user_from_cookie(request.cookies)
+    if not user:
+        raise HTTPException(status_code=401, detail="Unauthorized")
+    return user
+
+
+@app.get("/admin")
+def ui_admin(request: Request):
+    if OIDC_ENABLED and not _get_session_user_from_cookie(request.cookies):
+        return RedirectResponse(url="/login?next=/admin", status_code=302)
+    ui_file = _resolve_ui_file("admin.html")
+    if not ui_file:
+        return PlainTextResponse("admin.html not found", status_code=404)
+    return FileResponse(ui_file)
+
+
+@app.get("/admin.js")
+def ui_admin_js(request: Request):
+    if OIDC_ENABLED and not _get_session_user_from_cookie(request.cookies):
+        return RedirectResponse(url="/login?next=/admin", status_code=302)
+    ui_file = _resolve_ui_file("admin.js")
+    if not ui_file:
+        return PlainTextResponse("admin.js not found", status_code=404)
+    return FileResponse(ui_file, media_type="application/javascript; charset=utf-8")
+
+
+@app.get("/admin.css")
+def ui_admin_css(request: Request):
+    if OIDC_ENABLED and not _get_session_user_from_cookie(request.cookies):
+        return RedirectResponse(url="/login?next=/admin", status_code=302)
+    ui_file = _resolve_ui_file("admin.css")
+    if not ui_file:
+        return PlainTextResponse("admin.css not found", status_code=404)
+    return FileResponse(ui_file, media_type="text/css; charset=utf-8")
+
+
+# -- SBOM CRUD -------------------------------------------------------
+
+@app.get("/api/admin/sbom")
+def api_admin_sbom_list(request: Request, q: str = "", page: int = 1, per_page: int = 50):
+    """SBOMエントリ一覧を取得する（ページネーション対応）"""
+    _require_admin_auth(request)
+    if not _admin_api_available:
+        from fastapi import HTTPException
+        raise HTTPException(status_code=503, detail="Admin API unavailable (BigQuery not configured)")
+    return list_sbom(q=q, page=page, per_page=per_page)
+
+
+@app.post("/api/admin/sbom")
+async def api_admin_sbom_insert(request: Request):
+    """SBOMエントリを新規追加する"""
+    _require_admin_auth(request)
+    if not _admin_api_available:
+        from fastapi import HTTPException
+        raise HTTPException(status_code=503, detail="Admin API unavailable")
+    body = await request.json()
+    return insert_sbom_entry(body)
+
+
+@app.put("/api/admin/sbom")
+async def api_admin_sbom_update(request: Request):
+    """SBOMエントリを更新する（body.old_purl で対象を特定）"""
+    _require_admin_auth(request)
+    if not _admin_api_available:
+        from fastapi import HTTPException
+        raise HTTPException(status_code=503, detail="Admin API unavailable")
+    body = await request.json()
+    old_purl = (body.pop("old_purl", None) or "").strip()
+    return update_sbom_entry(old_purl=old_purl, entry=body)
+
+
+@app.delete("/api/admin/sbom")
+def api_admin_sbom_delete(
+    request: Request,
+    purl: str = "",
+    name: str = "",
+    type: str = "",
+    version: str = "",
+    release: str = "",
+    os_name: str = "",
+    os_version: str = "",
+    arch: str = "",
+):
+    """SBOMエントリを削除する。
+    purl が指定されている場合は purl で特定。
+    purl が空の場合は name/type 等のフィールドで特定（PURL未設定データ対応）。
+    """
+    _require_admin_auth(request)
+    if not _admin_api_available:
+        from fastapi import HTTPException
+        raise HTTPException(status_code=503, detail="Admin API unavailable")
+    return delete_sbom_entry(
+        purl=purl, name=name, type=type, version=version, release=release,
+        os_name=os_name, os_version=os_version, arch=arch,
+    )
+
+
+# -- 担当者マッピング CRUD -------------------------------------------
+
+@app.get("/api/admin/owners")
+def api_admin_owners_list(request: Request, q: str = ""):
+    """担当者マッピング一覧を取得する"""
+    _require_admin_auth(request)
+    if not _admin_api_available:
+        from fastapi import HTTPException
+        raise HTTPException(status_code=503, detail="Admin API unavailable")
+    return list_owner_mappings(q=q)
+
+
+@app.post("/api/admin/owners")
+async def api_admin_owners_insert(request: Request):
+    """担当者マッピングを新規追加する"""
+    _require_admin_auth(request)
+    if not _admin_api_available:
+        from fastapi import HTTPException
+        raise HTTPException(status_code=503, detail="Admin API unavailable")
+    body = await request.json()
+    return insert_owner_mapping(body)
+
+
+@app.put("/api/admin/owners")
+async def api_admin_owners_update(request: Request):
+    """担当者マッピングを更新する（body.old_pattern + old_system_name で対象を特定）"""
+    _require_admin_auth(request)
+    if not _admin_api_available:
+        from fastapi import HTTPException
+        raise HTTPException(status_code=503, detail="Admin API unavailable")
+    body = await request.json()
+    old_pattern     = (body.pop("old_pattern",     None) or "").strip()
+    old_system_name = (body.pop("old_system_name", None) or "").strip()
+    return update_owner_mapping(
+        old_pattern=old_pattern,
+        old_system_name=old_system_name,
+        entry=body,
+    )
+
+
+@app.delete("/api/admin/owners")
+def api_admin_owners_delete(request: Request, pattern: str = "", system_name: str = ""):
+    """担当者マッピングを削除する（クエリパラメータで指定）"""
+    _require_admin_auth(request)
+    if not _admin_api_available:
+        from fastapi import HTTPException
+        raise HTTPException(status_code=503, detail="Admin API unavailable")
+    return delete_owner_mapping(pattern=pattern, system_name=system_name)
+
+
 @app.websocket("/ws")
 async def websocket_endpoint(websocket: WebSocket):
     ws_user = _get_session_user_from_cookie(websocket.cookies) if OIDC_ENABLED else {"sub": "anonymous"}

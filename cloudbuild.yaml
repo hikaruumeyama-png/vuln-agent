@@ -347,6 +347,9 @@ steps:
         cp web/app.js live_gateway/ui/app.js
         cp web/style.css live_gateway/ui/style.css
         cp web/login.html live_gateway/ui/login.html
+        cp web/admin.html live_gateway/ui/admin.html
+        cp web/admin.js live_gateway/ui/admin.js
+        cp web/admin.css live_gateway/ui/admin.css
         gcloud run deploy vuln-agent-live-gateway \
           --source=live_gateway \
           --region=${_REGION} \

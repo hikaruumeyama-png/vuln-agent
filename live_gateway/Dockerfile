@@ -15,7 +15,7 @@ WORKDIR /app
 COPY --from=builder /usr/local/lib/python3.12/site-packages /usr/local/lib/python3.12/site-packages
 COPY --from=builder /usr/local/bin/uvicorn /usr/local/bin/uvicorn
 
-COPY app.py live_api.py ./
+COPY app.py live_api.py sbom_admin_api.py ./
 COPY ui ./ui
 
 ENV PORT=8080

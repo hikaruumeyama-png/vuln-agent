@@ -1303,6 +1303,9 @@ historyFeed?.addEventListener("click", (event) => {
 toggleHistoryButton?.addEventListener("click", () => {
   document.body.classList.toggle("history-collapsed");
 });
+document.getElementById("toggle-a2a-trace")?.addEventListener("click", () => {
+  document.body.classList.toggle("trace-open");
+});
 
 voiceSessionCloseButton.addEventListener("click", async () => {
   await stopAudioCapture(true);
