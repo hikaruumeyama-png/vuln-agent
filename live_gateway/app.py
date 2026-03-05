@@ -1227,16 +1227,28 @@ def auth_logout():
 
 # ── Admin API (SBOM・担当者マッピング CRUD) ──────────────────
 try:
-    from .sbom_admin_api import (
-        list_sbom,
-        insert_sbom_entry,
-        update_sbom_entry,
-        delete_sbom_entry,
-        list_owner_mappings,
-        insert_owner_mapping,
-        update_owner_mapping,
-        delete_owner_mapping,
-    )
+    try:
+        from .sbom_admin_api import (
+            list_sbom,
+            insert_sbom_entry,
+            update_sbom_entry,
+            delete_sbom_entry,
+            list_owner_mappings,
+            insert_owner_mapping,
+            update_owner_mapping,
+            delete_owner_mapping,
+        )
+    except ImportError:
+        from sbom_admin_api import (  # noqa: F401
+            list_sbom,
+            insert_sbom_entry,
+            update_sbom_entry,
+            delete_sbom_entry,
+            list_owner_mappings,
+            insert_owner_mapping,
+            update_owner_mapping,
+            delete_owner_mapping,
+        )
     _admin_api_available = True
 except Exception as _admin_import_err:
     _admin_api_available = False
