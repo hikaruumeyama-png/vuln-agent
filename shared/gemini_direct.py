@@ -120,7 +120,9 @@ def analyze_exploited_vuln(source_text: str, notification_type: str = "exploited
         "5. action_required: 社内端末への即時確認・対応が必要かどうか。\n"
         "   - CVE発行から概ね1年以上経過しており、通常の定期アップデートで"
         "     対応済みの可能性が高い場合: false\n"
-        "   - 発行から1年未満、または深刻度が特に高い(CVSS 9.0+)場合: true\n\n"
+        "   - 発行から1年未満、または深刻度が特に高い(CVSS 9.0+)場合: true\n"
+        "6. max_cvss: 通知テキストに含まれる最大CVSSスコア（文字列、例: '9.8'）。"
+        "見つからない場合は空文字\n\n"
         f"通知テキスト:\n{source_text[:3000]}"
     )
     schema = {
@@ -131,6 +133,7 @@ def analyze_exploited_vuln(source_text: str, notification_type: str = "exploited
             "cve_ids": {"type": "array", "items": {"type": "string"}},
             "comment": {"type": "string"},
             "action_required": {"type": "boolean"},
+            "max_cvss": {"type": "string"},
         },
         "required": ["is_windows_or_apple", "product_name", "cve_ids", "comment", "action_required"],
     }
