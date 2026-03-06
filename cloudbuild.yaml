@@ -75,6 +75,7 @@ steps:
                 DEPLOY_WORKSPACE_EVENTS=true
                 ;;
               shared/*)
+                DEPLOY_GATEWAY=true
                 DEPLOY_WORKSPACE_EVENTS=true
                 ;;
               web/*)
