@@ -32,6 +32,9 @@ steps:
         DEPLOY_CHAT_WEBHOOK=false
         DEPLOY_WORKSPACE_EVENTS=false
         DEPLOY_WEB=false
+        DEPLOY_VULN_FEEDS=false
+        DEPLOY_VULN_INTAKE=false
+        DEPLOY_VULN_SCRAPER=false
 
         full_deploy_raw="${_FORCE_FULL_DEPLOY}"
         full_deploy="$(printf '%s' "$$full_deploy_raw" | tr '[:upper:]' '[:lower:]')"
@@ -51,12 +54,18 @@ steps:
           DEPLOY_CHAT_WEBHOOK=true
           DEPLOY_WORKSPACE_EVENTS=true
           DEPLOY_WEB=true
+          DEPLOY_VULN_FEEDS=true
+          DEPLOY_VULN_INTAKE=true
+          DEPLOY_VULN_SCRAPER=true
         elif [ -z "$$changed_files_raw" ]; then
           DEPLOY_AGENT=true
           DEPLOY_GATEWAY=true
           DEPLOY_CHAT_WEBHOOK=true
           DEPLOY_WORKSPACE_EVENTS=true
           DEPLOY_WEB=true
+          DEPLOY_VULN_FEEDS=true
+          DEPLOY_VULN_INTAKE=true
+          DEPLOY_VULN_SCRAPER=true
         else
           unknown_path_detected=false
           while IFS= read -r path; do
@@ -74,8 +83,20 @@ steps:
               workspace_events_webhook/*)
                 DEPLOY_WORKSPACE_EVENTS=true
                 ;;
+              vuln_feeds/*)
+                DEPLOY_VULN_FEEDS=true
+                ;;
+              vuln_intake/*)
+                DEPLOY_VULN_INTAKE=true
+                ;;
+              vuln_scraper/*)
+                DEPLOY_VULN_SCRAPER=true
+                ;;
               shared/*)
+                DEPLOY_GATEWAY=true
                 DEPLOY_WORKSPACE_EVENTS=true
+                DEPLOY_VULN_FEEDS=true
+                DEPLOY_VULN_INTAKE=true
                 ;;
               web/*)
                 DEPLOY_GATEWAY=true
@@ -95,6 +116,9 @@ steps:
             DEPLOY_CHAT_WEBHOOK=true
             DEPLOY_WORKSPACE_EVENTS=true
             DEPLOY_WEB=true
+            DEPLOY_VULN_FEEDS=true
+            DEPLOY_VULN_INTAKE=true
+            DEPLOY_VULN_SCRAPER=true
           fi
         fi
 
@@ -104,6 +128,9 @@ steps:
         DEPLOY_CHAT_WEBHOOK=$$DEPLOY_CHAT_WEBHOOK
         DEPLOY_WORKSPACE_EVENTS=$$DEPLOY_WORKSPACE_EVENTS
         DEPLOY_WEB=$$DEPLOY_WEB
+        DEPLOY_VULN_FEEDS=$$DEPLOY_VULN_FEEDS
+        DEPLOY_VULN_INTAKE=$$DEPLOY_VULN_INTAKE
+        DEPLOY_VULN_SCRAPER=$$DEPLOY_VULN_SCRAPER
         EOF
 
         echo "デプロイ判定結果:"
@@ -453,6 +480,99 @@ steps:
         gsutil mb -p ${PROJECT_ID} -l ${_REGION} $$BUCKET 2>/dev/null || true
         gsutil web set -m index.html -e index.html $$BUCKET
         gsutil -m rsync -r -d web $$BUCKET
+    waitFor:
+      - detect-changes
+
+  - name: "gcr.io/google.com/cloudsdktool/cloud-sdk"
+    id: deploy-vuln-feeds
+    entrypoint: bash
+    args:
+      - "-c"
+      - |
+        set -euo pipefail
+        if [ -f /workspace/.deploy_flags ]; then
+          source /workspace/.deploy_flags
+        fi
+        if [ "${DEPLOY_VULN_FEEDS:-false}" != "true" ]; then
+          echo "[Vuln Feeds] 対象外のためデプロイをスキップします"
+          exit 0
+        fi
+        cp -r shared/ vuln_feeds/shared/
+        gcloud functions deploy vuln-feed-poller \
+          --gen2 \
+          --runtime=python312 \
+          --region=${_REGION} \
+          --source=vuln_feeds \
+          --entry-point=poll_vuln_feeds \
+          --trigger-http \
+          --service-account=vuln-agent-sa@${PROJECT_ID}.iam.gserviceaccount.com \
+          --update-env-vars="GCP_PROJECT_ID=${PROJECT_ID},GCP_LOCATION=${_REGION}" \
+          --set-secrets="NVD_API_KEY=vuln-agent-nvd-api-key:latest" \
+          --memory=512MB \
+          --timeout=540s \
+          --quiet
+    waitFor:
+      - detect-changes
+
+  - name: "gcr.io/google.com/cloudsdktool/cloud-sdk"
+    id: deploy-vuln-intake
+    entrypoint: bash
+    args:
+      - "-c"
+      - |
+        set -euo pipefail
+        if [ -f /workspace/.deploy_flags ]; then
+          source /workspace/.deploy_flags
+        fi
+        if [ "${DEPLOY_VULN_INTAKE:-false}" != "true" ]; then
+          echo "[Vuln Intake] 対象外のためデプロイをスキップします"
+          exit 0
+        fi
+        cp -r shared/ vuln_intake/shared/
+        cp -r agent/ vuln_intake/agent/
+        cp -r vuln_feeds/ vuln_intake/vuln_feeds/
+        gcloud functions deploy vuln-intake-worker \
+          --gen2 \
+          --runtime=python312 \
+          --region=${_REGION} \
+          --source=vuln_intake \
+          --entry-point=handle_vuln_intake \
+          --trigger-topic=vuln-agent-new-vulnerabilities \
+          --service-account=vuln-agent-sa@${PROJECT_ID}.iam.gserviceaccount.com \
+          --update-env-vars="GCP_PROJECT_ID=${PROJECT_ID},GCP_LOCATION=${_REGION}" \
+          --set-secrets="CHAT_SA_CREDENTIALS_JSON=vuln-agent-chat-sa-key:latest" \
+          --memory=1024MB \
+          --timeout=540s \
+          --quiet
+    waitFor:
+      - detect-changes
+
+  - name: "gcr.io/google.com/cloudsdktool/cloud-sdk"
+    id: deploy-vuln-scraper
+    entrypoint: bash
+    args:
+      - "-c"
+      - |
+        set -euo pipefail
+        if [ -f /workspace/.deploy_flags ]; then
+          source /workspace/.deploy_flags
+        fi
+        if [ "${DEPLOY_VULN_SCRAPER:-false}" != "true" ]; then
+          echo "[Vuln Scraper] 対象外のためデプロイをスキップします"
+          exit 0
+        fi
+        gcloud run deploy vuln-agent-scraper \
+          --source=vuln_scraper \
+          --region=${_REGION} \
+          --service-account=vuln-agent-sa@${PROJECT_ID}.iam.gserviceaccount.com \
+          --set-env-vars="GCP_PROJECT_ID=${PROJECT_ID},GCP_REGION=${_REGION}" \
+          --no-allow-unauthenticated \
+          --memory=2Gi \
+          --cpu=2 \
+          --timeout=120 \
+          --min-instances=0 \
+          --max-instances=3 \
+          --quiet
     waitFor:
       - detect-changes
 
