@@ -14,10 +14,14 @@ from urllib.error import HTTPError, URLError
 import sys
 import os
 
-# shared/ を import パスに追加
-_SHARED_DIR = os.path.join(os.path.dirname(__file__), "..", "..", "shared")
-if _SHARED_DIR not in sys.path:
-    sys.path.insert(0, os.path.normpath(_SHARED_DIR))
+# shared/ を import パスに追加 (ローカル実行時用)
+for _candidate in [
+    os.path.join(os.path.dirname(__file__), "..", ".."),  # vuln_feeds/ の親
+    os.path.join(os.path.dirname(__file__), ".."),        # Cloud Functions ルート
+]:
+    _norm = os.path.normpath(_candidate)
+    if _norm not in sys.path:
+        sys.path.insert(0, _norm)
 
 from shared.vuln_schema import VulnEntry
 

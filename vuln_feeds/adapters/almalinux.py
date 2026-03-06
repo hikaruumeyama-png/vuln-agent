@@ -104,8 +104,10 @@ def _normalize_erratum(
 
     title = (erratum.get("title") or erratum.get("summary") or "").strip()
     description = (erratum.get("description") or "").strip()
-    issued_str = (erratum.get("issued_date") or erratum.get("issued") or "").strip()
-    updated_str = (erratum.get("updated_date") or erratum.get("updated") or "").strip()
+    issued_raw = erratum.get("issued_date") or erratum.get("issued") or ""
+    updated_raw = erratum.get("updated_date") or erratum.get("updated") or ""
+    issued_str = _extract_date_value(issued_raw)
+    updated_str = _extract_date_value(updated_raw)
     severity_raw = (erratum.get("severity") or "").strip()
 
     # 日付フィルタ
@@ -115,7 +117,7 @@ def _normalize_erratum(
     if ref_dt and ref_dt < since:
         return None
 
-    # CVE 抽出
+    # CVE 抽出 (references フィールド内の type="cve" エントリ)
     cve_list = erratum.get("CVEs") or erratum.get("cves") or erratum.get("references") or []
     cve_ids: list[str] = []
     if isinstance(cve_list, list):
@@ -125,8 +127,12 @@ def _normalize_erratum(
                 if cve_match:
                     cve_ids.append(cve_match.group(0).upper())
             elif isinstance(cve_item, dict):
-                cve_id = (cve_item.get("id") or cve_item.get("cve") or "").strip()
-                if _CVE_PATTERN.match(cve_id):
+                # AlmaLinux 形式: {"type": "cve", "id": "CVE-...", "title": "CVE-..."}
+                cve_type = str(cve_item.get("type") or "").lower()
+                cve_id = (cve_item.get("id") or cve_item.get("title") or cve_item.get("cve") or "").strip()
+                if cve_type == "cve" and _CVE_PATTERN.match(cve_id):
+                    cve_ids.append(cve_id.upper())
+                elif _CVE_PATTERN.match(cve_id):
                     cve_ids.append(cve_id.upper())
 
     # タイトル/説明からも抽出
@@ -177,25 +183,50 @@ def _extract_packages(erratum: dict[str, Any], version: str) -> list[AffectedPro
     products: list[AffectedProduct] = []
     seen: set[str] = set()
 
-    packages = erratum.get("packages") or erratum.get("pkglist") or []
-    if isinstance(packages, list):
-        for pkg in packages:
-            if isinstance(pkg, str):
-                name = pkg.strip()
-            elif isinstance(pkg, dict):
-                name = (pkg.get("name") or pkg.get("filename") or "").strip()
-            else:
-                continue
+    packages_raw = erratum.get("packages") or erratum.get("pkglist") or []
 
-            if name and name not in seen:
-                seen.add(name)
-                products.append(
-                    AffectedProduct(
-                        vendor="AlmaLinux",
-                        product=name,
-                        versions=f"AlmaLinux {version}",
-                    )
+    # AlmaLinux 形式: packages が dict (collection) の場合、中の packages リストを取得
+    pkg_list: list[Any] = []
+    if isinstance(packages_raw, dict):
+        inner = packages_raw.get("packages") or []
+        if isinstance(inner, list):
+            pkg_list = inner
+        else:
+            # collection 名をタイトルとして使う
+            name = (packages_raw.get("name") or packages_raw.get("shortname") or "").strip()
+            if name:
+                pkg_list = [name]
+    elif isinstance(packages_raw, list):
+        # リストの各要素が dict (collection) の場合を処理
+        for item in packages_raw:
+            if isinstance(item, dict):
+                inner = item.get("packages") or []
+                if isinstance(inner, list):
+                    pkg_list.extend(inner)
+                else:
+                    name = (item.get("name") or "").strip()
+                    if name:
+                        pkg_list.append(name)
+            else:
+                pkg_list.append(item)
+
+    for pkg in pkg_list:
+        if isinstance(pkg, str):
+            name = pkg.strip()
+        elif isinstance(pkg, dict):
+            name = (pkg.get("name") or pkg.get("filename") or "").strip()
+        else:
+            continue
+
+        if name and name not in seen:
+            seen.add(name)
+            products.append(
+                AffectedProduct(
+                    vendor="AlmaLinux",
+                    product=name,
+                    versions=f"AlmaLinux {version}",
                 )
+            )
 
     return products
 
@@ -211,15 +242,35 @@ def _severity_to_approx_cvss(severity: str) -> float | None:
     return severity_map.get(severity.lower())
 
 
+def _extract_date_value(raw: Any) -> str:
+    """AlmaLinux の日付フィールドから文字列値を抽出する。
+
+    MongoDB 形式 {"$date": epoch_ms} とプレーン文字列の両方に対応。
+    """
+    if isinstance(raw, dict):
+        # {"$date": 1654646400000} 形式
+        epoch_ms = raw.get("$date")
+        if epoch_ms is not None:
+            try:
+                return str(int(epoch_ms))  # _parse_date で Unix timestamp として処理
+            except (TypeError, ValueError):
+                pass
+        return ""
+    return str(raw).strip() if raw else ""
+
+
 def _parse_date(date_str: str) -> datetime | None:
     """日付文字列をパースする (ISO / Unix timestamp 対応)。"""
     date_str = (date_str or "").strip()
     if not date_str:
         return None
 
-    # Unix timestamp (整数)
+    # Unix timestamp (整数 / ミリ秒)
     try:
         ts = int(date_str)
+        # ミリ秒の場合 (13桁以上) は秒に変換
+        if ts > 1e12:
+            ts = ts // 1000
         return datetime.fromtimestamp(ts, tz=timezone.utc)
     except (ValueError, OSError):
         pass

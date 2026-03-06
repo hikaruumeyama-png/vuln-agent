@@ -141,22 +141,28 @@ def _insert_new(
     table_id: str,
     entry: VulnEntry,
 ) -> None:
-    """新規エントリを vuln_dedup テーブルに INSERT する。"""
+    """新規エントリを vuln_dedup テーブルに DML INSERT する。"""
     now = datetime.now(timezone.utc).isoformat()
-    row = {
-        "vuln_id": entry.normalize_id(),
-        "aliases": list(entry.all_ids() - {entry.normalize_id()}),
-        "first_source": entry.source,
-        "first_seen_at": now,
-        "sources_seen": [entry.source],
-        "last_updated_at": now,
-        "processed": False,
-        "sbom_matched": False,
-        "skip_reason": None,
-    }
-    errors = client.insert_rows_json(table_id, [row])
-    if errors:
-        raise RuntimeError(f"BigQuery insert_rows_json failed: {errors}")
+    aliases = list(entry.all_ids() - {entry.normalize_id()})
+
+    query = f"""
+        INSERT INTO `{table_id}`
+            (vuln_id, aliases, first_source, first_seen_at, sources_seen,
+             last_updated_at, processed, sbom_matched, skip_reason)
+        VALUES
+            (@vuln_id, @aliases, @first_source, @now, @sources_seen,
+             @now, FALSE, FALSE, NULL)
+    """
+    job_config = bigquery.QueryJobConfig(
+        query_parameters=[
+            bigquery.ScalarQueryParameter("vuln_id", "STRING", entry.normalize_id()),
+            bigquery.ArrayQueryParameter("aliases", "STRING", aliases),
+            bigquery.ScalarQueryParameter("first_source", "STRING", entry.source),
+            bigquery.ScalarQueryParameter("now", "TIMESTAMP", now),
+            bigquery.ArrayQueryParameter("sources_seen", "STRING", [entry.source]),
+        ]
+    )
+    client.query(query, job_config=job_config).result()
 
 
 def mark_processed(

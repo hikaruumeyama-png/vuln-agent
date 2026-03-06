@@ -33,10 +33,12 @@ class NvdAdapter(BaseSourceAdapter):
     default_poll_interval_minutes = 30
 
     def __init__(self) -> None:
-        self._api_key = get_secret_value(
+        raw_key = get_secret_value(
             ["NVD_API_KEY"],
             secret_name="vuln-agent-nvd-api-key",
         )
+        # placeholder やダミー値は無効として扱う
+        self._api_key = raw_key if raw_key and raw_key != "placeholder" else ""
 
     def fetch_recent(self, since: datetime) -> list[VulnEntry]:
         """NVD API から since 以降に更新された CVE を差分取得する。"""
