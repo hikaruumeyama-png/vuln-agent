@@ -112,7 +112,15 @@ def analyze_exploited_vuln(source_text: str, notification_type: str = "exploited
         "であればtrue、それ以外はfalse\n"
         "2. product_name: 対象製品名（日本語）\n"
         "3. cve_ids: 検出されたCVE番号のリスト\n"
-        "4. comment: セキュリティ担当者向けの簡潔な対応コメント（2-3文）\n\n"
+        "4. comment: セキュリティ担当者向けの対応コメント（3〜4文）。以下を必ず含めること:\n"
+        "   - CVE番号に含まれる発行年（例: CVE-2023-XXXXなら「2023年発行」）と、"
+        "     現在からの経過年数（例: 「約2年前」）\n"
+        "   - その脆弱性が古い場合は通常の定期アップデートで対応済みである可能性が高い旨\n"
+        "   - 新しい脆弱性の場合は速やかな対応が必要な旨\n"
+        "5. action_required: 社内端末への即時確認・対応が必要かどうか。\n"
+        "   - CVE発行から概ね1年以上経過しており、通常の定期アップデートで"
+        "     対応済みの可能性が高い場合: false\n"
+        "   - 発行から1年未満、または深刻度が特に高い(CVSS 9.0+)場合: true\n\n"
         f"通知テキスト:\n{source_text[:3000]}"
     )
     schema = {
@@ -122,8 +130,9 @@ def analyze_exploited_vuln(source_text: str, notification_type: str = "exploited
             "product_name": {"type": "string"},
             "cve_ids": {"type": "array", "items": {"type": "string"}},
             "comment": {"type": "string"},
+            "action_required": {"type": "boolean"},
         },
-        "required": ["is_windows_or_apple", "product_name", "cve_ids", "comment"],
+        "required": ["is_windows_or_apple", "product_name", "cve_ids", "comment", "action_required"],
     }
     try:
         return call_gemini_json(prompt, response_schema=schema)

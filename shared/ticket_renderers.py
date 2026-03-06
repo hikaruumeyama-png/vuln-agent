@@ -264,36 +264,65 @@ def _format_ticket_like_response(text: str, source_detail: str = "") -> str:
 # ------------------------------------------------------------------
 
 
+def _cve_nvd_url(cve_id: str) -> str:
+    """NVD の CVE 詳細ページ URL を返す。"""
+    return f"https://nvd.nist.gov/vuln/detail/{cve_id.strip()}"
+
+
+def _format_cve_links(cves: list[str]) -> str:
+    """CVEリストを 'CVE-XXXX-YYYY: URL' 形式の文字列にまとめる。"""
+    return "\n".join(f"{c}: {_cve_nvd_url(c)}" for c in cves)
+
+
 def build_exploited_update_message(analysis: dict[str, Any]) -> str:
     """悪用された脆弱性に対するアップデート推奨メッセージ。"""
     product = analysis.get("product_name") or "（不明）"
     cves = analysis.get("cve_ids") or []
     cve_str = ", ".join(cves) if cves else "（CVE番号なし）"
     comment = analysis.get("comment") or ""
+    # action_required が明示的に False のときのみ「対応不要の可能性」と判定
+    # 未設定（None）は安全側として True 扱い
+    action_required = analysis.get("action_required", True)
+    if action_required is False:
+        header = "⚠ 悪用が確認された脆弱性ですが、既にアップデート済みの可能性があります。"
+    else:
+        header = "⚠ 悪用が確認された脆弱性です。速やかなアップデートを推奨します。"
     lines = [
-        "⚠ 悪用が確認された脆弱性です。速やかなアップデートを推奨します。",
+        header,
         "",
         f"【対象製品】\n{product}",
         "",
         f"【CVE】\n{cve_str}",
     ]
+    if cves:
+        lines.append("")
+        lines.append(f"【CVEリンク (NVD)】\n{_format_cve_links(cves)}")
     if comment:
         lines.append("")
         lines.append(f"【AIコメント】\n{comment}")
     lines.append("")
-    lines.append("速やかに最新バージョンへのアップデートをお願いします。")
+    if action_required is False:
+        lines.append("【対応判定】ℹ️ 対応不要の可能性あり")
+        lines.append("通常の定期アップデートで対応済みの可能性がありますが、念のためOSバージョンをご確認ください。")
+    else:
+        lines.append("【対応判定】✅ 対応が必要")
+        lines.append("速やかに最新バージョンへのアップデートをお願いします。")
     return "\n".join(lines)
 
 
 def build_exploited_not_target_message(analysis: dict[str, Any]) -> str:
     """悪用された脆弱性だがWindows/Apple以外 → 対応不要メッセージ。"""
     product = analysis.get("product_name") or "（不明）"
-    return (
-        "ℹ️ 対応不要\n\n"
-        "対応不要と判断しました。\n\n"
-        f"【検出された製品】\n{product}\n\n"
-        "【判断理由】\nWindows / Apple 以外の製品のため、対応対象外です。"
-    )
+    cves = analysis.get("cve_ids") or []
+    lines = [
+        "ℹ️ 対応不要\n",
+        "対応不要と判断しました。\n",
+        f"【検出された製品】\n{product}\n",
+        "【判断理由】\nWindows / Apple 以外の製品のため、対応対象外です。",
+    ]
+    if cves:
+        lines.append(f"\n【CVEリンク (NVD)】\n{_format_cve_links(cves)}")
+    return "\n".join(lines)
 
 
 def build_update_notification_message(analysis: dict[str, Any]) -> str:
@@ -302,6 +331,7 @@ def build_update_notification_message(analysis: dict[str, Any]) -> str:
     cves = analysis.get("cve_ids") or []
     cve_str = ", ".join(cves) if cves else "（CVE番号なし）"
     comment = analysis.get("comment") or ""
+    action_required = analysis.get("action_required", True)
     lines = [
         "脆弱性情報の更新通知です。内容を確認の上、アップデートの要否を判断してください。",
         "",
@@ -309,23 +339,35 @@ def build_update_notification_message(analysis: dict[str, Any]) -> str:
         "",
         f"【CVE】\n{cve_str}",
     ]
+    if cves:
+        lines.append("")
+        lines.append(f"【CVEリンク (NVD)】\n{_format_cve_links(cves)}")
     if comment:
         lines.append("")
         lines.append(f"【AIコメント】\n{comment}")
     lines.append("")
-    lines.append("必要に応じて最新バージョンへのアップデートをご検討ください。")
+    if action_required is False:
+        lines.append("【対応判定】ℹ️ 対応不要の可能性あり")
+        lines.append("通常の定期アップデートで対応済みの可能性がありますが、念のためOSバージョンをご確認ください。")
+    else:
+        lines.append("【対応判定】✅ 要確認")
+        lines.append("必要に応じて最新バージョンへのアップデートをご検討ください。")
     return "\n".join(lines)
 
 
 def build_update_not_target_message(analysis: dict[str, Any]) -> str:
     """脆弱性情報の更新通知だがWindows/Apple以外 → 対応不要メッセージ。"""
     product = analysis.get("product_name") or "（不明）"
-    return (
-        "ℹ️ 対応不要\n\n"
-        "対応不要と判断しました。\n\n"
-        f"【検出された製品】\n{product}\n\n"
-        "【判断理由】\nWindows / Apple 以外の製品のため、対応対象外です。"
-    )
+    cves = analysis.get("cve_ids") or []
+    lines = [
+        "ℹ️ 対応不要\n",
+        "対応不要と判断しました。\n",
+        f"【検出された製品】\n{product}\n",
+        "【判断理由】\nWindows / Apple 以外の製品のため、対応対象外です。",
+    ]
+    if cves:
+        lines.append(f"\n【CVEリンク (NVD)】\n{_format_cve_links(cves)}")
+    return "\n".join(lines)
 
 
 def build_low_quality_ticket_message() -> str:
