@@ -43,7 +43,15 @@ except ModuleNotFoundError:
     from publisher import publish_vuln_entry
 
 logger = logging.getLogger(__name__)
-logging.basicConfig(level=logging.INFO, format="%(levelname)s %(name)s %(message)s")
+
+# Cloud Functions Gen2: 既存ハンドラをクリアして stdout に構造化ログを出力
+_handler = logging.StreamHandler(sys.stdout)
+_handler.setFormatter(
+    logging.Formatter('{"severity":"%(levelname)s","message":"%(name)s %(message)s"}')
+)
+logging.root.handlers.clear()
+logging.root.addHandler(_handler)
+logging.root.setLevel(logging.INFO)
 
 
 @functions_framework.http
@@ -57,9 +65,13 @@ def poll_vuln_feeds(request):
     except Exception:
         body = {}
 
+    # Cloud Scheduler は {"source_id": "xxx"} 形式で送信
+    source_id_single = body.get("source_id", "")
     sources = body.get("sources") or []
     if isinstance(sources, str):
         sources = [s.strip() for s in sources.split(",") if s.strip()]
+    if source_id_single and not sources:
+        sources = [source_id_single]
 
     if not sources:
         sources = list(ADAPTER_REGISTRY.keys())

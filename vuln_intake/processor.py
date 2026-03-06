@@ -172,7 +172,10 @@ def _send_notification(
 def _mark_dedup(vuln_id: str, sbom_matched: bool, skip_reason: str = "") -> None:
     """vuln_dedup テーブルの処理完了フラグを更新する。"""
     try:
-        from vuln_feeds.dedup import mark_processed
+        try:
+            from vuln_feeds.dedup import mark_processed
+        except ModuleNotFoundError:
+            from dedup import mark_processed
         mark_processed(vuln_id, sbom_matched=sbom_matched, skip_reason=skip_reason)
     except Exception as exc:
         logger.error("mark_dedup failed for %s: %s", vuln_id, exc)

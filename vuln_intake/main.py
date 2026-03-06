@@ -21,16 +21,28 @@ import sys
 
 import functions_framework
 
-# shared/ と vuln_feeds/ を import パスに追加
+# Cloud Functions ではソースディレクトリがルートになるため両方試みる
 _ROOT_DIR = os.path.join(os.path.dirname(__file__), "..")
 if _ROOT_DIR not in sys.path:
     sys.path.insert(0, os.path.normpath(_ROOT_DIR))
 
 from shared.vuln_schema import VulnEntry
-from vuln_intake.processor import process_vuln_entry
+
+try:
+    from vuln_intake.processor import process_vuln_entry
+except ModuleNotFoundError:
+    from processor import process_vuln_entry
 
 logger = logging.getLogger(__name__)
-logging.basicConfig(level=logging.INFO, format="%(levelname)s %(name)s %(message)s")
+
+# Cloud Functions Gen2: 既存ハンドラをクリアして stdout に強制出力
+_handler = logging.StreamHandler(sys.stdout)
+_handler.setFormatter(
+    logging.Formatter('{"severity":"%(levelname)s","message":"%(name)s %(message)s"}')
+)
+logging.root.handlers.clear()
+logging.root.addHandler(_handler)
+logging.root.setLevel(logging.INFO)
 
 
 @functions_framework.cloud_event
@@ -57,6 +69,7 @@ def handle_vuln_intake(cloud_event):
             entry.source,
             entry.severity,
         )
+        sys.stdout.flush()
 
         result = process_vuln_entry(entry)
 
@@ -65,6 +78,8 @@ def handle_vuln_intake(cloud_event):
             entry.vuln_id,
             result.get("status"),
         )
+        sys.stdout.flush()
 
     except Exception as exc:
         logger.exception("Failed to process vuln intake message: %s", exc)
+        sys.stdout.flush()
