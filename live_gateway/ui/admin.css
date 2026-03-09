@@ -1,0 +1,961 @@
+/* ========================================================
+   Vulnerability Agent – Admin Panel Styles
+   ======================================================== */
+
+/* ── タブナビゲーション ──────────────────────────── */
+.admin-tabs {
+  display: flex;
+  gap: 4px;
+  padding: 16px 24px 0;
+  background: var(--bg-secondary);
+  border-bottom: 1px solid var(--border-primary);
+}
+
+.admin-tab {
+  padding: 10px 20px;
+  border: none;
+  border-bottom: 2px solid transparent;
+  background: transparent;
+  color: var(--text-muted);
+  font-family: var(--font-family);
+  font-size: var(--font-sm);
+  font-weight: 500;
+  cursor: pointer;
+  border-radius: var(--radius-md) var(--radius-md) 0 0;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  transition: color var(--transition-fast), border-color var(--transition-fast),
+    background var(--transition-fast);
+}
+
+.admin-tab i {
+  width: 15px;
+  height: 15px;
+}
+
+.admin-tab:hover {
+  color: var(--text-secondary);
+  background: var(--bg-surface);
+}
+
+.admin-tab.active {
+  color: var(--accent-blue);
+  border-bottom-color: var(--accent-blue);
+  background: var(--bg-surface);
+}
+
+/* ── メインコンテンツエリア ──────────────────────── */
+.admin-content {
+  flex: 1;
+  padding: 20px 24px;
+  overflow: auto;
+}
+
+.admin-pane {
+  display: none;
+}
+
+.admin-pane.active {
+  display: block;
+}
+
+/* ── ツールバー ───────────────────────────────────── */
+.admin-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 16px;
+  flex-wrap: wrap;
+}
+
+.admin-search-wrap {
+  position: relative;
+  flex: 1;
+  min-width: 200px;
+  max-width: 400px;
+}
+
+.admin-search-wrap i.search-icon {
+  position: absolute;
+  left: 10px;
+  top: 50%;
+  transform: translateY(-50%);
+  width: 15px;
+  height: 15px;
+  color: var(--text-muted);
+  pointer-events: none;
+}
+
+.admin-search-input {
+  width: 100%;
+  padding: 9px 12px 9px 34px;
+  border: 1px solid var(--border-primary);
+  border-radius: var(--radius-md);
+  background: var(--bg-input);
+  color: var(--text-primary);
+  font-family: var(--font-family);
+  font-size: var(--font-sm);
+  transition: border-color var(--transition-fast);
+}
+
+.admin-search-input:focus {
+  outline: none;
+  border-color: var(--border-accent);
+}
+
+.admin-search-input::placeholder {
+  color: var(--text-muted);
+}
+
+.admin-count {
+  font-size: var(--font-xs);
+  color: var(--text-muted);
+  white-space: nowrap;
+}
+
+/* ── テーブル ─────────────────────────────────────── */
+.admin-table-container {
+  overflow-x: auto;
+  border-radius: var(--radius-lg);
+  border: 1px solid var(--border-primary);
+  background: var(--bg-secondary);
+}
+
+.admin-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: var(--font-sm);
+}
+
+.admin-table th {
+  padding: 10px 14px;
+  text-align: left;
+  font-weight: 600;
+  font-size: var(--font-xs);
+  color: var(--text-muted);
+  background: var(--bg-surface);
+  border-bottom: 1px solid var(--border-primary);
+  white-space: nowrap;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.admin-table td {
+  padding: 10px 14px;
+  color: var(--text-primary);
+  border-bottom: 1px solid var(--border-primary);
+  vertical-align: middle;
+}
+
+.admin-table tbody tr:last-child td {
+  border-bottom: none;
+}
+
+.admin-table tbody tr:hover td {
+  background: var(--bg-surface-hover);
+}
+
+.admin-table .cell-purl,
+.admin-table .cell-pattern {
+  max-width: 220px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.admin-table .cell-email {
+  max-width: 180px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* ── チェックボックス列 ──────────────────────────── */
+.cell-check {
+  width: 36px;
+  text-align: center;
+  padding-left: 10px !important;
+  padding-right: 4px !important;
+}
+
+.cell-check input[type="checkbox"] {
+  width: 16px;
+  height: 16px;
+  cursor: pointer;
+  accent-color: var(--accent-blue);
+}
+
+/* ── 一括削除ボタン ──────────────────────────────── */
+.btn-danger {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 8px 14px;
+  border: 1px solid rgba(239, 68, 68, 0.4);
+  border-radius: var(--radius-md);
+  background: rgba(239, 68, 68, 0.15);
+  color: #fca5a5;
+  font-family: var(--font-family);
+  font-size: var(--font-sm);
+  font-weight: 500;
+  cursor: pointer;
+  transition: background var(--transition-fast), border-color var(--transition-fast);
+}
+
+.btn-danger i {
+  width: 15px;
+  height: 15px;
+}
+
+.btn-danger:hover {
+  background: rgba(239, 68, 68, 0.25);
+  border-color: rgba(239, 68, 68, 0.6);
+}
+
+.btn-danger .bulk-count {
+  font-weight: 700;
+}
+
+/* ── バッジ ───────────────────────────────────────── */
+.badge {
+  display: inline-flex;
+  align-items: center;
+  padding: 2px 8px;
+  border-radius: var(--radius-full);
+  font-size: 0.7rem;
+  font-weight: 600;
+  letter-spacing: 0.03em;
+  white-space: nowrap;
+}
+
+.badge-blue   { background: rgba(59, 130, 246, 0.18); color: #93c5fd; }
+.badge-green  { background: rgba(34, 197, 94, 0.18);  color: #86efac; }
+.badge-purple { background: rgba(167, 139, 250, 0.18); color: #c4b5fd; }
+.badge-teal   { background: rgba(20, 184, 166, 0.18);  color: #5eead4; }
+.badge-amber  { background: rgba(245, 158, 11, 0.18);  color: #fcd34d; }
+.badge-gray   { background: rgba(100, 116, 139, 0.18); color: #94a3b8; }
+
+/* ── 操作ボタン ───────────────────────────────────── */
+.action-btns {
+  display: flex;
+  gap: 6px;
+  align-items: center;
+  white-space: nowrap;
+}
+
+.btn-action {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  border: 1px solid var(--border-secondary);
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--text-muted);
+  cursor: pointer;
+  transition: background var(--transition-fast), color var(--transition-fast),
+    border-color var(--transition-fast);
+}
+
+.btn-action i {
+  width: 14px;
+  height: 14px;
+}
+
+.btn-action:hover {
+  background: var(--bg-surface-hover);
+  color: var(--text-primary);
+  border-color: var(--border-accent);
+}
+
+.btn-action.btn-delete:hover {
+  background: rgba(239, 68, 68, 0.15);
+  color: #fca5a5;
+  border-color: rgba(239, 68, 68, 0.4);
+}
+
+/* ── ページネーション ─────────────────────────────── */
+.admin-pagination {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 8px;
+  margin-top: 14px;
+  font-size: var(--font-sm);
+  color: var(--text-secondary);
+}
+
+.admin-pagination button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 32px;
+  height: 32px;
+  border: 1px solid var(--border-secondary);
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--text-secondary);
+  cursor: pointer;
+  transition: background var(--transition-fast), color var(--transition-fast);
+}
+
+.admin-pagination button:disabled {
+  opacity: 0.35;
+  cursor: not-allowed;
+}
+
+.admin-pagination button:not(:disabled):hover {
+  background: var(--bg-surface-hover);
+  color: var(--text-primary);
+}
+
+.admin-pagination button i {
+  width: 14px;
+  height: 14px;
+}
+
+/* ── モーダル ─────────────────────────────────────── */
+.modal-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(4, 8, 20, 0.65);
+  backdrop-filter: blur(4px);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 800;
+  padding: 16px;
+}
+
+.modal-overlay.hidden {
+  display: none;
+}
+
+.modal-dialog {
+  background: var(--bg-secondary);
+  border: 1px solid var(--border-secondary);
+  border-radius: var(--radius-lg);
+  width: 100%;
+  max-width: 560px;
+  max-height: calc(100vh - 40px);
+  display: flex;
+  flex-direction: column;
+  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.55);
+  animation: modal-appear 200ms ease;
+}
+
+@keyframes modal-appear {
+  from { opacity: 0; transform: translateY(-12px) scale(0.98); }
+  to   { opacity: 1; transform: translateY(0) scale(1); }
+}
+
+.modal-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 16px 20px;
+  border-bottom: 1px solid var(--border-primary);
+  font-weight: 600;
+  font-size: var(--font-base);
+  color: var(--text-primary);
+}
+
+.modal-close {
+  background: none;
+  border: none;
+  color: var(--text-muted);
+  cursor: pointer;
+  padding: 4px;
+  border-radius: var(--radius-sm);
+  transition: color var(--transition-fast), background var(--transition-fast);
+}
+
+.modal-close:hover {
+  color: var(--text-primary);
+  background: var(--bg-surface-hover);
+}
+
+.modal-close i {
+  width: 18px;
+  height: 18px;
+  display: block;
+}
+
+.modal-body {
+  flex: 1;
+  overflow-y: auto;
+  padding: 20px;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+.modal-footer {
+  display: flex;
+  justify-content: flex-end;
+  gap: 10px;
+  padding: 14px 20px;
+  border-top: 1px solid var(--border-primary);
+}
+
+/* ── フォーム ─────────────────────────────────────── */
+.form-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 14px;
+}
+
+.form-grid .form-group.full-width {
+  grid-column: 1 / -1;
+}
+
+.form-group {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+}
+
+.form-label {
+  font-size: var(--font-xs);
+  font-weight: 600;
+  color: var(--text-secondary);
+  letter-spacing: 0.03em;
+}
+
+.form-label .required {
+  color: var(--accent-red);
+  margin-left: 2px;
+}
+
+.form-input {
+  padding: 9px 12px;
+  border: 1px solid var(--border-primary);
+  border-radius: var(--radius-md);
+  background: var(--bg-input);
+  color: var(--text-primary);
+  font-family: var(--font-family);
+  font-size: var(--font-sm);
+  transition: border-color var(--transition-fast);
+}
+
+.form-input:focus {
+  outline: none;
+  border-color: var(--border-accent);
+}
+
+.form-input::placeholder {
+  color: var(--text-muted);
+}
+
+.form-input.error {
+  border-color: var(--accent-red);
+}
+
+/* ── テーブル空状態 ───────────────────────────────── */
+.table-empty {
+  text-align: center;
+  color: var(--text-muted);
+  padding: 48px 16px;
+  font-size: var(--font-sm);
+}
+
+/* ── ローディング ─────────────────────────────────── */
+.table-loading {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  padding: 40px 16px;
+  color: var(--text-muted);
+  font-size: var(--font-sm);
+}
+
+/* ── ユーザーバッジ（ヘッダー右） ────────────────── */
+.admin-user-badge {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 12px;
+  border-radius: var(--radius-full);
+  background: var(--bg-surface);
+  border: 1px solid var(--border-primary);
+  font-size: var(--font-xs);
+  color: var(--text-secondary);
+}
+
+.admin-user-badge i {
+  width: 14px;
+  height: 14px;
+}
+
+/* ════════════════════════════════════════════════════
+   脆弱性フィード セクション
+   ════════════════════════════════════════════════════ */
+
+/* ── ソースカードグリッド ─────────────────────────── */
+.vuln-sources-section {
+  margin-bottom: 28px;
+}
+
+.vuln-sources-header {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-bottom: 14px;
+}
+
+.vuln-sources-title {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  font-size: var(--font-base);
+  font-weight: 600;
+  color: var(--text-primary);
+  margin: 0;
+}
+
+.vuln-sources-title i {
+  width: 18px;
+  height: 18px;
+  color: var(--accent-blue);
+}
+
+.vuln-sources-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
+  gap: 12px;
+}
+
+.vuln-sources-loading {
+  grid-column: 1 / -1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  padding: 40px 16px;
+  color: var(--text-muted);
+  font-size: var(--font-sm);
+}
+
+/* ── ソースカード ─────────────────────────────────── */
+.vuln-source-card {
+  background: var(--bg-surface);
+  border: 1px solid var(--border-primary);
+  border-radius: var(--radius-lg);
+  padding: 14px 16px;
+  cursor: pointer;
+  transition: border-color var(--transition-fast),
+    background var(--transition-fast),
+    box-shadow var(--transition-fast),
+    transform 120ms ease;
+  position: relative;
+  overflow: hidden;
+}
+
+.vuln-source-card::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+  opacity: 0;
+  transition: opacity var(--transition-fast);
+  pointer-events: none;
+  background: linear-gradient(135deg, rgba(59, 130, 246, 0.06) 0%, transparent 60%);
+}
+
+.vuln-source-card:hover {
+  border-color: var(--border-accent);
+  background: var(--bg-surface-hover);
+  transform: translateY(-1px);
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.2);
+}
+
+.vuln-source-card:hover::before {
+  opacity: 1;
+}
+
+.vuln-source-card.active {
+  border-color: var(--accent-blue);
+  box-shadow: 0 0 0 1px var(--accent-blue), 0 4px 16px rgba(59, 130, 246, 0.15);
+}
+
+.vuln-source-card.active::before {
+  opacity: 1;
+}
+
+.vuln-source-card.error {
+  border-color: rgba(239, 68, 68, 0.45);
+}
+
+.vuln-source-card.error:not(.active) {
+  box-shadow: 0 0 0 1px rgba(239, 68, 68, 0.15);
+}
+
+/* ── ソースカード ヘッダー ────────────────────────── */
+.vuln-source-header {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  margin-bottom: 12px;
+}
+
+.vuln-source-icon {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 34px;
+  height: 34px;
+  border-radius: var(--radius-md);
+  background: rgba(59, 130, 246, 0.1);
+  color: var(--accent-blue);
+  flex-shrink: 0;
+}
+
+.vuln-source-icon i {
+  width: 18px;
+  height: 18px;
+}
+
+.vuln-source-card.error .vuln-source-icon {
+  background: rgba(239, 68, 68, 0.1);
+  color: var(--accent-red);
+}
+
+.vuln-source-label-wrap {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 0;
+}
+
+.vuln-source-label {
+  font-size: var(--font-sm);
+  font-weight: 600;
+  color: var(--text-primary);
+  line-height: 1.2;
+}
+
+/* ── ソースカード 統計 ────────────────────────────── */
+.vuln-source-stats {
+  display: flex;
+  gap: 8px;
+  margin-bottom: 10px;
+}
+
+.vuln-stat {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 2px;
+  padding: 6px 4px;
+  border-radius: var(--radius-sm);
+  background: var(--bg-secondary);
+}
+
+.vuln-stat-value {
+  font-size: var(--font-base);
+  font-weight: 700;
+  color: var(--text-primary);
+  line-height: 1;
+}
+
+.vuln-stat-label {
+  font-size: 0.625rem;
+  color: var(--text-muted);
+  white-space: nowrap;
+  letter-spacing: 0.02em;
+}
+
+/* ── ソースカード フッター ────────────────────────── */
+.vuln-source-footer {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.vuln-source-poll-time {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: var(--font-xs);
+  color: var(--text-muted);
+}
+
+.vuln-source-error-hint {
+  display: inline-flex;
+  align-items: center;
+  color: var(--accent-red);
+}
+
+.vuln-source-error-hint i {
+  width: 14px;
+  height: 14px;
+}
+
+/* ── ステータスドット ─────────────────────────────── */
+.status-dot {
+  display: inline-block;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  flex-shrink: 0;
+}
+
+.status-dot-green {
+  background: var(--accent-green);
+  box-shadow: 0 0 6px rgba(34, 197, 94, 0.5);
+}
+
+.status-dot-red {
+  background: var(--accent-red);
+  box-shadow: 0 0 6px rgba(239, 68, 68, 0.5);
+}
+
+.status-dot-gray {
+  background: var(--text-muted);
+  opacity: 0.5;
+}
+
+/* ── 脆弱性フィルターバー ────────────────────────── */
+.vuln-filters {
+  gap: 8px;
+}
+
+.vuln-filter-select {
+  padding: 8px 12px;
+  border: 1px solid var(--border-primary);
+  border-radius: var(--radius-md);
+  background: var(--bg-input);
+  color: var(--text-primary);
+  font-family: var(--font-family);
+  font-size: var(--font-sm);
+  cursor: pointer;
+  transition: border-color var(--transition-fast);
+  min-width: 140px;
+}
+
+.vuln-filter-select:focus {
+  outline: none;
+  border-color: var(--border-accent);
+}
+
+.vuln-toggle-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 7px 12px;
+  border: 1px solid var(--border-primary);
+  border-radius: var(--radius-md);
+  background: transparent;
+  color: var(--text-muted);
+  font-family: var(--font-family);
+  font-size: var(--font-xs);
+  font-weight: 500;
+  cursor: pointer;
+  white-space: nowrap;
+  transition: color var(--transition-fast),
+    border-color var(--transition-fast),
+    background var(--transition-fast);
+}
+
+.vuln-toggle-btn i {
+  width: 14px;
+  height: 14px;
+}
+
+.vuln-toggle-btn:hover {
+  color: var(--text-secondary);
+  border-color: var(--border-accent);
+}
+
+.vuln-toggle-btn.active {
+  color: var(--accent-blue);
+  border-color: var(--accent-blue);
+  background: rgba(59, 130, 246, 0.1);
+}
+
+/* ── 脆弱性テーブル固有 ──────────────────────────── */
+.vuln-table-section {
+  /* spacing handled by parent */
+}
+
+.vuln-row {
+  cursor: pointer;
+}
+
+.vuln-row:hover td {
+  background: var(--bg-surface-hover);
+}
+
+.vuln-id-link {
+  color: var(--accent-blue);
+  font-weight: 500;
+  font-size: var(--font-sm);
+}
+
+.vuln-row:hover .vuln-id-link {
+  text-decoration: underline;
+}
+
+.cell-aliases {
+  max-width: 200px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: var(--font-xs);
+  color: var(--text-secondary);
+}
+
+.vuln-alias-more {
+  color: var(--text-muted);
+  font-size: var(--font-xs);
+  margin-left: 2px;
+}
+
+.cell-sources-seen {
+  max-width: 240px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.vuln-badge-sm {
+  font-size: 0.6rem;
+  padding: 1px 6px;
+}
+
+.cell-date {
+  white-space: nowrap;
+  font-size: var(--font-xs);
+  color: var(--text-secondary);
+}
+
+.cell-icon {
+  text-align: center;
+  width: 50px;
+}
+
+.vuln-icon-yes {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  color: var(--accent-green);
+}
+
+.vuln-icon-yes i {
+  width: 16px;
+  height: 16px;
+}
+
+.vuln-icon-no {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  color: var(--text-muted);
+  opacity: 0.5;
+}
+
+.vuln-icon-no i {
+  width: 16px;
+  height: 16px;
+}
+
+/* ── 脆弱性詳細モーダル ──────────────────────────── */
+.vuln-detail-dialog {
+  max-width: 640px;
+}
+
+.vuln-detail-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 16px;
+}
+
+.vuln-detail-grid .full-width {
+  grid-column: 1 / -1;
+}
+
+.vuln-detail-field {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.vuln-detail-label {
+  font-size: var(--font-xs);
+  font-weight: 600;
+  color: var(--text-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.vuln-detail-value {
+  font-size: var(--font-sm);
+  color: var(--text-primary);
+  word-break: break-all;
+}
+
+.vuln-detail-id {
+  font-weight: 600;
+  color: var(--accent-blue);
+  font-size: var(--font-base);
+}
+
+.vuln-detail-skip {
+  padding: 8px 12px;
+  background: rgba(245, 158, 11, 0.08);
+  border: 1px solid rgba(245, 158, 11, 0.2);
+  border-radius: var(--radius-md);
+  color: var(--accent-amber);
+  font-size: var(--font-xs);
+}
+
+/* ── レスポンシブ ─────────────────────────────────── */
+@media (max-width: 700px) {
+  .admin-tabs {
+    padding: 12px 12px 0;
+    overflow-x: auto;
+  }
+
+  .admin-content {
+    padding: 14px 12px;
+  }
+
+  .form-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .modal-dialog {
+    max-height: 100dvh;
+    border-radius: var(--radius-md);
+  }
+
+  .vuln-sources-grid {
+    grid-template-columns: repeat(auto-fill, minmax(160px, 1fr));
+    gap: 8px;
+  }
+
+  .vuln-source-card {
+    padding: 10px 12px;
+  }
+
+  .vuln-source-stats {
+    gap: 4px;
+  }
+
+  .vuln-detail-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .vuln-filters {
+    flex-wrap: wrap;
+  }
+
+  .vuln-filter-select {
+    min-width: 100px;
+  }
+}

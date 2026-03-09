@@ -1256,6 +1256,25 @@ except Exception as _admin_import_err:
     _admin_api_available = False
     logger.warning("sbom_admin_api unavailable: %s", _admin_import_err)
 
+# ── Vuln Feeds Admin API (脆弱性フィード管理) ──────────────────
+try:
+    try:
+        from .vuln_feeds_admin_api import (
+            list_vuln_sources,
+            list_vulns,
+            get_vuln_detail,
+        )
+    except ImportError:
+        from vuln_feeds_admin_api import (  # noqa: F401
+            list_vuln_sources,
+            list_vulns,
+            get_vuln_detail,
+        )
+    _vuln_feeds_api_available = True
+except Exception as _vuln_feeds_import_err:
+    _vuln_feeds_api_available = False
+    logger.warning("vuln_feeds_admin_api unavailable: %s", _vuln_feeds_import_err)
+
 
 def _require_admin_auth(request: Request) -> dict[str, Any]:
     """OIDC認証チェック。未認証なら 401 を送出する。"""
@@ -1419,6 +1438,53 @@ def api_admin_owners_delete(request: Request, pattern: str = "", system_name: st
         from fastapi import HTTPException
         raise HTTPException(status_code=503, detail="Admin API unavailable")
     return delete_owner_mapping(pattern=pattern, system_name=system_name)
+
+
+# -- 脆弱性フィード CRUD -------------------------------------------------
+
+@app.get("/api/admin/vulns/sources")
+def api_admin_vulns_sources(request: Request):
+    """脆弱性フィードソースのポーリングステータスと集計を返す"""
+    _require_admin_auth(request)
+    if not _vuln_feeds_api_available:
+        from fastapi import HTTPException
+        raise HTTPException(status_code=503, detail="Vuln Feeds API unavailable (BigQuery not configured)")
+    return list_vuln_sources()
+
+
+@app.get("/api/admin/vulns/{vuln_id:path}")
+def api_admin_vuln_detail(request: Request, vuln_id: str):
+    """脆弱性の詳細情報を返す"""
+    _require_admin_auth(request)
+    if not _vuln_feeds_api_available:
+        from fastapi import HTTPException
+        raise HTTPException(status_code=503, detail="Vuln Feeds API unavailable")
+    return get_vuln_detail(vuln_id)
+
+
+@app.get("/api/admin/vulns")
+def api_admin_vulns_list(
+    request: Request,
+    q: str = "",
+    source: str = "",
+    sbom_matched: str = "",
+    processed: str = "",
+    page: int = 1,
+    per_page: int = 50,
+):
+    """dedup テーブルから脆弱性エントリ一覧を取得する"""
+    _require_admin_auth(request)
+    if not _vuln_feeds_api_available:
+        from fastapi import HTTPException
+        raise HTTPException(status_code=503, detail="Vuln Feeds API unavailable")
+    return list_vulns(
+        source=source,
+        q=q,
+        sbom_matched=sbom_matched,
+        processed=processed,
+        page=page,
+        per_page=per_page,
+    )
 
 
 @app.websocket("/ws")
