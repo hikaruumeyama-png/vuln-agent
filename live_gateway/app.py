@@ -1233,6 +1233,7 @@ try:
             insert_sbom_entry,
             update_sbom_entry,
             delete_sbom_entry,
+            bulk_delete_sbom_entries,
             list_owner_mappings,
             insert_owner_mapping,
             update_owner_mapping,
@@ -1244,6 +1245,7 @@ try:
             insert_sbom_entry,
             update_sbom_entry,
             delete_sbom_entry,
+            bulk_delete_sbom_entries,
             list_owner_mappings,
             insert_owner_mapping,
             update_owner_mapping,
@@ -1321,7 +1323,7 @@ async def api_admin_sbom_insert(request: Request):
 
 @app.put("/api/admin/sbom")
 async def api_admin_sbom_update(request: Request):
-    """SBOMエントリを更新する（body.old_purl で対象を特定）"""
+    """SBOMエントリを更新する（body.old_purl または _old_name/_old_type で対象を特定）"""
     _require_admin_auth(request)
     if not _admin_api_available:
         from fastapi import HTTPException
@@ -1355,6 +1357,18 @@ def api_admin_sbom_delete(
         purl=purl, name=name, type=type, version=version, release=release,
         os_name=os_name, os_version=os_version, arch=arch,
     )
+
+
+@app.post("/api/admin/sbom/bulk-delete")
+async def api_admin_sbom_bulk_delete(request: Request):
+    """SBOMエントリを一括削除する"""
+    _require_admin_auth(request)
+    if not _admin_api_available:
+        from fastapi import HTTPException
+        raise HTTPException(status_code=503, detail="Admin API unavailable")
+    body = await request.json()
+    entries = body.get("entries", [])
+    return bulk_delete_sbom_entries(entries)
 
 
 # -- 担当者マッピング CRUD -------------------------------------------

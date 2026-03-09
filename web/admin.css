@@ -171,6 +171,52 @@
   white-space: nowrap;
 }
 
+/* ── チェックボックス列 ──────────────────────────── */
+.cell-check {
+  width: 36px;
+  text-align: center;
+  padding-left: 10px !important;
+  padding-right: 4px !important;
+}
+
+.cell-check input[type="checkbox"] {
+  width: 16px;
+  height: 16px;
+  cursor: pointer;
+  accent-color: var(--accent-blue);
+}
+
+/* ── 一括削除ボタン ──────────────────────────────── */
+.btn-danger {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 8px 14px;
+  border: 1px solid rgba(239, 68, 68, 0.4);
+  border-radius: var(--radius-md);
+  background: rgba(239, 68, 68, 0.15);
+  color: #fca5a5;
+  font-family: var(--font-family);
+  font-size: var(--font-sm);
+  font-weight: 500;
+  cursor: pointer;
+  transition: background var(--transition-fast), border-color var(--transition-fast);
+}
+
+.btn-danger i {
+  width: 15px;
+  height: 15px;
+}
+
+.btn-danger:hover {
+  background: rgba(239, 68, 68, 0.25);
+  border-color: rgba(239, 68, 68, 0.6);
+}
+
+.btn-danger .bulk-count {
+  font-weight: 700;
+}
+
 /* ── バッジ ───────────────────────────────────────── */
 .badge {
   display: inline-flex;

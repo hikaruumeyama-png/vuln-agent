@@ -87,7 +87,7 @@ function switchTab(tab) {
 
 async function loadSbom() {
   sbomTableBody.innerHTML = `
-    <tr><td colspan="9" class="table-loading">
+    <tr><td colspan="10" class="table-loading">
       <div class="spinner"></div> 読み込み中...
     </td></tr>`;
   const params = new URLSearchParams({
@@ -102,18 +102,20 @@ async function loadSbom() {
     updateSbomPagination();
     sbomCountEl.textContent = `全 ${state.sbomTotal} 件`;
   } catch (e) {
-    sbomTableBody.innerHTML = `<tr><td colspan="9" class="table-empty">読み込み失敗: ${e.message}</td></tr>`;
+    sbomTableBody.innerHTML = `<tr><td colspan="10" class="table-empty">読み込み失敗: ${e.message}</td></tr>`;
     showToast(`SBOM読み込み失敗: ${e.message}`, "error");
   }
 }
 
 function renderSbomTable(entries) {
   if (!entries.length) {
-    sbomTableBody.innerHTML = `<tr><td colspan="9" class="table-empty">データがありません</td></tr>`;
+    sbomTableBody.innerHTML = `<tr><td colspan="10" class="table-empty">データがありません</td></tr>`;
+    updateBulkDeleteBtn();
     return;
   }
   sbomTableBody.innerHTML = entries.map((e, idx) => `
     <tr>
+      <td class="cell-check"><input type="checkbox" class="sbom-row-check" data-idx="${idx}"></td>
       <td><span class="badge ${typeBadgeClass(e.type)}">${esc(e.type)}</span></td>
       <td>${esc(e.name)}</td>
       <td>${esc(e.version)}</td>
@@ -137,6 +139,13 @@ function renderSbomTable(entries) {
   lucide.createIcons();
   // エントリをDOMにキャッシュ（インデックス→データ参照用）
   window._sbomEntries = entries;
+  // チェックボックスイベント
+  document.querySelectorAll(".sbom-row-check").forEach((cb) => {
+    cb.addEventListener("change", updateBulkDeleteBtn);
+  });
+  const selectAll = document.getElementById("sbom-select-all");
+  if (selectAll) selectAll.checked = false;
+  updateBulkDeleteBtn();
 }
 
 function typeBadgeClass(type) {
@@ -174,16 +183,20 @@ function openSbomEdit(idx) {
 
 async function saveSbom() {
   const body = readSbomForm();
-  if (!body.purl.trim()) {
-    document.getElementById("f-purl")?.classList.add("error");
-    showToast("PURLは必須です", "error");
-    return;
-  }
   try {
     if (state.editTarget) {
+      // 旧エントリ特定用フィールド（PURLなしの場合のフォールバック）
+      const updateBody = {
+        old_purl: state.editTarget.purl || "",
+        _old_name: state.editTarget.name || "",
+        _old_type: state.editTarget.type || "",
+        _old_version: state.editTarget.version || "",
+        _old_release: state.editTarget.release || "",
+        ...body,
+      };
       await apiFetch("/api/admin/sbom", {
         method: "PUT",
-        body: JSON.stringify({ old_purl: state.editTarget.purl, ...body }),
+        body: JSON.stringify(updateBody),
       });
       showToast("SBOMエントリを更新しました", "success");
     } else {
@@ -225,6 +238,43 @@ async function confirmDeleteSbom(idx) {
   }
 }
 
+function getSelectedSbomIndices() {
+  return Array.from(document.querySelectorAll(".sbom-row-check:checked"))
+    .map((cb) => parseInt(cb.dataset.idx, 10));
+}
+
+function updateBulkDeleteBtn() {
+  const btn = document.getElementById("btn-bulk-delete-sbom");
+  if (!btn) return;
+  const count = document.querySelectorAll(".sbom-row-check:checked").length;
+  btn.style.display = count > 0 ? "inline-flex" : "none";
+  btn.querySelector(".bulk-count").textContent = count;
+}
+
+function toggleSelectAllSbom(checked) {
+  document.querySelectorAll(".sbom-row-check").forEach((cb) => {
+    cb.checked = checked;
+  });
+  updateBulkDeleteBtn();
+}
+
+async function confirmBulkDeleteSbom() {
+  const indices = getSelectedSbomIndices();
+  if (!indices.length) return;
+  if (!confirm(`選択した ${indices.length} 件のSBOMエントリを削除しますか?`)) return;
+  const entries = indices.map((idx) => window._sbomEntries[idx]).filter(Boolean);
+  try {
+    await apiFetch("/api/admin/sbom/bulk-delete", {
+      method: "POST",
+      body: JSON.stringify({ entries }),
+    });
+    showToast(`${entries.length} 件を削除しました`, "success");
+    loadSbom();
+  } catch (e) {
+    showToast(`一括削除失敗: ${e.message}`, "error");
+  }
+}
+
 function readSbomForm() {
   return {
     type:       document.getElementById("f-type")?.value.trim() || "",
@@ -258,7 +308,7 @@ function sbomFormHtml(e) {
         <input id="f-release" class="form-input" placeholder="1.el8" value="${esc(e.release || "")}">
       </div>
       <div class="form-group full-width">
-        <label class="form-label">PURL <span class="required">*</span></label>
+        <label class="form-label">PURL</label>
         <input id="f-purl" class="form-input" placeholder="pkg:rpm/redhat/openssl@1.1.1g-15.el8" value="${esc(e.purl || "")}">
       </div>
       <div class="form-group">

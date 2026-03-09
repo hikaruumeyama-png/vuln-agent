@@ -69,6 +69,10 @@
               />
             </div>
             <span class="admin-count" id="sbom-count">---</span>
+            <button id="btn-bulk-delete-sbom" class="btn btn-danger" type="button" style="display:none" onclick="confirmBulkDeleteSbom()">
+              <i data-lucide="trash-2"></i>
+              <span class="bulk-count">0</span> 件を削除
+            </button>
             <button id="btn-add-sbom" class="btn btn-primary" type="button">
               <i data-lucide="plus"></i>
               追加
@@ -80,6 +84,7 @@
             <table class="admin-table" aria-label="SBOMパッケージ一覧">
               <thead>
                 <tr>
+                  <th class="cell-check"><input type="checkbox" id="sbom-select-all" title="全選択" onchange="toggleSelectAllSbom(this.checked)"></th>
                   <th>Type</th>
                   <th>Name</th>
                   <th>Version</th>
@@ -93,7 +98,7 @@
               </thead>
               <tbody id="sbom-tbody">
                 <tr>
-                  <td colspan="9" class="table-loading">
+                  <td colspan="10" class="table-loading">
                     <div class="spinner"></div> 読み込み中...
                   </td>
                 </tr>
