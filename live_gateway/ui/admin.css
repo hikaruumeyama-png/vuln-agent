@@ -791,16 +791,6 @@
   background: var(--bg-surface-hover);
 }
 
-.vuln-id-link {
-  color: var(--accent-blue);
-  font-weight: 500;
-  font-size: var(--font-sm);
-}
-
-.vuln-row:hover .vuln-id-link {
-  text-decoration: underline;
-}
-
 .cell-aliases {
   max-width: 200px;
   overflow: hidden;
@@ -912,6 +902,72 @@
   border-radius: var(--radius-md);
   color: var(--accent-amber);
   font-size: var(--font-xs);
+}
+
+/* ── 外部リンク ──────────────────────────────────── */
+.vuln-id-link {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  color: var(--accent-blue);
+  font-weight: 500;
+  font-size: var(--font-sm);
+  text-decoration: none;
+  transition: color var(--transition-fast);
+}
+
+.vuln-id-link:hover {
+  color: #93c5fd;
+  text-decoration: underline;
+}
+
+.vuln-id-link i {
+  width: 12px;
+  height: 12px;
+  opacity: 0.5;
+  flex-shrink: 0;
+}
+
+.vuln-id-link:hover i {
+  opacity: 1;
+}
+
+.vuln-source-ext-link {
+  display: inline-flex;
+  align-items: center;
+  color: var(--text-muted);
+  margin-left: 4px;
+  transition: color var(--transition-fast);
+}
+
+.vuln-source-ext-link:hover {
+  color: var(--accent-blue);
+}
+
+.vuln-source-ext-link i {
+  width: 12px;
+  height: 12px;
+}
+
+.vuln-detail-link {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  color: var(--accent-blue);
+  text-decoration: none;
+  word-break: break-all;
+  font-size: var(--font-sm);
+}
+
+.vuln-detail-link:hover {
+  text-decoration: underline;
+  color: #93c5fd;
+}
+
+.vuln-detail-link i {
+  width: 13px;
+  height: 13px;
+  flex-shrink: 0;
 }
 
 /* ── レスポンシブ ─────────────────────────────────── */

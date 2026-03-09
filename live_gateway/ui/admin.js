@@ -600,7 +600,7 @@ function renderSourceCards(sources) {
             <i data-lucide="${esc(meta.icon)}"></i>
           </div>
           <div class="vuln-source-label-wrap">
-            <span class="vuln-source-label">${esc(meta.label)}</span>
+            <span class="vuln-source-label">${esc(meta.label)} <a href="${getSourceUrl(s.source_id)}" target="_blank" rel="noopener" class="vuln-source-ext-link" onclick="event.stopPropagation()" title="ソースサイトを開く"><i data-lucide="external-link"></i></a></span>
             <span class="badge ${catBadge}">${esc(catLabel)}</span>
           </div>
         </div>
@@ -711,7 +711,7 @@ function renderVulnTable(entries) {
       : `<span class="vuln-icon-no" title="未処理"><i data-lucide="circle-dashed"></i></span>`;
     return `
       <tr class="vuln-row" onclick="showVulnDetail('${esc(e.vuln_id)}')">
-        <td><span class="vuln-id-link">${esc(e.vuln_id)}</span></td>
+        <td><a href="${getVulnUrl(e.vuln_id, e.first_source)}" target="_blank" rel="noopener" class="vuln-id-link" onclick="event.stopPropagation()" title="取得元ページを開く">${esc(e.vuln_id)} <i data-lucide="external-link"></i></a></td>
         <td class="cell-aliases" title="${esc((e.aliases || []).join(', '))}">${aliases}${aliasMore ? `<span class="vuln-alias-more">${aliasMore}</span>` : ""}</td>
         <td><span class="badge ${firstBadge}">${esc(firstMeta.label)}</span></td>
         <td class="cell-sources-seen">${sourcesSeen}</td>
@@ -750,6 +750,10 @@ async function showVulnDetail(vulnId) {
         <div class="vuln-detail-field">
           <span class="vuln-detail-label">Vuln ID</span>
           <span class="vuln-detail-value vuln-detail-id">${esc(e.vuln_id)}</span>
+        </div>
+        <div class="vuln-detail-field full-width">
+          <span class="vuln-detail-label">Source URL</span>
+          <span class="vuln-detail-value"><a href="${getVulnUrl(e.vuln_id, e.first_source)}" target="_blank" rel="noopener" class="vuln-detail-link">${getVulnUrl(e.vuln_id, e.first_source)} <i data-lucide="external-link"></i></a></span>
         </div>
         <div class="vuln-detail-field">
           <span class="vuln-detail-label">Aliases</span>
@@ -805,6 +809,55 @@ function openModal() {
 function closeModal() {
   modal.classList.add("hidden");
   state.editTarget = null;
+}
+
+// ── 外部リンクURL生成 ─────────────────────────────────
+function getVulnUrl(vulnId, firstSource) {
+  const id = (vulnId || "").trim();
+  // CVE → NVD
+  if (/^CVE-/i.test(id)) return `https://nvd.nist.gov/vuln/detail/${id}`;
+  // JVNDB → JVN
+  if (/^JVNDB-/i.test(id)) return `https://jvndb.jvn.jp/ja/contents/${id.replace(/^JVNDB-(\d{4})-(\d+)$/i, '$1/$2')}.html`;
+  // GHSA → GitHub
+  if (/^GHSA-/i.test(id)) return `https://github.com/advisories/${id}`;
+  // ALSA (AlmaLinux) → AlmaLinux errata
+  if (/^ALSA-/i.test(id)) return `https://errata.almalinux.org/`;
+  // ZBX → Zabbix
+  if (/^ZBX-/i.test(id)) return `https://www.zabbix.com/security_advisories`;
+  // FG-IR → FortiGuard
+  if (/^FG-IR-/i.test(id)) return `https://www.fortiguard.com/psirt/${id}`;
+  // Fallback by source
+  const SOURCE_URLS = {
+    cisa_kev: "https://www.cisa.gov/known-exploited-vulnerabilities-catalog",
+    nvd: `https://nvd.nist.gov/vuln/detail/${id}`,
+    jvn: "https://jvndb.jvn.jp/",
+    osv: `https://osv.dev/vulnerability/${id}`,
+    cisco_csaf: "https://sec.cloudapps.cisco.com/security/center/publicationListing.x",
+    msrc: "https://msrc.microsoft.com/update-guide/vulnerability/" + id,
+    fortinet: "https://www.fortiguard.com/psirt",
+    almalinux: "https://errata.almalinux.org/",
+    zabbix: "https://www.zabbix.com/security_advisories",
+    motex: "https://www.motex.co.jp/news/security/",
+    skysea: "https://www.skyseaclientview.net/news/",
+  };
+  return SOURCE_URLS[firstSource] || `https://www.google.com/search?q=${encodeURIComponent(id)}`;
+}
+
+function getSourceUrl(sourceId) {
+  const urls = {
+    cisa_kev: "https://www.cisa.gov/known-exploited-vulnerabilities-catalog",
+    nvd: "https://nvd.nist.gov/vuln/search",
+    jvn: "https://jvndb.jvn.jp/",
+    osv: "https://osv.dev/",
+    cisco_csaf: "https://sec.cloudapps.cisco.com/security/center/publicationListing.x",
+    msrc: "https://msrc.microsoft.com/update-guide",
+    fortinet: "https://www.fortiguard.com/psirt",
+    almalinux: "https://errata.almalinux.org/",
+    zabbix: "https://www.zabbix.com/security_advisories",
+    motex: "https://www.motex.co.jp/news/security/",
+    skysea: "https://www.skyseaclientview.net/news/",
+  };
+  return urls[sourceId] || "#";
 }
 
 // ── ユーティリティ ─────────────────────────────────────
