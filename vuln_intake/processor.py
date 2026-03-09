@@ -41,19 +41,26 @@ def process_vuln_entry(entry: VulnEntry) -> dict[str, Any]:
         _log_history(entry, matched_entries=[], status="no_match")
         return {"status": "no_match", "vuln_id": vuln_id}
 
-    # 2. 通知送信
-    try:
-        notify_result = _send_notification(entry, matched_entries)
-    except Exception as exc:
-        logger.error("Notification failed for %s: %s", vuln_id, exc)
-        _mark_dedup(vuln_id, sbom_matched=True, skip_reason=f"notify_error: {exc}")
-        return {"status": "error", "vuln_id": vuln_id, "message": str(exc)}
+    # 2. 通知送信（CHAT_NOTIFY_ENABLED=false で無効化可能）
+    chat_enabled = os.environ.get("CHAT_NOTIFY_ENABLED", "true").strip().lower()
+    notify_result = None
+    if chat_enabled in ("true", "1", "yes"):
+        try:
+            notify_result = _send_notification(entry, matched_entries)
+        except Exception as exc:
+            logger.error("Notification failed for %s: %s", vuln_id, exc)
+            _mark_dedup(vuln_id, sbom_matched=True, skip_reason=f"notify_error: {exc}")
+            return {"status": "error", "vuln_id": vuln_id, "message": str(exc)}
+    else:
+        logger.info("Chat notification disabled for %s (CHAT_NOTIFY_ENABLED=%s)", vuln_id, chat_enabled)
 
-    # 3. 完了フラグ更新
+    # 3. 完了フラグ更新 + 履歴記録
     _mark_dedup(vuln_id, sbom_matched=True)
+    status = "notified" if notify_result else "matched_no_notify"
+    _log_history(entry, matched_entries=matched_entries, status=status)
 
     return {
-        "status": "notified",
+        "status": status,
         "vuln_id": vuln_id,
         "matched_count": len(matched_entries),
         "notify_result": notify_result,
