@@ -13,10 +13,10 @@ import os
 import sys
 from typing import Any
 
-# shared/ と agent/ を import パスに追加
-_ROOT_DIR = os.path.join(os.path.dirname(__file__), "..")
-if _ROOT_DIR not in sys.path:
-    sys.path.insert(0, os.path.normpath(_ROOT_DIR))
+# Cloud Functions デプロイ時のインポートパス解決
+_THIS_DIR = os.path.dirname(os.path.abspath(__file__))
+if _THIS_DIR not in sys.path:
+    sys.path.insert(0, _THIS_DIR)
 
 from shared.vuln_schema import VulnEntry
 
