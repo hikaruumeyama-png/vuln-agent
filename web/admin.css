@@ -490,6 +490,430 @@
   height: 14px;
 }
 
+/* ════════════════════════════════════════════════════
+   脆弱性フィード セクション
+   ════════════════════════════════════════════════════ */
+
+/* ── ソースカードグリッド ─────────────────────────── */
+.vuln-sources-section {
+  margin-bottom: 28px;
+}
+
+.vuln-sources-header {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-bottom: 14px;
+}
+
+.vuln-sources-title {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  font-size: var(--font-base);
+  font-weight: 600;
+  color: var(--text-primary);
+  margin: 0;
+}
+
+.vuln-sources-title i {
+  width: 18px;
+  height: 18px;
+  color: var(--accent-blue);
+}
+
+.vuln-sources-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
+  gap: 12px;
+}
+
+.vuln-sources-loading {
+  grid-column: 1 / -1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  padding: 40px 16px;
+  color: var(--text-muted);
+  font-size: var(--font-sm);
+}
+
+/* ── ソースカード ─────────────────────────────────── */
+.vuln-source-card {
+  background: var(--bg-surface);
+  border: 1px solid var(--border-primary);
+  border-radius: var(--radius-lg);
+  padding: 14px 16px;
+  cursor: pointer;
+  transition: border-color var(--transition-fast),
+    background var(--transition-fast),
+    box-shadow var(--transition-fast),
+    transform 120ms ease;
+  position: relative;
+  overflow: hidden;
+}
+
+.vuln-source-card::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+  opacity: 0;
+  transition: opacity var(--transition-fast);
+  pointer-events: none;
+  background: linear-gradient(135deg, rgba(59, 130, 246, 0.06) 0%, transparent 60%);
+}
+
+.vuln-source-card:hover {
+  border-color: var(--border-accent);
+  background: var(--bg-surface-hover);
+  transform: translateY(-1px);
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.2);
+}
+
+.vuln-source-card:hover::before {
+  opacity: 1;
+}
+
+.vuln-source-card.active {
+  border-color: var(--accent-blue);
+  box-shadow: 0 0 0 1px var(--accent-blue), 0 4px 16px rgba(59, 130, 246, 0.15);
+}
+
+.vuln-source-card.active::before {
+  opacity: 1;
+}
+
+.vuln-source-card.error {
+  border-color: rgba(239, 68, 68, 0.45);
+}
+
+.vuln-source-card.error:not(.active) {
+  box-shadow: 0 0 0 1px rgba(239, 68, 68, 0.15);
+}
+
+/* ── ソースカード ヘッダー ────────────────────────── */
+.vuln-source-header {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  margin-bottom: 12px;
+}
+
+.vuln-source-icon {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 34px;
+  height: 34px;
+  border-radius: var(--radius-md);
+  background: rgba(59, 130, 246, 0.1);
+  color: var(--accent-blue);
+  flex-shrink: 0;
+}
+
+.vuln-source-icon i {
+  width: 18px;
+  height: 18px;
+}
+
+.vuln-source-card.error .vuln-source-icon {
+  background: rgba(239, 68, 68, 0.1);
+  color: var(--accent-red);
+}
+
+.vuln-source-label-wrap {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 0;
+}
+
+.vuln-source-label {
+  font-size: var(--font-sm);
+  font-weight: 600;
+  color: var(--text-primary);
+  line-height: 1.2;
+}
+
+/* ── ソースカード 統計 ────────────────────────────── */
+.vuln-source-stats {
+  display: flex;
+  gap: 8px;
+  margin-bottom: 10px;
+}
+
+.vuln-stat {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 2px;
+  padding: 6px 4px;
+  border-radius: var(--radius-sm);
+  background: var(--bg-secondary);
+}
+
+.vuln-stat-value {
+  font-size: var(--font-base);
+  font-weight: 700;
+  color: var(--text-primary);
+  line-height: 1;
+}
+
+.vuln-stat-label {
+  font-size: 0.625rem;
+  color: var(--text-muted);
+  white-space: nowrap;
+  letter-spacing: 0.02em;
+}
+
+/* ── ソースカード フッター ────────────────────────── */
+.vuln-source-footer {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.vuln-source-poll-time {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: var(--font-xs);
+  color: var(--text-muted);
+}
+
+.vuln-source-error-hint {
+  display: inline-flex;
+  align-items: center;
+  color: var(--accent-red);
+}
+
+.vuln-source-error-hint i {
+  width: 14px;
+  height: 14px;
+}
+
+/* ── ステータスドット ─────────────────────────────── */
+.status-dot {
+  display: inline-block;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  flex-shrink: 0;
+}
+
+.status-dot-green {
+  background: var(--accent-green);
+  box-shadow: 0 0 6px rgba(34, 197, 94, 0.5);
+}
+
+.status-dot-red {
+  background: var(--accent-red);
+  box-shadow: 0 0 6px rgba(239, 68, 68, 0.5);
+}
+
+.status-dot-gray {
+  background: var(--text-muted);
+  opacity: 0.5;
+}
+
+/* ── 脆弱性フィルターバー ────────────────────────── */
+.vuln-filters {
+  gap: 8px;
+}
+
+.vuln-filter-select {
+  padding: 8px 12px;
+  border: 1px solid var(--border-primary);
+  border-radius: var(--radius-md);
+  background: var(--bg-input);
+  color: var(--text-primary);
+  font-family: var(--font-family);
+  font-size: var(--font-sm);
+  cursor: pointer;
+  transition: border-color var(--transition-fast);
+  min-width: 140px;
+}
+
+.vuln-filter-select:focus {
+  outline: none;
+  border-color: var(--border-accent);
+}
+
+.vuln-toggle-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 7px 12px;
+  border: 1px solid var(--border-primary);
+  border-radius: var(--radius-md);
+  background: transparent;
+  color: var(--text-muted);
+  font-family: var(--font-family);
+  font-size: var(--font-xs);
+  font-weight: 500;
+  cursor: pointer;
+  white-space: nowrap;
+  transition: color var(--transition-fast),
+    border-color var(--transition-fast),
+    background var(--transition-fast);
+}
+
+.vuln-toggle-btn i {
+  width: 14px;
+  height: 14px;
+}
+
+.vuln-toggle-btn:hover {
+  color: var(--text-secondary);
+  border-color: var(--border-accent);
+}
+
+.vuln-toggle-btn.active {
+  color: var(--accent-blue);
+  border-color: var(--accent-blue);
+  background: rgba(59, 130, 246, 0.1);
+}
+
+/* ── 脆弱性テーブル固有 ──────────────────────────── */
+.vuln-table-section {
+  /* spacing handled by parent */
+}
+
+.vuln-row {
+  cursor: pointer;
+}
+
+.vuln-row:hover td {
+  background: var(--bg-surface-hover);
+}
+
+.vuln-id-link {
+  color: var(--accent-blue);
+  font-weight: 500;
+  font-size: var(--font-sm);
+}
+
+.vuln-row:hover .vuln-id-link {
+  text-decoration: underline;
+}
+
+.cell-aliases {
+  max-width: 200px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: var(--font-xs);
+  color: var(--text-secondary);
+}
+
+.vuln-alias-more {
+  color: var(--text-muted);
+  font-size: var(--font-xs);
+  margin-left: 2px;
+}
+
+.cell-sources-seen {
+  max-width: 240px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.vuln-badge-sm {
+  font-size: 0.6rem;
+  padding: 1px 6px;
+}
+
+.cell-date {
+  white-space: nowrap;
+  font-size: var(--font-xs);
+  color: var(--text-secondary);
+}
+
+.cell-icon {
+  text-align: center;
+  width: 50px;
+}
+
+.vuln-icon-yes {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  color: var(--accent-green);
+}
+
+.vuln-icon-yes i {
+  width: 16px;
+  height: 16px;
+}
+
+.vuln-icon-no {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  color: var(--text-muted);
+  opacity: 0.5;
+}
+
+.vuln-icon-no i {
+  width: 16px;
+  height: 16px;
+}
+
+/* ── 脆弱性詳細モーダル ──────────────────────────── */
+.vuln-detail-dialog {
+  max-width: 640px;
+}
+
+.vuln-detail-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 16px;
+}
+
+.vuln-detail-grid .full-width {
+  grid-column: 1 / -1;
+}
+
+.vuln-detail-field {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.vuln-detail-label {
+  font-size: var(--font-xs);
+  font-weight: 600;
+  color: var(--text-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.vuln-detail-value {
+  font-size: var(--font-sm);
+  color: var(--text-primary);
+  word-break: break-all;
+}
+
+.vuln-detail-id {
+  font-weight: 600;
+  color: var(--accent-blue);
+  font-size: var(--font-base);
+}
+
+.vuln-detail-skip {
+  padding: 8px 12px;
+  background: rgba(245, 158, 11, 0.08);
+  border: 1px solid rgba(245, 158, 11, 0.2);
+  border-radius: var(--radius-md);
+  color: var(--accent-amber);
+  font-size: var(--font-xs);
+}
+
 /* ── レスポンシブ ─────────────────────────────────── */
 @media (max-width: 700px) {
   .admin-tabs {
@@ -508,5 +932,30 @@
   .modal-dialog {
     max-height: 100dvh;
     border-radius: var(--radius-md);
+  }
+
+  .vuln-sources-grid {
+    grid-template-columns: repeat(auto-fill, minmax(160px, 1fr));
+    gap: 8px;
+  }
+
+  .vuln-source-card {
+    padding: 10px 12px;
+  }
+
+  .vuln-source-stats {
+    gap: 4px;
+  }
+
+  .vuln-detail-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .vuln-filters {
+    flex-wrap: wrap;
+  }
+
+  .vuln-filter-select {
+    min-width: 100px;
   }
 }

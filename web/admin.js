@@ -12,10 +12,19 @@ const state = {
   ownerQuery: "",
   ownerTotal: 0,
   editTarget: null,  // 編集中のエントリ
+  vulnsPage: 1,
+  vulnsPerPage: 50,
+  vulnsQuery: "",
+  vulnsSource: "",
+  vulnsSbomMatched: "",
+  vulnsProcessed: "",
+  vulnsTotal: 0,
+  vulnsSelectedSource: "",  // カード選択状態
 };
 
 let sbomDebounceTimer = null;
 let ownerDebounceTimer = null;
+let vulnDebounceTimer = null;
 
 // ── DOM参照 ─────────────────────────────────────────
 const userBadge       = document.getElementById("admin-user-badge");
@@ -30,6 +39,21 @@ const ownerSearchInput= document.getElementById("owner-search");
 const sbomPageInfo    = document.getElementById("sbom-page-info");
 const sbomPrevBtn     = document.getElementById("sbom-prev");
 const sbomNextBtn     = document.getElementById("sbom-next");
+const vulnPane          = document.getElementById("pane-vulns");
+const vulnSourcesGrid   = document.getElementById("vuln-sources-grid");
+const vulnSourcesCount  = document.getElementById("vuln-sources-count");
+const vulnTableBody     = document.getElementById("vuln-tbody");
+const vulnCountEl       = document.getElementById("vuln-count");
+const vulnSearchInput   = document.getElementById("vuln-search");
+const vulnSourceFilter  = document.getElementById("vuln-source-filter");
+const vulnFilterSbom    = document.getElementById("vuln-filter-sbom");
+const vulnFilterProcessed = document.getElementById("vuln-filter-processed");
+const vulnPageInfo      = document.getElementById("vuln-page-info");
+const vulnPrevBtn       = document.getElementById("vuln-prev");
+const vulnNextBtn       = document.getElementById("vuln-next");
+const vulnDetailOverlay = document.getElementById("vuln-detail-overlay");
+const vulnDetailTitle   = document.getElementById("vuln-detail-title");
+const vulnDetailBody    = document.getElementById("vuln-detail-body");
 const toastContainer  = document.getElementById("toast-container");
 const modal           = document.getElementById("modal-overlay");
 const modalTitle      = document.getElementById("modal-title");
@@ -77,8 +101,10 @@ function switchTab(tab) {
   });
   sbomPane.classList.toggle("active", tab === "sbom");
   ownerPane.classList.toggle("active", tab === "owners");
+  vulnPane.classList.toggle("active", tab === "vulns");
   if (tab === "sbom") loadSbom();
-  else loadOwners();
+  else if (tab === "owners") loadOwners();
+  else if (tab === "vulns") { loadVulnSources(); loadVulns(); }
 }
 
 // ════════════════════════════════════════════════════
@@ -483,6 +509,293 @@ function ownerFormHtml(m) {
     </div>`;
 }
 
+// ════════════════════════════════════════════════════
+// 脆弱性フィード セクション
+// ════════════════════════════════════════════════════
+
+// ソース定義マップ（アイコン・ラベル・カテゴリ）
+const VULN_SOURCE_META = {
+  cisa_kev:   { icon: "shield-alert",  label: "CISA KEV",   category: "public_db" },
+  nvd:        { icon: "database",      label: "NVD",         category: "public_db" },
+  jvn:        { icon: "globe",         label: "JVN",         category: "public_db" },
+  osv:        { icon: "package-open",  label: "OSV",         category: "public_db" },
+  cisco_csaf: { icon: "router",        label: "Cisco",       category: "vendor_api" },
+  msrc:       { icon: "monitor",       label: "MSRC",        category: "vendor_api" },
+  fortinet:   { icon: "shield",        label: "Fortinet",    category: "vendor_api" },
+  almalinux:  { icon: "server",        label: "AlmaLinux",   category: "vendor_api" },
+  zabbix:     { icon: "activity",      label: "Zabbix",      category: "web_scraping" },
+  motex:      { icon: "scan",          label: "MOTEX",       category: "web_scraping" },
+  skysea:     { icon: "cloud",         label: "SKYSEA",      category: "web_scraping" },
+};
+
+const CATEGORY_LABELS = {
+  public_db:     "Public DB",
+  vendor_api:    "Vendor API",
+  web_scraping:  "Web Scraping",
+};
+
+const CATEGORY_BADGE = {
+  public_db:     "badge-blue",
+  vendor_api:    "badge-teal",
+  web_scraping:  "badge-purple",
+};
+
+// ── 相対時間ヘルパー ──────────────────────────────────
+function timeAgo(isoString) {
+  if (!isoString) return "---";
+  const now = Date.now();
+  const then = new Date(isoString).getTime();
+  if (isNaN(then)) return "---";
+  const diffSec = Math.floor((now - then) / 1000);
+  if (diffSec < 0) return "たった今";
+  if (diffSec < 60) return `${diffSec}秒前`;
+  const diffMin = Math.floor(diffSec / 60);
+  if (diffMin < 60) return `${diffMin}分前`;
+  const diffHour = Math.floor(diffMin / 60);
+  if (diffHour < 24) return `${diffHour}時間前`;
+  const diffDay = Math.floor(diffHour / 24);
+  if (diffDay < 30) return `${diffDay}日前`;
+  const diffMonth = Math.floor(diffDay / 30);
+  if (diffMonth < 12) return `${diffMonth}ヶ月前`;
+  return `${Math.floor(diffMonth / 12)}年前`;
+}
+
+// ── ソースカード読み込み ──────────────────────────────
+async function loadVulnSources() {
+  vulnSourcesGrid.innerHTML = `<div class="vuln-sources-loading"><div class="spinner"></div> ソース情報を読み込み中...</div>`;
+  try {
+    const data = await apiFetch("/api/admin/vulns/sources");
+    const sources = data.sources || [];
+    vulnSourcesCount.textContent = `${sources.length} ソース`;
+    renderSourceCards(sources);
+    // ソースフィルタードロップダウンを更新
+    populateSourceFilter(sources);
+  } catch (e) {
+    vulnSourcesGrid.innerHTML = `<div class="vuln-sources-loading">読み込み失敗: ${esc(e.message)}</div>`;
+    showToast(`ソース情報読み込み失敗: ${e.message}`, "error");
+  }
+}
+
+function renderSourceCards(sources) {
+  if (!sources.length) {
+    vulnSourcesGrid.innerHTML = `<div class="vuln-sources-loading">ソースが登録されていません</div>`;
+    return;
+  }
+  vulnSourcesGrid.innerHTML = sources.map((s) => {
+    const meta = VULN_SOURCE_META[s.source_id] || { icon: "help-circle", label: s.source_id, category: "public_db" };
+    const catBadge = CATEGORY_BADGE[meta.category] || "badge-gray";
+    const catLabel = CATEGORY_LABELS[meta.category] || meta.category;
+    const hasError = !!s.error_message;
+    const neverPolled = !s.last_poll_at;
+    const statusClass = hasError ? "error" : (neverPolled ? "never" : "ok");
+    const statusDotClass = hasError ? "status-dot-red" : (neverPolled ? "status-dot-gray" : "status-dot-green");
+    const isActive = state.vulnsSelectedSource === s.source_id;
+    return `
+      <div class="vuln-source-card ${isActive ? "active" : ""} ${hasError ? "error" : ""}"
+           data-source-id="${esc(s.source_id)}"
+           onclick="selectSource('${esc(s.source_id)}')"
+           title="${hasError ? esc(s.error_message) : ""}">
+        <div class="vuln-source-header">
+          <div class="vuln-source-icon">
+            <i data-lucide="${esc(meta.icon)}"></i>
+          </div>
+          <div class="vuln-source-label-wrap">
+            <span class="vuln-source-label">${esc(meta.label)}</span>
+            <span class="badge ${catBadge}">${esc(catLabel)}</span>
+          </div>
+        </div>
+        <div class="vuln-source-stats">
+          <div class="vuln-stat">
+            <span class="vuln-stat-value">${s.total_vulns ?? 0}</span>
+            <span class="vuln-stat-label">脆弱性</span>
+          </div>
+          <div class="vuln-stat">
+            <span class="vuln-stat-value">${s.sbom_matched_count ?? 0}</span>
+            <span class="vuln-stat-label">SBOM突合</span>
+          </div>
+          <div class="vuln-stat">
+            <span class="vuln-stat-value">${s.items_new ?? 0}</span>
+            <span class="vuln-stat-label">新規</span>
+          </div>
+        </div>
+        <div class="vuln-source-footer">
+          <span class="vuln-source-poll-time">
+            <span class="status-dot ${statusDotClass}"></span>
+            ${neverPolled ? "未取得" : timeAgo(s.last_poll_at)}
+          </span>
+          ${hasError ? `<span class="vuln-source-error-hint" title="${esc(s.error_message)}"><i data-lucide="alert-triangle"></i></span>` : ""}
+        </div>
+      </div>`;
+  }).join("");
+  lucide.createIcons();
+}
+
+function populateSourceFilter(sources) {
+  // 既存オプションをクリアして再構築
+  vulnSourceFilter.innerHTML = `<option value="">すべてのソース</option>`;
+  sources.forEach((s) => {
+    const meta = VULN_SOURCE_META[s.source_id] || { label: s.source_id };
+    const opt = document.createElement("option");
+    opt.value = s.source_id;
+    opt.textContent = meta.label;
+    if (state.vulnsSource === s.source_id) opt.selected = true;
+    vulnSourceFilter.appendChild(opt);
+  });
+}
+
+function selectSource(sourceId) {
+  // トグル動作: 同じカードを再クリックで解除
+  if (state.vulnsSelectedSource === sourceId) {
+    state.vulnsSelectedSource = "";
+    state.vulnsSource = "";
+  } else {
+    state.vulnsSelectedSource = sourceId;
+    state.vulnsSource = sourceId;
+  }
+  // カードのactive状態を更新
+  document.querySelectorAll(".vuln-source-card").forEach((card) => {
+    card.classList.toggle("active", card.dataset.sourceId === state.vulnsSelectedSource);
+  });
+  // ドロップダウンも同期
+  vulnSourceFilter.value = state.vulnsSource;
+  state.vulnsPage = 1;
+  loadVulns();
+}
+
+// ── 脆弱性リスト読み込み ────────────────────────────────
+async function loadVulns() {
+  vulnTableBody.innerHTML = `
+    <tr><td colspan="7" class="table-loading">
+      <div class="spinner"></div> 読み込み中...
+    </td></tr>`;
+  const params = new URLSearchParams({
+    q: state.vulnsQuery,
+    source: state.vulnsSource,
+    sbom_matched: state.vulnsSbomMatched,
+    processed: state.vulnsProcessed,
+    page: state.vulnsPage,
+    per_page: state.vulnsPerPage,
+  });
+  try {
+    const data = await apiFetch(`/api/admin/vulns?${params}`);
+    state.vulnsTotal = data.total || 0;
+    renderVulnTable(data.entries || []);
+    updateVulnPagination();
+    vulnCountEl.textContent = `全 ${state.vulnsTotal} 件`;
+  } catch (e) {
+    vulnTableBody.innerHTML = `<tr><td colspan="7" class="table-empty">読み込み失敗: ${esc(e.message)}</td></tr>`;
+    showToast(`脆弱性一覧読み込み失敗: ${e.message}`, "error");
+  }
+}
+
+function renderVulnTable(entries) {
+  if (!entries.length) {
+    vulnTableBody.innerHTML = `<tr><td colspan="7" class="table-empty">データがありません</td></tr>`;
+    return;
+  }
+  vulnTableBody.innerHTML = entries.map((e) => {
+    const aliases = (e.aliases || []).slice(0, 3).map((a) => esc(a)).join(", ");
+    const aliasMore = (e.aliases || []).length > 3 ? ` +${(e.aliases || []).length - 3}` : "";
+    const firstMeta = VULN_SOURCE_META[e.first_source] || { label: e.first_source };
+    const firstBadge = CATEGORY_BADGE[(firstMeta).category] || "badge-gray";
+    const sourcesSeen = (e.sources_seen || []).map((sid) => {
+      const m = VULN_SOURCE_META[sid] || { label: sid };
+      const b = CATEGORY_BADGE[(m).category] || "badge-gray";
+      return `<span class="badge ${b} vuln-badge-sm">${esc(m.label)}</span>`;
+    }).join(" ");
+    const sbomIcon = e.sbom_matched
+      ? `<span class="vuln-icon-yes" title="突合あり"><i data-lucide="check-circle"></i></span>`
+      : `<span class="vuln-icon-no" title="突合なし"><i data-lucide="minus-circle"></i></span>`;
+    const processedIcon = e.processed
+      ? `<span class="vuln-icon-yes" title="処理済み"><i data-lucide="check-circle"></i></span>`
+      : `<span class="vuln-icon-no" title="未処理"><i data-lucide="circle-dashed"></i></span>`;
+    return `
+      <tr class="vuln-row" onclick="showVulnDetail('${esc(e.vuln_id)}')">
+        <td><span class="vuln-id-link">${esc(e.vuln_id)}</span></td>
+        <td class="cell-aliases" title="${esc((e.aliases || []).join(', '))}">${aliases}${aliasMore ? `<span class="vuln-alias-more">${aliasMore}</span>` : ""}</td>
+        <td><span class="badge ${firstBadge}">${esc(firstMeta.label)}</span></td>
+        <td class="cell-sources-seen">${sourcesSeen}</td>
+        <td class="cell-date">${e.first_seen_at ? timeAgo(e.first_seen_at) : "---"}</td>
+        <td class="cell-icon">${sbomIcon}</td>
+        <td class="cell-icon">${processedIcon}</td>
+      </tr>`;
+  }).join("");
+  lucide.createIcons();
+  window._vulnEntries = entries;
+}
+
+function updateVulnPagination() {
+  const totalPages = Math.max(1, Math.ceil(state.vulnsTotal / state.vulnsPerPage));
+  vulnPageInfo.textContent = `${state.vulnsPage} / ${totalPages} ページ`;
+  vulnPrevBtn.disabled = state.vulnsPage <= 1;
+  vulnNextBtn.disabled = state.vulnsPage >= totalPages;
+}
+
+// ── 脆弱性詳細モーダル ──────────────────────────────────
+async function showVulnDetail(vulnId) {
+  vulnDetailTitle.textContent = vulnId;
+  vulnDetailBody.innerHTML = `<div class="table-loading"><div class="spinner"></div> 読み込み中...</div>`;
+  vulnDetailOverlay.classList.remove("hidden");
+  lucide.createIcons();
+  try {
+    const data = await apiFetch(`/api/admin/vulns/${encodeURIComponent(vulnId)}`);
+    const e = data.vuln || data.entry || {};
+    const sourcesSeen = (e.sources_seen || []).map((sid) => {
+      const m = VULN_SOURCE_META[sid] || { label: sid };
+      const b = CATEGORY_BADGE[(m).category] || "badge-gray";
+      return `<span class="badge ${b}">${esc(m.label)}</span>`;
+    }).join(" ");
+    vulnDetailBody.innerHTML = `
+      <div class="vuln-detail-grid">
+        <div class="vuln-detail-field">
+          <span class="vuln-detail-label">Vuln ID</span>
+          <span class="vuln-detail-value vuln-detail-id">${esc(e.vuln_id)}</span>
+        </div>
+        <div class="vuln-detail-field">
+          <span class="vuln-detail-label">Aliases</span>
+          <span class="vuln-detail-value">${(e.aliases || []).map((a) => esc(a)).join(", ") || "---"}</span>
+        </div>
+        <div class="vuln-detail-field">
+          <span class="vuln-detail-label">First Source</span>
+          <span class="vuln-detail-value">${esc((VULN_SOURCE_META[e.first_source] || {}).label || e.first_source || "---")}</span>
+        </div>
+        <div class="vuln-detail-field">
+          <span class="vuln-detail-label">Sources Seen</span>
+          <span class="vuln-detail-value">${sourcesSeen || "---"}</span>
+        </div>
+        <div class="vuln-detail-field">
+          <span class="vuln-detail-label">First Seen</span>
+          <span class="vuln-detail-value">${e.first_seen_at || "---"}</span>
+        </div>
+        <div class="vuln-detail-field">
+          <span class="vuln-detail-label">Last Updated</span>
+          <span class="vuln-detail-value">${e.last_updated_at || "---"}</span>
+        </div>
+        <div class="vuln-detail-field">
+          <span class="vuln-detail-label">SBOM Matched</span>
+          <span class="vuln-detail-value">${e.sbom_matched ? '<span class="vuln-icon-yes"><i data-lucide="check-circle"></i> はい</span>' : '<span class="vuln-icon-no"><i data-lucide="minus-circle"></i> いいえ</span>'}</span>
+        </div>
+        <div class="vuln-detail-field">
+          <span class="vuln-detail-label">Processed</span>
+          <span class="vuln-detail-value">${e.processed ? '<span class="vuln-icon-yes"><i data-lucide="check-circle"></i> 処理済み</span>' : '<span class="vuln-icon-no"><i data-lucide="circle-dashed"></i> 未処理</span>'}</span>
+        </div>
+        ${e.skip_reason ? `
+        <div class="vuln-detail-field full-width">
+          <span class="vuln-detail-label">Skip Reason</span>
+          <span class="vuln-detail-value vuln-detail-skip">${esc(e.skip_reason)}</span>
+        </div>` : ""}
+      </div>`;
+    lucide.createIcons();
+  } catch (e) {
+    vulnDetailBody.innerHTML = `<div class="table-empty">読み込み失敗: ${esc(e.message)}</div>`;
+    showToast(`詳細読み込み失敗: ${e.message}`, "error");
+  }
+}
+
+function closeVulnDetail() {
+  vulnDetailOverlay.classList.add("hidden");
+}
+
 // ── モーダル共通 ──────────────────────────────────────
 function openModal() {
   modal.classList.remove("hidden");
@@ -538,13 +851,78 @@ document.addEventListener("DOMContentLoaded", () => {
     }, 300);
   });
 
+  // 脆弱性検索（debounce）
+  vulnSearchInput.addEventListener("input", () => {
+    clearTimeout(vulnDebounceTimer);
+    vulnDebounceTimer = setTimeout(() => {
+      state.vulnsQuery = vulnSearchInput.value;
+      state.vulnsPage = 1;
+      loadVulns();
+    }, 300);
+  });
+
+  // 脆弱性ソースフィルター
+  vulnSourceFilter.addEventListener("change", () => {
+    state.vulnsSource = vulnSourceFilter.value;
+    state.vulnsSelectedSource = vulnSourceFilter.value;
+    // カードのactive状態を同期
+    document.querySelectorAll(".vuln-source-card").forEach((card) => {
+      card.classList.toggle("active", card.dataset.sourceId === state.vulnsSelectedSource);
+    });
+    state.vulnsPage = 1;
+    loadVulns();
+  });
+
+  // SBOM突合フィルタートグル
+  vulnFilterSbom.addEventListener("click", () => {
+    if (state.vulnsSbomMatched === "true") {
+      state.vulnsSbomMatched = "";
+      vulnFilterSbom.classList.remove("active");
+    } else {
+      state.vulnsSbomMatched = "true";
+      vulnFilterSbom.classList.add("active");
+    }
+    state.vulnsPage = 1;
+    loadVulns();
+  });
+
+  // 処理済みフィルタートグル
+  vulnFilterProcessed.addEventListener("click", () => {
+    if (state.vulnsProcessed === "true") {
+      state.vulnsProcessed = "";
+      vulnFilterProcessed.classList.remove("active");
+    } else {
+      state.vulnsProcessed = "true";
+      vulnFilterProcessed.classList.add("active");
+    }
+    state.vulnsPage = 1;
+    loadVulns();
+  });
+
+  // 脆弱性ページネーション
+  vulnPrevBtn.addEventListener("click", () => {
+    if (state.vulnsPage > 1) { state.vulnsPage--; loadVulns(); }
+  });
+  vulnNextBtn.addEventListener("click", () => {
+    const totalPages = Math.ceil(state.vulnsTotal / state.vulnsPerPage);
+    if (state.vulnsPage < totalPages) { state.vulnsPage++; loadVulns(); }
+  });
+
+  // 脆弱性詳細モーダル: オーバーレイクリック / Escape
+  vulnDetailOverlay.addEventListener("click", (e) => {
+    if (e.target === vulnDetailOverlay) closeVulnDetail();
+  });
+
   // モーダル: キャンセル / オーバーレイクリック
   document.getElementById("modal-cancel").addEventListener("click", closeModal);
   modal.addEventListener("click", (e) => {
     if (e.target === modal) closeModal();
   });
   document.addEventListener("keydown", (e) => {
-    if (e.key === "Escape") closeModal();
+    if (e.key === "Escape") {
+      closeModal();
+      closeVulnDetail();
+    }
   });
 
   // 追加ボタン

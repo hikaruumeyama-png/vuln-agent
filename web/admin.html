@@ -48,6 +48,10 @@
           <i data-lucide="users"></i>
           担当者マッピング
         </button>
+        <button class="admin-tab" data-tab="vulns" role="tab" aria-selected="false">
+          <i data-lucide="radar"></i>
+          脆弱性フィード
+        </button>
       </nav>
 
       <!-- メインコンテンツ -->
@@ -165,6 +169,88 @@
           </div>
         </div>
 
+        <!-- ── 脆弱性フィードタブ ──────────────────────────── -->
+        <div id="pane-vulns" class="admin-pane" role="tabpanel">
+
+          <!-- ソースカードグリッド -->
+          <div class="vuln-sources-section">
+            <div class="vuln-sources-header">
+              <h2 class="vuln-sources-title">
+                <i data-lucide="radio-tower"></i>
+                フィードソース
+              </h2>
+              <span class="admin-count" id="vuln-sources-count">---</span>
+            </div>
+            <div class="vuln-sources-grid" id="vuln-sources-grid">
+              <div class="vuln-sources-loading">
+                <div class="spinner"></div> ソース情報を読み込み中...
+              </div>
+            </div>
+          </div>
+
+          <!-- 脆弱性テーブル -->
+          <div class="vuln-table-section">
+            <div class="admin-toolbar vuln-filters">
+              <div class="admin-search-wrap">
+                <i data-lucide="search" class="search-icon"></i>
+                <input
+                  id="vuln-search"
+                  class="admin-search-input"
+                  type="search"
+                  placeholder="CVE ID で検索..."
+                  autocomplete="off"
+                />
+              </div>
+              <select id="vuln-source-filter" class="vuln-filter-select" title="ソースで絞り込み">
+                <option value="">すべてのソース</option>
+              </select>
+              <button id="vuln-filter-sbom" class="vuln-toggle-btn" type="button" title="SBOM突合済みのみ表示">
+                <i data-lucide="package-check"></i>
+                SBOM突合
+              </button>
+              <button id="vuln-filter-processed" class="vuln-toggle-btn" type="button" title="処理済みのみ表示">
+                <i data-lucide="check-circle"></i>
+                処理済み
+              </button>
+              <span class="admin-count" id="vuln-count">---</span>
+            </div>
+
+            <div class="admin-table-container">
+              <table class="admin-table" aria-label="脆弱性一覧">
+                <thead>
+                  <tr>
+                    <th>Vuln ID</th>
+                    <th>Aliases</th>
+                    <th>First Source</th>
+                    <th>Sources Seen</th>
+                    <th>First Seen</th>
+                    <th>SBOM</th>
+                    <th>処理</th>
+                  </tr>
+                </thead>
+                <tbody id="vuln-tbody">
+                  <tr>
+                    <td colspan="7" class="table-loading">
+                      <div class="spinner"></div> 読み込み中...
+                    </td>
+                  </tr>
+                </tbody>
+              </table>
+            </div>
+
+            <!-- ページネーション -->
+            <div class="admin-pagination">
+              <button id="vuln-prev" type="button" disabled title="前のページ">
+                <i data-lucide="chevron-left"></i>
+              </button>
+              <span id="vuln-page-info">1 / 1 ページ</span>
+              <button id="vuln-next" type="button" title="次のページ">
+                <i data-lucide="chevron-right"></i>
+              </button>
+            </div>
+          </div>
+        </div>
+
       </main>
     </div>
 
@@ -186,6 +272,24 @@
             <i data-lucide="save"></i>
             保存
           </button>
+        </div>
+      </div>
+    </div>
+
+    <!-- ── 脆弱性詳細モーダル ────────────────────────── -->
+    <div id="vuln-detail-overlay" class="modal-overlay hidden" role="dialog" aria-modal="true">
+      <div class="modal-dialog vuln-detail-dialog">
+        <div class="modal-header">
+          <span id="vuln-detail-title">脆弱性詳細</span>
+          <button class="modal-close" onclick="closeVulnDetail()" title="閉じる">
+            <i data-lucide="x"></i>
+          </button>
+        </div>
+        <div class="modal-body" id="vuln-detail-body">
+          <!-- JSで注入 -->
+        </div>
+        <div class="modal-footer">
+          <button class="btn btn-outline" type="button" onclick="closeVulnDetail()">閉じる</button>
         </div>
       </div>
     </div>
