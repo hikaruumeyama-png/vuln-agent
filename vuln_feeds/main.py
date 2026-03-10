@@ -30,10 +30,18 @@ _ROOT_DIR = os.path.join(os.path.dirname(__file__), "..")
 if _ROOT_DIR not in sys.path:
     sys.path.insert(0, os.path.normpath(_ROOT_DIR))
 
-from vuln_feeds.adapters import get_adapter, ADAPTER_REGISTRY
-from vuln_feeds.dedup import DedupResult, check_and_register
-from vuln_feeds.poll_state import get_last_poll, update_poll_state
-from vuln_feeds.publisher import publish_vuln_entry
+# Cloud Function デプロイ時は vuln_feeds/ がルートになるため、
+# パッケージ名付き / なし の両方を試行する
+try:
+    from vuln_feeds.adapters import get_adapter, ADAPTER_REGISTRY
+    from vuln_feeds.dedup import DedupResult, check_and_register
+    from vuln_feeds.poll_state import get_last_poll, update_poll_state
+    from vuln_feeds.publisher import publish_vuln_entry
+except ImportError:
+    from adapters import get_adapter, ADAPTER_REGISTRY
+    from dedup import DedupResult, check_and_register
+    from poll_state import get_last_poll, update_poll_state
+    from publisher import publish_vuln_entry
 
 logger = logging.getLogger(__name__)
 logging.basicConfig(level=logging.INFO, format="%(levelname)s %(name)s %(message)s")
