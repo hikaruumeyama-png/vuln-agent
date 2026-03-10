@@ -50,11 +50,15 @@ def poll_vuln_feeds(request):
     except Exception:
         body = {}
 
+    # source_id (単一) または sources (複数) を受け付ける
+    single = (body.get("source_id") or "").strip()
     sources = body.get("sources") or []
     if isinstance(sources, str):
         sources = [s.strip() for s in sources.split(",") if s.strip()]
 
-    if not sources:
+    if single and single in ADAPTER_REGISTRY:
+        sources = [single]
+    elif not sources:
         sources = list(ADAPTER_REGISTRY.keys())
 
     results: dict[str, Any] = {}

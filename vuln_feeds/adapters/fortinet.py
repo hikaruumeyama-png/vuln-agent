@@ -38,7 +38,7 @@ class FortinetAdapter(BaseSourceAdapter):
     def fetch_recent(self, since: datetime) -> list[VulnEntry]:
         """Fortinet PSIRT RSS から since 以降のアドバイザリを取得する。"""
         try:
-            raw = fetch_with_retry(_FORTINET_RSS_URL, timeout=30)
+            raw = fetch_with_retry(_FORTINET_RSS_URL, timeout=60)
             xml_text = raw.decode("utf-8", errors="replace")
         except Exception as exc:
             logger.error("Fortinet RSS fetch failed: %s", exc)
