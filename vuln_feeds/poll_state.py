@@ -45,6 +45,7 @@ def get_last_poll(source_id: str) -> dict[str, Any]:
             SELECT *
             FROM `{table_id}`
             WHERE source_id = @source_id
+            ORDER BY last_poll_at ASC
             LIMIT 1
         """
         job_config = bigquery.QueryJobConfig(
