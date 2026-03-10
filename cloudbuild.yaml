@@ -507,8 +507,8 @@ steps:
           --trigger-http \
           --service-account=vuln-agent-sa@${PROJECT_ID}.iam.gserviceaccount.com \
           --update-env-vars="GCP_PROJECT_ID=${PROJECT_ID},GCP_LOCATION=${_REGION}" \
-          --set-secrets="NVD_API_KEY=vuln-agent-nvd-api-key:latest" \
-          --memory=512MB \
+          --set-secrets="NVD_API_KEY=vuln-agent-nvd-api-key:latest,BQ_SBOM_TABLE_ID=vuln-agent-bq-sbom-table-id:latest,BQ_VULN_DEDUP_TABLE_ID=vuln-agent-bq-dedup-table-id:latest,BQ_VULN_POLL_STATE_TABLE_ID=vuln-agent-bq-poll-state-table-id:latest" \
+          --memory=1024MB \
           --timeout=540s \
           --quiet
     waitFor:

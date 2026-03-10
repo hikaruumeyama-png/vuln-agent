@@ -814,33 +814,44 @@ function closeModal() {
 // ── 外部リンクURL生成 ─────────────────────────────────
 function getVulnUrl(vulnId, firstSource) {
   const id = (vulnId || "").trim();
-  // CVE → NVD
-  if (/^CVE-/i.test(id)) return `https://nvd.nist.gov/vuln/detail/${id}`;
-  // JVNDB → JVN
-  if (/^JVNDB-/i.test(id)) return `https://jvndb.jvn.jp/ja/contents/${id.replace(/^JVNDB-(\d{4})-(\d+)$/i, '$1/$2')}.html`;
-  // GHSA → GitHub
-  if (/^GHSA-/i.test(id)) return `https://github.com/advisories/${id}`;
-  // ALSA (AlmaLinux) → AlmaLinux errata
-  if (/^ALSA-/i.test(id)) return `https://errata.almalinux.org/`;
-  // ZBX → Zabbix
-  if (/^ZBX-/i.test(id)) return `https://www.zabbix.com/security_advisories`;
-  // FG-IR → FortiGuard
-  if (/^FG-IR-/i.test(id)) return `https://www.fortiguard.com/psirt/${id}`;
-  // Fallback by source
-  const SOURCE_URLS = {
-    cisa_kev: "https://www.cisa.gov/known-exploited-vulnerabilities-catalog",
-    nvd: `https://nvd.nist.gov/vuln/detail/${id}`,
-    jvn: "https://jvndb.jvn.jp/",
-    osv: `https://osv.dev/vulnerability/${id}`,
-    cisco_csaf: "https://sec.cloudapps.cisco.com/security/center/publicationListing.x",
-    msrc: "https://msrc.microsoft.com/update-guide/vulnerability/" + id,
-    fortinet: "https://www.fortiguard.com/psirt",
-    almalinux: "https://errata.almalinux.org/",
-    zabbix: "https://www.zabbix.com/security_advisories",
-    motex: "https://www.motex.co.jp/news/security/",
-    skysea: "https://www.skyseaclientview.net/news/",
+  const src = (firstSource || "").trim();
+
+  // First Source ベースで URL を生成（ソース固有の詳細ページ優先）
+  const sourceUrlGenerators = {
+    nvd:        (vid) => `https://nvd.nist.gov/vuln/detail/${vid}`,
+    jvn:        (vid) => /^JVNDB-/i.test(vid)
+                  ? `https://jvndb.jvn.jp/ja/contents/${vid.replace(/^JVNDB-(\d{4})-(\d+)$/i, '$1/JVNDB-$1-$2')}.html`
+                  : `https://jvndb.jvn.jp/search/index.php?mode=_vulnerability_search_IA_VulnSearch&keyword=${encodeURIComponent(vid)}`,
+    cisa_kev:   (vid) => `https://www.cisa.gov/known-exploited-vulnerabilities-catalog`,
+    osv:        (vid) => `https://osv.dev/vulnerability/${vid}`,
+    cisco_csaf: (vid) => /^CVE-/i.test(vid)
+                  ? `https://sec.cloudapps.cisco.com/security/center/content/CiscoSecurityAdvisory?search=${encodeURIComponent(vid)}`
+                  : `https://sec.cloudapps.cisco.com/security/center/publicationListing.x`,
+    msrc:       (vid) => `https://msrc.microsoft.com/update-guide/vulnerability/${vid}`,
+    fortinet:   (vid) => /^FG-IR-/i.test(vid)
+                  ? `https://www.fortiguard.com/psirt/${vid}`
+                  : `https://www.fortiguard.com/psirt?q=${encodeURIComponent(vid)}`,
+    almalinux:  (vid) => /^ALSA-/i.test(vid)
+                  ? `https://errata.almalinux.org/${vid.replace(/^ALSA-(\d{4}):(\d+)$/i, '$1/ALSA-$1-$2')}.html`
+                  : `https://errata.almalinux.org/`,
+    zabbix:     (vid) => `https://www.zabbix.com/security_advisories`,
+    motex:      (vid) => `https://www.motex.co.jp/news/security/`,
+    skysea:     (vid) => `https://www.skyseaclientview.net/news/`,
   };
-  return SOURCE_URLS[firstSource] || `https://www.google.com/search?q=${encodeURIComponent(id)}`;
+
+  // First Source に対応する URL 生成器があればそれを使う
+  if (src && sourceUrlGenerators[src]) {
+    return sourceUrlGenerators[src](id);
+  }
+
+  // First Source が不明な場合は ID パターンでフォールバック
+  if (/^CVE-/i.test(id))    return `https://nvd.nist.gov/vuln/detail/${id}`;
+  if (/^JVNDB-/i.test(id))  return `https://jvndb.jvn.jp/ja/contents/${id.replace(/^JVNDB-(\d{4})-(\d+)$/i, '$1/JVNDB-$1-$2')}.html`;
+  if (/^GHSA-/i.test(id))   return `https://github.com/advisories/${id}`;
+  if (/^FG-IR-/i.test(id))  return `https://www.fortiguard.com/psirt/${id}`;
+  if (/^ALSA-/i.test(id))   return `https://errata.almalinux.org/`;
+
+  return `https://www.google.com/search?q=${encodeURIComponent(id)}`;
 }
 
 function getSourceUrl(sourceId) {
