@@ -129,15 +129,16 @@ def list_vuln_sources() -> dict[str, Any]:
             client = _get_bq_client()
             dedup_sql = """
                 SELECT
-                  first_source,
+                  src                                               AS source_id,
                   COUNT(*)                                          AS total_vulns,
                   COUNTIF(sbom_matched IS TRUE)                     AS sbom_matched_count
-                FROM `{t}`
-                GROUP BY first_source
+                FROM `{t}`,
+                UNNEST(sources_seen) AS src
+                GROUP BY src
             """.format(t=dedup_table)
             rows = client.query(dedup_sql).result()
             for row in rows:
-                dedup_map[row.first_source] = {
+                dedup_map[row.source_id] = {
                     "total_vulns":       row.total_vulns,
                     "sbom_matched_count": row.sbom_matched_count,
                 }
@@ -213,9 +214,9 @@ def list_vulns(
         conditions: list[str] = []
         params: list[bigquery.ScalarQueryParameter] = []
 
-        # ソースフィルタ
+        # ソースフィルタ（sources_seen 配列内を検索）
         if source and source.strip():
-            conditions.append("first_source = @source")
+            conditions.append("@source IN UNNEST(sources_seen)")
             params.append(bigquery.ScalarQueryParameter("source", "STRING", source.strip()))
 
         # vuln_id 部分一致検索
