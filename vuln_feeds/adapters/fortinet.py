@@ -38,7 +38,7 @@ class FortinetAdapter(BaseSourceAdapter):
     def fetch_recent(self, since: datetime) -> list[VulnEntry]:
         """Fortinet PSIRT RSS から since 以降のアドバイザリを取得する。"""
         try:
-            raw = fetch_with_retry(_FORTINET_RSS_URL, timeout=30)
+            raw = fetch_with_retry(_FORTINET_RSS_URL, timeout=60)
             xml_text = raw.decode("utf-8", errors="replace")
         except Exception as exc:
             logger.error("Fortinet RSS fetch failed: %s", exc)
@@ -85,9 +85,11 @@ def _parse_rss_item(item: ET.Element, since: datetime) -> VulnEntry | None:
     if not title:
         return None
 
-    # pubDate でフィルタ
+    # pubDate でフィルタ (改訂日が description にある場合はそちらも考慮)
     pub_date = _parse_rfc2822(pub_date_str)
-    if pub_date and pub_date < since:
+    revised_date = _extract_revised_date(description)
+    effective_date = revised_date or pub_date
+    if effective_date and effective_date < since:
         return None
 
     # CVE-ID / FG-IR-ID 抽出
@@ -137,9 +139,11 @@ def _parse_atom_entry(
     if not title:
         return None
 
-    # 日付フィルタ
+    # 日付フィルタ (改訂日も考慮)
     pub_dt = _parse_iso_date(updated or published)
-    if pub_dt and pub_dt < since:
+    revised_dt = _extract_revised_date(summary or "")
+    effective_dt = revised_dt or pub_dt
+    if effective_dt and effective_dt < since:
         return None
 
     text_blob = f"{title} {summary}"
@@ -171,6 +175,17 @@ def _parse_atom_entry(
         ] if _extract_product(title) else [],
         vendor_advisory_id=fg_ir_ids[0] if fg_ir_ids else None,
     )
+
+
+def _extract_revised_date(description: str) -> datetime | None:
+    """description 内の 'Revised on YYYY-MM-DD' から日付を抽出する。"""
+    match = re.search(r"Revised on (\d{4}-\d{2}-\d{2})", description)
+    if match:
+        try:
+            return datetime.fromisoformat(match.group(1) + "T00:00:00+00:00")
+        except ValueError:
+            pass
+    return None
 
 
 def _extract_product(title: str) -> str:

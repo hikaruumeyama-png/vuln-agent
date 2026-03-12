@@ -91,6 +91,13 @@ def _parse_jvn_xml(xml_text: str, since: datetime) -> list[VulnEntry]:
             if entry is not None:
                 entries.append(entry)
 
+    # RDF/RSS 形式: <item> 内の sec:identifier を使う
+    if not entries:
+        for item in root.findall(".//{http://purl.org/rss/1.0/}item"):
+            entry = _parse_rdf_item(item, since)
+            if entry is not None:
+                entries.append(entry)
+
     # フォールバック: sec:item を探す (RSS形式)
     if not entries:
         for item in root.findall(".//sec:item", _NS):
@@ -140,6 +147,80 @@ def _parse_atom_entry(item: ET.Element, since: datetime) -> VulnEntry | None:
         description=summary,
         published=published,
         last_modified=updated or published,
+        source="jvn",
+        source_url=link or f"https://jvndb.jvn.jp/ja/contents/{jvn_id}.html",
+        cvss_score=cvss_score,
+        severity=severity,
+        affected_products=_extract_products_from_sec(item),
+    )
+
+
+def _parse_rdf_item(item: ET.Element, since: datetime) -> VulnEntry | None:
+    """RDF/RSS 1.0 形式の item 要素をパースする。
+
+    MyJVN API の getVulnOverviewList (feed=hnd) がこの形式を返す。
+    """
+    _rss_ns = {"rss": "http://purl.org/rss/1.0/"}
+    title = _text(item, "rss:title", _rss_ns)
+    link = _text(item, "rss:link", _rss_ns)
+    description = _text(item, "rss:description", _rss_ns)
+
+    # sec:identifier から JVNDB ID を取得
+    jvn_id = _text(item, "sec:identifier", _NS)
+    if not jvn_id:
+        return None
+
+    # 日付フィルタ: dc:date
+    date_str = _text(item, "dc:date", _NS)
+    if not date_str:
+        date_str = _text(item, "dcterms:issued", _NS)
+    if date_str:
+        try:
+            pub_dt = datetime.fromisoformat(date_str.replace("Z", "+00:00"))
+            if pub_dt.tzinfo is None:
+                pub_dt = pub_dt.replace(tzinfo=timezone.utc)
+        except ValueError:
+            pub_dt = None
+    else:
+        pub_dt = None
+
+    # CVE-ID を抽出
+    text_blob = f"{title} {description}"
+    aliases = list(set(c.upper() for c in _CVE_PATTERN.findall(text_blob)))
+
+    # sec:references からも CVE-ID を抽出
+    for ref in item.findall("sec:references", _NS):
+        ref_source = (ref.get("source") or "").strip()
+        ref_id = (ref.get("id") or "").strip()
+        if ref_source == "CVE" and ref_id:
+            ref_id_upper = ref_id.upper()
+            if ref_id_upper not in aliases:
+                aliases.append(ref_id_upper)
+
+    vuln_id = jvn_id.strip()
+    # CVE-ID があればそちらを主キーに
+    if aliases and not vuln_id.upper().startswith("CVE-"):
+        primary_cve = aliases[0]
+        remaining = [a for a in aliases if a != primary_cve]
+        remaining.insert(0, vuln_id.upper())
+        aliases = remaining
+        vuln_id = primary_cve
+    elif vuln_id.upper().startswith("CVE-"):
+        aliases = [a for a in aliases if a.upper() != vuln_id.upper()]
+
+    # CVSS スコア抽出
+    cvss_score = _extract_cvss_from_sec(item)
+    severity = cvss_to_severity(cvss_score)
+
+    published_iso = pub_dt.isoformat() if pub_dt else ""
+
+    return VulnEntry(
+        vuln_id=vuln_id,
+        aliases=aliases,
+        title=title,
+        description=description,
+        published=published_iso,
+        last_modified=published_iso,
         source="jvn",
         source_url=link or f"https://jvndb.jvn.jp/ja/contents/{jvn_id}.html",
         cvss_score=cvss_score,

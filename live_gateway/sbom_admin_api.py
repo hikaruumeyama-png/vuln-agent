@@ -17,16 +17,21 @@ _BQ_FULL_TABLE_ID_PATTERN = re.compile(r"^[A-Za-z0-9_\-:]+\.[A-Za-z0-9_]+\.[A-Za
 _BQ_SHORT_TABLE_ID_PATTERN = re.compile(r"^[A-Za-z0-9_]+\.[A-Za-z0-9_$]+$")
 
 
+_secret_cache: dict[str, str] = {}
+
+
 def _get_config_value(env_keys: list[str], secret_name: str = "", default: str = "") -> str:
     """
     設定値を取得する。
-    優先順位: 環境変数 → Secret Manager → default
+    優先順位: 環境変数 → Secret Manager (モジュールレベルキャッシュ) → default
     """
     for key in env_keys:
         val = os.environ.get(key, "").strip()
         if val:
             return val
     if secret_name:
+        if secret_name in _secret_cache:
+            return _secret_cache[secret_name] or default
         project = os.environ.get("GCP_PROJECT_ID", "").strip()
         if project:
             try:
@@ -35,10 +40,12 @@ def _get_config_value(env_keys: list[str], secret_name: str = "", default: str =
                 name = f"projects/{project}/secrets/{secret_name}/versions/latest"
                 response = client.access_secret_version(request={"name": name})
                 val = response.payload.data.decode("utf-8").strip()
+                _secret_cache[secret_name] = val
                 if val:
                     return val
             except Exception as e:
                 logger.debug("Secret Manager lookup failed for %s: %s", secret_name, e)
+                _secret_cache[secret_name] = ""
     return default
 
 
@@ -197,21 +204,20 @@ def insert_sbom_entry(entry: dict[str, Any]) -> dict[str, Any]:
         return {"status": "error", "message": "BQ_SBOM_TABLE_ID が未設定です"}
 
     purl = (entry.get("purl") or "").strip()
-    if not purl:
-        return {"status": "error", "message": "purl は必須です"}
 
     try:
         client = _get_bq_client()
 
-        # 重複チェック
-        check_sql = "SELECT COUNT(*) AS cnt FROM `{t}` WHERE purl = @purl".format(t=table_id)
-        check_params = [bigquery.ScalarQueryParameter("purl", "STRING", purl)]
-        cnt = list(client.query(
-            check_sql,
-            job_config=bigquery.QueryJobConfig(query_parameters=check_params)
-        ).result())[0].cnt
-        if cnt > 0:
-            return {"status": "error", "message": f"purl '{purl}' は既に存在します。編集してください。"}
+        # 重複チェック（PURLが指定されている場合のみ）
+        if purl:
+            check_sql = "SELECT COUNT(*) AS cnt FROM `{t}` WHERE purl = @purl".format(t=table_id)
+            check_params = [bigquery.ScalarQueryParameter("purl", "STRING", purl)]
+            cnt = list(client.query(
+                check_sql,
+                job_config=bigquery.QueryJobConfig(query_parameters=check_params)
+            ).result())[0].cnt
+            if cnt > 0:
+                return {"status": "error", "message": f"purl '{purl}' は既に存在します。編集してください。"}
 
         insert_sql = """
             INSERT INTO `{t}` (type, name, version, release, purl, os_name, os_version, arch)
@@ -257,14 +263,20 @@ def update_sbom_entry(old_purl: str, entry: dict[str, Any]) -> dict[str, Any]:
 
     old_purl = (old_purl or "").strip()
     new_purl = (entry.get("purl") or "").strip()
-    if not old_purl or not new_purl:
-        return {"status": "error", "message": "old_purl と purl は必須です"}
+
+    # 旧エントリの特定キー（PURL優先、なければ name/type/version 等で特定）
+    old_name = (entry.get("_old_name") or "").strip()
+    old_type = (entry.get("_old_type") or "").strip()
+    old_version = (entry.get("_old_version") or "").strip()
+    old_release = (entry.get("_old_release") or "").strip()
+
+    if not old_purl and not old_name and not old_type:
+        return {"status": "error", "message": "更新対象を特定できません（purl または name/type が必要です）"}
 
     try:
         client = _get_bq_client()
-        update_sql = """
-            UPDATE `{t}`
-            SET
+
+        set_clause = """
               type       = @type,
               name       = @name,
               version    = @version,
@@ -272,9 +284,8 @@ def update_sbom_entry(old_purl: str, entry: dict[str, Any]) -> dict[str, Any]:
               purl       = @new_purl,
               os_name    = @os_name,
               os_version = @os_version,
-              arch       = @arch
-            WHERE purl = @old_purl
-        """.format(t=table_id)
+              arch       = @arch"""
+
         params = [
             bigquery.ScalarQueryParameter("type",       "STRING", (entry.get("type") or "").strip()),
             bigquery.ScalarQueryParameter("name",       "STRING", (entry.get("name") or "").strip()),
@@ -284,8 +295,31 @@ def update_sbom_entry(old_purl: str, entry: dict[str, Any]) -> dict[str, Any]:
             bigquery.ScalarQueryParameter("os_name",    "STRING", (entry.get("os_name") or "").strip()),
             bigquery.ScalarQueryParameter("os_version", "STRING", (entry.get("os_version") or "").strip()),
             bigquery.ScalarQueryParameter("arch",       "STRING", (entry.get("arch") or "").strip()),
-            bigquery.ScalarQueryParameter("old_purl",   "STRING", old_purl),
         ]
+
+        if old_purl:
+            where_clause = "WHERE purl = @old_purl"
+            params.append(bigquery.ScalarQueryParameter("old_purl", "STRING", old_purl))
+        else:
+            # PURLなしエントリ: name + type + version + release で特定
+            conditions = ["COALESCE(purl,'') = ''"]
+            if old_name:
+                conditions.append("COALESCE(name,'') = @old_name")
+                params.append(bigquery.ScalarQueryParameter("old_name", "STRING", old_name))
+            if old_type:
+                conditions.append("COALESCE(type,'') = @old_type")
+                params.append(bigquery.ScalarQueryParameter("old_type", "STRING", old_type))
+            if old_version:
+                conditions.append("COALESCE(version,'') = @old_version")
+                params.append(bigquery.ScalarQueryParameter("old_version", "STRING", old_version))
+            if old_release:
+                conditions.append("COALESCE(release,'') = @old_release")
+                params.append(bigquery.ScalarQueryParameter("old_release", "STRING", old_release))
+            where_clause = "WHERE " + " AND ".join(conditions)
+
+        update_sql = "UPDATE `{t}` SET {s} {w}".format(
+            t=table_id, s=set_clause, w=where_clause
+        )
         client.query(
             update_sql,
             job_config=bigquery.QueryJobConfig(query_parameters=params)
@@ -400,6 +434,75 @@ def delete_sbom_entry(
         return {"status": "success"}
     except Exception as e:
         logger.error("delete_sbom_entry error: %s", e)
+        return {"status": "error", "message": str(e)}
+
+
+def bulk_delete_sbom_entries(entries: list[dict[str, str]]) -> dict[str, Any]:
+    """
+    SBOMエントリを一括削除する。
+
+    各エントリは purl で特定する。purl が空の場合は name/type/version 等で特定。
+
+    Args:
+        entries: 削除対象のリスト [{purl, name, type, version, release, os_name, os_version, arch}, ...]
+
+    Returns:
+        {"status": "success", "deleted": N} or {"status": "error", "message": "..."}
+    """
+    from google.cloud import bigquery
+
+    table_id = _get_sbom_table_id()
+    if not table_id:
+        return {"status": "error", "message": "BQ_SBOM_TABLE_ID が未設定です"}
+
+    if not entries:
+        return {"status": "error", "message": "削除対象が指定されていません"}
+
+    try:
+        client = _get_bq_client()
+        deleted = 0
+
+        # PURLありエントリをまとめて一括削除
+        purls = [
+            (e.get("purl") or "").strip()
+            for e in entries
+            if (e.get("purl") or "").strip()
+        ]
+        if purls:
+            # UNNEST で一括削除
+            delete_sql = (
+                "DELETE FROM `{t}` WHERE purl IN UNNEST(@purls)"
+            ).format(t=table_id)
+            params = [bigquery.ArrayQueryParameter("purls", "STRING", purls)]
+            result = client.query(
+                delete_sql,
+                job_config=bigquery.QueryJobConfig(query_parameters=params)
+            ).result()
+            deleted += result.num_dml_affected_rows or 0
+
+        # PURLなしエントリは個別に削除
+        no_purl_entries = [
+            e for e in entries
+            if not (e.get("purl") or "").strip()
+        ]
+        for e in no_purl_entries:
+            res = delete_sbom_entry(
+                purl="",
+                name=e.get("name", ""),
+                type=e.get("type", ""),
+                version=e.get("version", ""),
+                release=e.get("release", ""),
+                os_name=e.get("os_name", ""),
+                os_version=e.get("os_version", ""),
+                arch=e.get("arch", ""),
+            )
+            if res.get("status") == "success":
+                deleted += 1
+
+        logger.info("bulk_delete_sbom_entries: deleted %d entries", deleted)
+        return {"status": "success", "deleted": deleted}
+    except Exception as e:
+        logger.error("bulk_delete_sbom_entries error: %s", e)
         return {"status": "error", "message": str(e)}
 
 

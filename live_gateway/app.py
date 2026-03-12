@@ -1233,6 +1233,7 @@ try:
             insert_sbom_entry,
             update_sbom_entry,
             delete_sbom_entry,
+            bulk_delete_sbom_entries,
             list_owner_mappings,
             insert_owner_mapping,
             update_owner_mapping,
@@ -1244,6 +1245,7 @@ try:
             insert_sbom_entry,
             update_sbom_entry,
             delete_sbom_entry,
+            bulk_delete_sbom_entries,
             list_owner_mappings,
             insert_owner_mapping,
             update_owner_mapping,
@@ -1253,6 +1255,25 @@ try:
 except Exception as _admin_import_err:
     _admin_api_available = False
     logger.warning("sbom_admin_api unavailable: %s", _admin_import_err)
+
+# ── Vuln Feeds Admin API (脆弱性フィード管理) ──────────────────
+try:
+    try:
+        from .vuln_feeds_admin_api import (
+            list_vuln_sources,
+            list_vulns,
+            get_vuln_detail,
+        )
+    except ImportError:
+        from vuln_feeds_admin_api import (  # noqa: F401
+            list_vuln_sources,
+            list_vulns,
+            get_vuln_detail,
+        )
+    _vuln_feeds_api_available = True
+except Exception as _vuln_feeds_import_err:
+    _vuln_feeds_api_available = False
+    logger.warning("vuln_feeds_admin_api unavailable: %s", _vuln_feeds_import_err)
 
 
 def _require_admin_auth(request: Request) -> dict[str, Any]:
@@ -1321,7 +1342,7 @@ async def api_admin_sbom_insert(request: Request):
 
 @app.put("/api/admin/sbom")
 async def api_admin_sbom_update(request: Request):
-    """SBOMエントリを更新する（body.old_purl で対象を特定）"""
+    """SBOMエントリを更新する（body.old_purl または _old_name/_old_type で対象を特定）"""
     _require_admin_auth(request)
     if not _admin_api_available:
         from fastapi import HTTPException
@@ -1355,6 +1376,18 @@ def api_admin_sbom_delete(
         purl=purl, name=name, type=type, version=version, release=release,
         os_name=os_name, os_version=os_version, arch=arch,
     )
+
+
+@app.post("/api/admin/sbom/bulk-delete")
+async def api_admin_sbom_bulk_delete(request: Request):
+    """SBOMエントリを一括削除する"""
+    _require_admin_auth(request)
+    if not _admin_api_available:
+        from fastapi import HTTPException
+        raise HTTPException(status_code=503, detail="Admin API unavailable")
+    body = await request.json()
+    entries = body.get("entries", [])
+    return bulk_delete_sbom_entries(entries)
 
 
 # -- 担当者マッピング CRUD -------------------------------------------
@@ -1405,6 +1438,53 @@ def api_admin_owners_delete(request: Request, pattern: str = "", system_name: st
         from fastapi import HTTPException
         raise HTTPException(status_code=503, detail="Admin API unavailable")
     return delete_owner_mapping(pattern=pattern, system_name=system_name)
+
+
+# -- 脆弱性フィード CRUD -------------------------------------------------
+
+@app.get("/api/admin/vulns/sources")
+def api_admin_vulns_sources(request: Request):
+    """脆弱性フィードソースのポーリングステータスと集計を返す"""
+    _require_admin_auth(request)
+    if not _vuln_feeds_api_available:
+        from fastapi import HTTPException
+        raise HTTPException(status_code=503, detail="Vuln Feeds API unavailable (BigQuery not configured)")
+    return list_vuln_sources()
+
+
+@app.get("/api/admin/vulns/{vuln_id:path}")
+def api_admin_vuln_detail(request: Request, vuln_id: str):
+    """脆弱性の詳細情報を返す"""
+    _require_admin_auth(request)
+    if not _vuln_feeds_api_available:
+        from fastapi import HTTPException
+        raise HTTPException(status_code=503, detail="Vuln Feeds API unavailable")
+    return get_vuln_detail(vuln_id)
+
+
+@app.get("/api/admin/vulns")
+def api_admin_vulns_list(
+    request: Request,
+    q: str = "",
+    source: str = "",
+    sbom_matched: str = "",
+    processed: str = "",
+    page: int = 1,
+    per_page: int = 50,
+):
+    """dedup テーブルから脆弱性エントリ一覧を取得する"""
+    _require_admin_auth(request)
+    if not _vuln_feeds_api_available:
+        from fastapi import HTTPException
+        raise HTTPException(status_code=503, detail="Vuln Feeds API unavailable")
+    return list_vulns(
+        source=source,
+        q=q,
+        sbom_matched=sbom_matched,
+        processed=processed,
+        page=page,
+        per_page=per_page,
+    )
 
 
 @app.websocket("/ws")

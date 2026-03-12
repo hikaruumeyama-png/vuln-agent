@@ -21,13 +21,13 @@ import sys
 
 import functions_framework
 
-# shared/ と vuln_feeds/ を import パスに追加
-_ROOT_DIR = os.path.join(os.path.dirname(__file__), "..")
-if _ROOT_DIR not in sys.path:
-    sys.path.insert(0, os.path.normpath(_ROOT_DIR))
+# Cloud Functions デプロイ時のインポートパス解決
+_THIS_DIR = os.path.dirname(os.path.abspath(__file__))
+if _THIS_DIR not in sys.path:
+    sys.path.insert(0, _THIS_DIR)
 
 from shared.vuln_schema import VulnEntry
-from vuln_intake.processor import process_vuln_entry
+from processor import process_vuln_entry
 
 logger = logging.getLogger(__name__)
 logging.basicConfig(level=logging.INFO, format="%(levelname)s %(name)s %(message)s")

@@ -381,7 +381,7 @@ steps:
           --source=live_gateway \
           --region=${_REGION} \
           --set-env-vars="GCP_PROJECT_ID=${PROJECT_ID},GCP_LOCATION=${_REGION},OIDC_ENABLED=${_OIDC_ENABLED},OIDC_TENANT_ID=${_OIDC_TENANT_ID},OIDC_CLIENT_ID=${_OIDC_CLIENT_ID},OIDC_REDIRECT_URI=${_OIDC_REDIRECT_URI},OIDC_SCOPES=${_OIDC_SCOPES}" \
-          --update-secrets="AGENT_RESOURCE_NAME=vuln-agent-resource-name:latest,AGENT_RESOURCE_NAME_FLASH=vuln-agent-resource-name-flash:latest,AGENT_RESOURCE_NAME_PRO=vuln-agent-resource-name-pro:latest,GEMINI_API_KEY=vuln-agent-gemini-api-key:latest,OIDC_CLIENT_SECRET=${_OIDC_CLIENT_SECRET_SECRET}:latest,OIDC_SESSION_SECRET=${_OIDC_SESSION_SECRET_SECRET}:latest" \
+          --update-secrets="AGENT_RESOURCE_NAME=vuln-agent-resource-name:latest,AGENT_RESOURCE_NAME_FLASH=vuln-agent-resource-name-flash:latest,AGENT_RESOURCE_NAME_PRO=vuln-agent-resource-name-pro:latest,GEMINI_API_KEY=vuln-agent-gemini-api-key:latest,OIDC_CLIENT_SECRET=${_OIDC_CLIENT_SECRET_SECRET}:latest,OIDC_SESSION_SECRET=${_OIDC_SESSION_SECRET_SECRET}:latest,BQ_VULN_DEDUP_TABLE_ID=vuln-agent-bq-dedup-table-id:latest,BQ_VULN_POLL_STATE_TABLE_ID=vuln-agent-bq-poll-state-table-id:latest" \
           --service-account=vuln-agent-sa@${PROJECT_ID}.iam.gserviceaccount.com \
           --allow-unauthenticated \
           --memory=512Mi \
@@ -506,9 +506,9 @@ steps:
           --entry-point=poll_vuln_feeds \
           --trigger-http \
           --service-account=vuln-agent-sa@${PROJECT_ID}.iam.gserviceaccount.com \
-          --update-env-vars="GCP_PROJECT_ID=${PROJECT_ID},GCP_LOCATION=${_REGION}" \
-          --set-secrets="NVD_API_KEY=vuln-agent-nvd-api-key:latest" \
-          --memory=512MB \
+          --update-env-vars="GCP_PROJECT_ID=${PROJECT_ID},GCP_LOCATION=${_REGION},VULN_FEEDS_DISABLED=true" \
+          --set-secrets="NVD_API_KEY=vuln-agent-nvd-api-key:latest,BQ_SBOM_TABLE_ID=vuln-agent-bq-sbom-table-id:latest" \
+          --memory=1024MB \
           --timeout=540s \
           --quiet
     waitFor:
