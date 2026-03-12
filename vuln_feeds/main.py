@@ -52,7 +52,18 @@ def poll_vuln_feeds(request):
     """Cloud Function エントリーポイント。
 
     Cloud Scheduler からの HTTP POST を受け取り、指定ソースをポーリングする。
+
+    環境変数 VULN_FEEDS_DISABLED=true で全ポーリングを停止できる（コスト削減用）。
     """
+    # ── キルスイッチ: コスト削減のためポーリングを無効化 ──
+    disabled = (os.environ.get("VULN_FEEDS_DISABLED") or "").strip().lower()
+    if disabled in ("true", "1", "yes"):
+        logger.info("Polling is disabled (VULN_FEEDS_DISABLED=%s). Returning early.", disabled)
+        return json.dumps(
+            {"status": "disabled", "message": "ポーリングは無効化されています (VULN_FEEDS_DISABLED)"},
+            ensure_ascii=False,
+        ), 200, {"Content-Type": "application/json"}
+
     try:
         body = request.get_json(silent=True) or {}
     except Exception:

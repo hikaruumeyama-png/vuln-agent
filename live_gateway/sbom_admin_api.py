@@ -17,16 +17,21 @@ _BQ_FULL_TABLE_ID_PATTERN = re.compile(r"^[A-Za-z0-9_\-:]+\.[A-Za-z0-9_]+\.[A-Za
 _BQ_SHORT_TABLE_ID_PATTERN = re.compile(r"^[A-Za-z0-9_]+\.[A-Za-z0-9_$]+$")
 
 
+_secret_cache: dict[str, str] = {}
+
+
 def _get_config_value(env_keys: list[str], secret_name: str = "", default: str = "") -> str:
     """
     設定値を取得する。
-    優先順位: 環境変数 → Secret Manager → default
+    優先順位: 環境変数 → Secret Manager (モジュールレベルキャッシュ) → default
     """
     for key in env_keys:
         val = os.environ.get(key, "").strip()
         if val:
             return val
     if secret_name:
+        if secret_name in _secret_cache:
+            return _secret_cache[secret_name] or default
         project = os.environ.get("GCP_PROJECT_ID", "").strip()
         if project:
             try:
@@ -35,10 +40,12 @@ def _get_config_value(env_keys: list[str], secret_name: str = "", default: str =
                 name = f"projects/{project}/secrets/{secret_name}/versions/latest"
                 response = client.access_secret_version(request={"name": name})
                 val = response.payload.data.decode("utf-8").strip()
+                _secret_cache[secret_name] = val
                 if val:
                     return val
             except Exception as e:
                 logger.debug("Secret Manager lookup failed for %s: %s", secret_name, e)
+                _secret_cache[secret_name] = ""
     return default
 
 

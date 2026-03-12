@@ -506,7 +506,7 @@ steps:
           --entry-point=poll_vuln_feeds \
           --trigger-http \
           --service-account=vuln-agent-sa@${PROJECT_ID}.iam.gserviceaccount.com \
-          --update-env-vars="GCP_PROJECT_ID=${PROJECT_ID},GCP_LOCATION=${_REGION}" \
+          --update-env-vars="GCP_PROJECT_ID=${PROJECT_ID},GCP_LOCATION=${_REGION},VULN_FEEDS_DISABLED=true" \
           --set-secrets="NVD_API_KEY=vuln-agent-nvd-api-key:latest,BQ_SBOM_TABLE_ID=vuln-agent-bq-sbom-table-id:latest" \
           --memory=1024MB \
           --timeout=540s \

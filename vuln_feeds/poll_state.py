@@ -19,13 +19,20 @@ def _get_table_id() -> str:
     return (os.environ.get("BQ_VULN_POLL_STATE_TABLE_ID") or "").strip()
 
 
+_bq_client: bigquery.Client | None = None
+
+
 def _get_client() -> bigquery.Client:
+    global _bq_client
+    if _bq_client is not None:
+        return _bq_client
     project = (
         os.environ.get("GCP_PROJECT_ID")
         or os.environ.get("GOOGLE_CLOUD_PROJECT")
         or ""
     ).strip() or None
-    return bigquery.Client(project=project)
+    _bq_client = bigquery.Client(project=project)
+    return _bq_client
 
 
 def get_last_poll(source_id: str) -> dict[str, Any]:
