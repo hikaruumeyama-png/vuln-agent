@@ -145,11 +145,12 @@ def _load_sbom(force_refresh: bool = False) -> list[dict]:
 
     current_time = time.time()
     
-    # 5分間キャッシュ
+    # 30分間キャッシュ（コスト最適化: BQフルスキャン頻度を削減）
+    _SBOM_CACHE_TTL = 1800
     backend = _get_sbom_data_backend()
 
     if _sbom_cache and _sbom_cache_timestamp and not force_refresh:
-        if _sbom_cache_backend == backend and current_time - _sbom_cache_timestamp < 300:
+        if _sbom_cache_backend == backend and current_time - _sbom_cache_timestamp < _SBOM_CACHE_TTL:
             return _sbom_cache
     
 
@@ -280,11 +281,12 @@ def _load_owner_mapping(force_refresh: bool = False) -> list[dict]:
 
     current_time = time.time()
     
-    # 5分間キャッシュ
+    # 30分間キャッシュ（コスト最適化: BQフルスキャン頻度を削減）
+    _OWNER_CACHE_TTL = 1800
     backend = _get_sbom_data_backend()
 
     if _owner_mapping_cache and _owner_mapping_cache_timestamp and not force_refresh:
-        if _owner_mapping_cache_backend == backend and current_time - _owner_mapping_cache_timestamp < 300:
+        if _owner_mapping_cache_backend == backend and current_time - _owner_mapping_cache_timestamp < _OWNER_CACHE_TTL:
             return _owner_mapping_cache
     
 

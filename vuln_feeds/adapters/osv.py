@@ -127,7 +127,8 @@ class OsvAdapter(BaseSourceAdapter):
 def _get_sbom_packages_for_ecosystem(ecosystem: str) -> list[str]:
     """SBOM から指定 ecosystem のパッケージ名リストを取得する。
 
-    SBOM の type フィールドを ecosystem にマッピングして抽出。
+    BigQuery の SBOM テーブルから type フィールドでフィルタし、
+    パッケージ名リストを返す。
     """
     ecosystem_to_type = {
         "PyPI": "pypi",
@@ -145,6 +146,13 @@ def _get_sbom_packages_for_ecosystem(ecosystem: str) -> list[str]:
     }
     target_type = ecosystem_to_type.get(ecosystem, ecosystem.lower())
 
+    # BigQuery から SBOM パッケージを取得
+    try:
+        return _load_sbom_packages_from_bq(target_type)
+    except Exception as exc:
+        logger.debug("BQ SBOM load failed for %s: %s", ecosystem, exc)
+
+    # フォールバック: agent モジュールから読み込み (ローカル開発用)
     try:
         from agent.tools.sheets_tools import _load_sbom
 
@@ -159,8 +167,51 @@ def _get_sbom_packages_for_ecosystem(ecosystem: str) -> list[str]:
                 names.append(name)
         return names
     except Exception as exc:
-        logger.debug("SBOM load failed for ecosystem %s: %s", ecosystem, exc)
+        logger.debug("SBOM fallback load failed for %s: %s", ecosystem, exc)
         return []
+
+
+def _load_sbom_packages_from_bq(target_type: str) -> list[str]:
+    """BigQuery の SBOM テーブルからパッケージ名を取得する。"""
+    table_id = (
+        os.environ.get("BQ_SBOM_TABLE_ID", "").strip()
+    )
+    if not table_id:
+        # Secret Manager フォールバック
+        from .base import get_secret_value
+        table_id = get_secret_value(
+            ["BQ_SBOM_TABLE_ID"], secret_name="vuln-agent-bq-sbom-table-id"
+        )
+    if not table_id:
+        raise ValueError("BQ_SBOM_TABLE_ID が未設定です")
+
+    # project.dataset.table 形式に正規化
+    if table_id.count(".") == 1:
+        project_id = (
+            os.environ.get("GCP_PROJECT_ID")
+            or os.environ.get("GOOGLE_CLOUD_PROJECT")
+            or ""
+        ).strip()
+        if project_id:
+            table_id = f"{project_id}.{table_id}"
+
+    from google.cloud import bigquery
+
+    client = bigquery.Client()
+    sql = """
+        SELECT DISTINCT name
+        FROM `{t}`
+        WHERE LOWER(type) = @target_type AND name IS NOT NULL AND name != ''
+    """.format(t=table_id)
+    job_config = bigquery.QueryJobConfig(
+        query_parameters=[
+            bigquery.ScalarQueryParameter("target_type", "STRING", target_type),
+        ]
+    )
+    rows = client.query(sql, job_config=job_config).result()
+    names = [row.name for row in rows]
+    logger.info("SBOM BQ: %d packages for type=%s", len(names), target_type)
+    return names
 
 
 def _normalize_osv_vuln(vuln: dict[str, Any], ecosystem: str) -> VulnEntry | None:

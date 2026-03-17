@@ -85,7 +85,14 @@ class MsrcAdapter(BaseSourceAdapter):
     ) -> list[VulnEntry]:
         """特定の更新に含まれる脆弱性詳細を取得する。"""
         url = f"{_MSRC_API_BASE}/cvrf/{update_id}"
-        data = http_get_json(url, headers=headers)
+        try:
+            data = http_get_json(url, headers=headers)
+        except Exception as exc:
+            logger.warning("MSRC update %s fetch failed: %s", update_id, exc)
+            return []
+        if not isinstance(data, dict) or not data:
+            logger.warning("MSRC update %s returned empty or invalid response", update_id)
+            return []
         return _parse_cvrf_document(data, since)
 
 
