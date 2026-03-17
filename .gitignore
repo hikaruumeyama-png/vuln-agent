@@ -12,6 +12,7 @@ venv/
 # 一時ファイル
 agent_tmp*/
 *.log
+old/
 
 # IDE
 .vscode/
