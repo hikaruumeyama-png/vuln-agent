@@ -30,6 +30,7 @@ from shared.ticket_pipeline import generate_ticket
 from shared.ticket_renderers import build_toplevel_summary
 
 logging.basicConfig(level=logging.INFO)
+logging.getLogger().setLevel(logging.INFO)
 logger = logging.getLogger(__name__)
 
 _EVENT_CACHE: dict[str, bool] = {}
