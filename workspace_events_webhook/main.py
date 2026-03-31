@@ -17,6 +17,7 @@ import json
 import logging
 import os
 import re
+import time
 from typing import Any
 
 import functions_framework
@@ -26,7 +27,9 @@ from googleapiclient.discovery import build
 
 from shared.agent_query import run_agent_query
 from shared.ticket_pipeline import generate_ticket
+from shared.ticket_renderers import build_toplevel_summary
 
+logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 _EVENT_CACHE: dict[str, bool] = {}
@@ -327,6 +330,17 @@ def _handle_message_events(
             ).execute()
             processed += 1
             logger.info("Replied to Gmail message: %s (status=%s)", message_name, result.status)
+
+            # トップレベルサマリ投稿（スレッド外 → 展開不要で対応要否がわかる）
+            summary_text = build_toplevel_summary(result.status, result.facts)
+            if summary_text:
+                try:
+                    service.spaces().messages().create(
+                        parent=space_name,
+                        body={"text": summary_text},
+                    ).execute()
+                except Exception as summary_exc:
+                    logger.warning("Top-level summary post failed: %s", summary_exc)
         except Exception as exc:
             logger.exception("Failed to process Gmail message event: %s", exc)
 
@@ -419,37 +433,52 @@ def _renew_subscription() -> dict[str, Any]:
             resp.read()
         logger.info("Deleted existing subscription: %s", sub_name)
 
-    # 作成を試み、409 なら既存を削除してリトライ
-    try:
-        result = _create()
-        logger.info("Subscription renewed: %s", result.get("name", ""))
-        return {"status": "renewed", "result": result}
-    except urllib.error.HTTPError as e:
-        if e.code != 409:
-            error_body = e.read().decode("utf-8", errors="replace")
-            logger.error("Subscription renewal failed (%s): %s", e.code, error_body)
-            return {"status": "error", "code": e.code, "message": error_body}
+    # 一時的エラー (502, 503, 429) に対する指数バックオフリトライ
+    _TRANSIENT_CODES = (429, 502, 503)
+    _MAX_ATTEMPTS = 3
 
-        # 409: 既存サブスクリプション名をエラーレスポンスから取得して削除
-        error_body = e.read().decode("utf-8", errors="replace")
+    for attempt in range(_MAX_ATTEMPTS):
         try:
-            error_data = json.loads(error_body)
-            details = error_data.get("error", {}).get("details", [])
-            existing_sub = ""
-            for detail in details:
-                metadata = detail.get("metadata", {})
-                if metadata.get("current_subscription"):
-                    existing_sub = metadata["current_subscription"]
-                    break
-            if existing_sub:
-                _delete_subscription(existing_sub)
-        except Exception as del_exc:
-            logger.warning("Failed to delete existing subscription: %s", del_exc)
+            result = _create()
+            logger.info("Subscription renewed: %s", result.get("name", ""))
+            return {"status": "renewed", "result": result}
+        except urllib.error.HTTPError as e:
+            if e.code in _TRANSIENT_CODES and attempt < _MAX_ATTEMPTS - 1:
+                backoff = 2 ** (attempt + 1)  # 2s, 4s
+                logger.warning(
+                    "一時的エラー (%s) 発生、%d秒後にリトライします (試行 %d/%d)",
+                    e.code, backoff, attempt + 1, _MAX_ATTEMPTS,
+                )
+                e.read()  # レスポンスボディを消費して接続を解放
+                time.sleep(backoff)
+                continue
 
-    # リトライ
+            if e.code != 409:
+                error_body = e.read().decode("utf-8", errors="replace")
+                logger.error("Subscription renewal failed (%s): %s", e.code, error_body)
+                return {"status": "error", "code": e.code, "message": error_body}
+
+            # 409: 既存サブスクリプション名をエラーレスポンスから取得して削除
+            error_body = e.read().decode("utf-8", errors="replace")
+            try:
+                error_data = json.loads(error_body)
+                details = error_data.get("error", {}).get("details", [])
+                existing_sub = ""
+                for detail in details:
+                    metadata = detail.get("metadata", {})
+                    if metadata.get("current_subscription"):
+                        existing_sub = metadata["current_subscription"]
+                        break
+                if existing_sub:
+                    _delete_subscription(existing_sub)
+            except Exception as del_exc:
+                logger.warning("Failed to delete existing subscription: %s", del_exc)
+            break  # 409 処理後、ループを抜けてリトライへ
+
+    # 409 削除後のリトライ
     try:
         result = _create()
-        logger.info("Subscription renewed (retry): %s", result.get("name", ""))
+        logger.info("Subscription renewed (retry after 409): %s", result.get("name", ""))
         return {"status": "renewed", "result": result}
     except urllib.error.HTTPError as e:
         error_body = e.read().decode("utf-8", errors="replace")
@@ -542,6 +571,17 @@ def handle_workspace_event(request):
             ).execute()
             processed += 1
             logger.info("Replied to reaction: %s (status=%s)", message_name, result.status)
+
+            # トップレベルサマリ投稿（スレッド外 → 展開不要で対応要否がわかる）
+            summary_text = build_toplevel_summary(result.status, result.facts)
+            if summary_text:
+                try:
+                    service.spaces().messages().create(
+                        parent=space_name,
+                        body={"text": summary_text},
+                    ).execute()
+                except Exception as summary_exc:
+                    logger.warning("Top-level summary post failed: %s", summary_exc)
         except Exception as exc:
             logger.exception("Failed to process reaction event: %s", exc)
 

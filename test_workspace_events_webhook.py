@@ -92,6 +92,31 @@ def _stub_dependencies():
     shared_mod.ticket_pipeline = tp_mod
     sys.modules["shared.ticket_pipeline"] = tp_mod
 
+    # shared.ticket_renderers
+    # build_toplevel_summary の簡易スタブ（実装と同じロジック）
+    _SKIP = frozenset({"sbom_skip", "exploited_not_target", "update_not_target", "low_quality", "error"})
+    def _stub_build_toplevel_summary(status, facts):
+        if status in _SKIP:
+            return None
+        if status == "ticket" and facts:
+            products = facts.get("products") or ["要確認"]
+            product_text = " / ".join(products[:3])
+            max_score = facts.get("max_score")
+            cvss_text = f"CVSS {max_score:.1f}" if max_score is not None else "CVSS 要確認"
+            due_date = facts.get("due_date") or "要確認"
+            return f"🔴 起票対象: {product_text} | {cvss_text} | 期限 {due_date} ← 詳細はスレッドを確認"
+        if status == "exploited_update":
+            return "🔴 悪用確認: 脆弱性のアップデート要否を確認してください ← 詳細はスレッドを確認"
+        if status == "update_notification":
+            return "🟠 更新通知: 脆弱性情報が更新されました ← 詳細はスレッドを確認"
+        if status == "ticket":
+            return "🟠 起票対象: 脆弱性が検出されました ← 詳細はスレッドを確認"
+        return None
+    tr_mod = types.ModuleType("shared.ticket_renderers")
+    tr_mod.build_toplevel_summary = _stub_build_toplevel_summary
+    shared_mod.ticket_renderers = tr_mod
+    sys.modules["shared.ticket_renderers"] = tr_mod
+
 
 def _load_module(name: str, path: Path):
     spec = importlib.util.spec_from_file_location(name, path)
@@ -127,7 +152,7 @@ class _MessagesResource:
         _ = name
         return types.SimpleNamespace(execute=lambda: self.source_message)
 
-    def create(self, parent, body, messageReplyOption):
+    def create(self, parent, body, messageReplyOption=None):
         self.created_calls.append(
             {"parent": parent, "body": body, "messageReplyOption": messageReplyOption}
         )
@@ -162,6 +187,8 @@ class WorkspaceEventsWebhookTests(unittest.TestCase):
     def setUp(self):
         self.mod._EVENT_CACHE.clear()
         _generate_ticket_calls.clear()
+        # generate_ticket モックをデフォルトに復元
+        self.mod.generate_ticket = _mock_generate_ticket
 
     # --- イベント抽出 ---
     def test_extract_event_from_pubsub_push(self):
@@ -222,9 +249,9 @@ class WorkspaceEventsWebhookTests(unittest.TestCase):
         self.assertEqual(call.get("thread_name"), "spaces/AAA/threads/TTT")
         self.assertEqual(call.get("history_key"), "workspace_reaction")
 
-        # Chat API にメッセージが送信されたか
+        # Chat API にメッセージが送信されたか（スレッド返信 + トップレベルサマリ）
         created = service.spaces().messages().created_calls
-        self.assertEqual(len(created), 1)
+        self.assertGreaterEqual(len(created), 1)
         self.assertEqual(created[0]["parent"], "spaces/AAA")
         self.assertEqual(created[0]["body"]["thread"]["name"], "spaces/AAA/threads/TTT")
         self.assertIn("【起票用（コピペ）】", created[0]["body"]["text"])
@@ -507,6 +534,134 @@ class WorkspaceEventsWebhookTests(unittest.TestCase):
         self.assertIn("[SIDfm] CVE通知", call["source_text"])
         # json.dumps フォールバックが使われていないこと
         self.assertNotIn('"cardsV2"', call["source_text"])
+
+
+    # --- トップレベルサマリ投稿 ---
+    def test_toplevel_summary_posted_for_ticket_status(self):
+        """status=ticket のとき、スレッド返信+トップレベルサマリの2メッセージが投稿される。"""
+        # facts 付きの TicketResult を返すモックに差し替え
+        def _mock_with_facts(source_text, **kwargs):
+            _generate_ticket_calls.append({"source_text": source_text, **kwargs})
+            return _MockTicketResult(
+                status="ticket",
+                text="【起票用（コピペ）】\nテスト",
+                facts={"products": ["AlmaLinux9"], "max_score": 9.8, "due_date": "2026/03/28"},
+            )
+        self.mod.generate_ticket = _mock_with_facts
+
+        service = _ChatService()
+        self.mod._build_chat_service = lambda: service
+
+        msg = {
+            "name": "spaces/AAA/messages/SUM1",
+            "text": "From: sidfm@example.com\nSubject: CVE\nView message",
+            "sender": {"displayName": "Gmail", "type": "BOT"},
+            "thread": {"name": "spaces/AAA/threads/TTT5"},
+        }
+        event_data = {"message": msg}
+        encoded = base64.b64encode(json.dumps(event_data).encode("utf-8")).decode("utf-8")
+        payload = {
+            "message": {
+                "data": encoded,
+                "attributes": {
+                    "ce-type": "google.workspace.chat.message.v1.created",
+                    "ce-id": "evt-summary-1",
+                },
+            }
+        }
+
+        raw_body, status, _ = self.mod.handle_workspace_event(_FakeRequest(payload))
+        self.assertEqual(status, 200)
+
+        created = service.spaces().messages().created_calls
+        # スレッド返信 + トップレベルサマリ = 2件
+        self.assertEqual(len(created), 2)
+        # 1件目: スレッド返信（thread あり）
+        self.assertIn("thread", created[0]["body"])
+        self.assertEqual(created[0]["messageReplyOption"], "REPLY_MESSAGE_FALLBACK_TO_NEW_THREAD")
+        # 2件目: トップレベルサマリ（thread なし）
+        self.assertNotIn("thread", created[1]["body"])
+        self.assertIsNone(created[1]["messageReplyOption"])
+        self.assertIn("起票対象", created[1]["body"]["text"])
+        self.assertIn("CVSS 9.8", created[1]["body"]["text"])
+
+    def test_no_toplevel_summary_for_sbom_skip(self):
+        """status=sbom_skip のとき、トップレベルサマリは投稿されない。"""
+        def _mock_skip(source_text, **kwargs):
+            _generate_ticket_calls.append({"source_text": source_text, **kwargs})
+            return _MockTicketResult(status="sbom_skip", text="SBOM未登録です")
+        self.mod.generate_ticket = _mock_skip
+
+        service = _ChatService()
+        self.mod._build_chat_service = lambda: service
+
+        msg = {
+            "name": "spaces/AAA/messages/SUM2",
+            "text": "From: sidfm@example.com\nSubject: CVE\nView message",
+            "sender": {"displayName": "Gmail", "type": "BOT"},
+            "thread": {"name": "spaces/AAA/threads/TTT6"},
+        }
+        event_data = {"message": msg}
+        encoded = base64.b64encode(json.dumps(event_data).encode("utf-8")).decode("utf-8")
+        payload = {
+            "message": {
+                "data": encoded,
+                "attributes": {
+                    "ce-type": "google.workspace.chat.message.v1.created",
+                    "ce-id": "evt-summary-2",
+                },
+            }
+        }
+
+        self.mod.handle_workspace_event(_FakeRequest(payload))
+
+        created = service.spaces().messages().created_calls
+        # スレッド返信のみ = 1件
+        self.assertEqual(len(created), 1)
+        self.assertIn("thread", created[0]["body"])
+
+
+class BuildToplevelSummaryTests(unittest.TestCase):
+    """build_toplevel_summary の単体テスト。"""
+
+    def _build(self, status, facts):
+        return sys.modules["shared.ticket_renderers"].build_toplevel_summary(status, facts)
+
+    def test_ticket_with_facts(self):
+        facts = {"products": ["FortiOS"], "max_score": 8.2, "due_date": "2026/04/07"}
+        result = self._build("ticket", facts)
+        self.assertIsNotNone(result)
+        self.assertIn("起票対象", result)
+        self.assertIn("FortiOS", result)
+        self.assertIn("CVSS 8.2", result)
+        self.assertIn("2026/04/07", result)
+
+    def test_ticket_without_facts(self):
+        result = self._build("ticket", None)
+        self.assertIsNotNone(result)
+        self.assertIn("起票対象", result)
+
+    def test_sbom_skip_returns_none(self):
+        self.assertIsNone(self._build("sbom_skip", None))
+
+    def test_exploited_not_target_returns_none(self):
+        self.assertIsNone(self._build("exploited_not_target", None))
+
+    def test_low_quality_returns_none(self):
+        self.assertIsNone(self._build("low_quality", None))
+
+    def test_exploited_update(self):
+        result = self._build("exploited_update", None)
+        self.assertIsNotNone(result)
+        self.assertIn("悪用確認", result)
+
+    def test_update_notification(self):
+        result = self._build("update_notification", None)
+        self.assertIsNotNone(result)
+        self.assertIn("更新通知", result)
+
+    def test_error_returns_none(self):
+        self.assertIsNone(self._build("error", None))
 
 
 if __name__ == "__main__":

@@ -414,6 +414,74 @@ def build_update_not_target_message(analysis: dict[str, Any]) -> str:
     return "\n".join(lines)
 
 
+# ------------------------------------------------------------------
+# トップレベルサマリ（スレッド外に投稿し、展開不要で対応要否を表示）
+# ------------------------------------------------------------------
+
+# chat_tools.py の _cvss_to_severity と同じ閾値
+_SUMMARY_CVSS_EMOJI = {
+    "緊急": "🔴",
+    "高": "🟠",
+    "中": "🟡",
+    "低": "🟢",
+}
+
+_SKIP_STATUSES = frozenset({
+    "sbom_skip",
+    "exploited_not_target",
+    "update_not_target",
+    "low_quality",
+    "error",
+})
+
+
+def _cvss_to_severity_label(score: float | None) -> str:
+    if score is None:
+        return "低"
+    try:
+        s = float(score)
+    except (TypeError, ValueError):
+        return "低"
+    if s >= 9.0:
+        return "緊急"
+    if s >= 7.0:
+        return "高"
+    if s >= 4.0:
+        return "中"
+    return "低"
+
+
+def build_toplevel_summary(status: str, facts: dict[str, Any] | None) -> str | None:
+    """TicketResult の status/facts からスレッド外に投稿する1行サマリを生成する。
+
+    対応不要の status の場合は None を返す（投稿しない）。
+    """
+    if status in _SKIP_STATUSES:
+        return None
+
+    if status == "ticket" and facts:
+        products = facts.get("products") or ["要確認"]
+        product_text = " / ".join(products[:3])
+        max_score = facts.get("max_score")
+        severity = _cvss_to_severity_label(max_score)
+        emoji = _SUMMARY_CVSS_EMOJI.get(severity, "⚪")
+        cvss_text = f"CVSS {max_score:.1f}" if max_score is not None else "CVSS 要確認"
+        due_date = facts.get("due_date") or "要確認"
+        return f"{emoji} 起票対象: {product_text} | {cvss_text} | 期限 {due_date} ← 詳細はスレッドを確認"
+
+    if status == "exploited_update":
+        return "🔴 悪用確認: 脆弱性のアップデート要否を確認してください ← 詳細はスレッドを確認"
+
+    if status == "update_notification":
+        return "🟠 更新通知: 脆弱性情報が更新されました ← 詳細はスレッドを確認"
+
+    # ticket で facts が無い場合等
+    if status == "ticket":
+        return "🟠 起票対象: 脆弱性が検出されました ← 詳細はスレッドを確認"
+
+    return None
+
+
 def build_low_quality_ticket_message() -> str:
     return (
         "起票データの根拠情報が不足しているため、このままでは誤起票の可能性があります。\n"
