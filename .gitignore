@@ -27,3 +27,12 @@ test_agent.py
 
 # デプロイ時にCloud Buildがコピーするsharedモジュール
 workspace_events_webhook/shared/
+
+# Claude Code ローカル専用
+.claude/worktrees/
+.claude/settings.local.json
+
+# トークン・認証情報
+scripts/.workspace_events_token.json
+credentials.json
+token.json

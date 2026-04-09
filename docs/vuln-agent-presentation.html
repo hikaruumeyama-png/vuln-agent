@@ -1,0 +1,697 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>脆弱性管理AI自動化 — 提案資料</title>
+<script src="https://cdn.jsdelivr.net/npm/mermaid@11/dist/mermaid.min.js"></script>
+<style>
+/* ━━━━━ Reset & Base ━━━━━ */
+*{box-sizing:border-box;margin:0;padding:0}
+html,body{height:100%;overflow:hidden;font-family:'Segoe UI','Meiryo','Hiragino Sans',sans-serif}
+
+/* ━━━━━ Slide container ━━━━━ */
+.deck{position:relative;width:100%;height:100%}
+.slide{
+  position:absolute;inset:0;display:flex;flex-direction:column;
+  justify-content:center;padding:60px 80px;
+  opacity:0;pointer-events:none;transition:opacity .4s ease;
+  overflow-y:auto;
+}
+.slide.active{opacity:1;pointer-events:auto}
+
+/* ━━━━━ Backgrounds ━━━━━ */
+.bg-dark{background:#0d1117;color:#e6edf3}
+.bg-gradient{background:linear-gradient(135deg,#0d1117 0%,#161b22 50%,#1a1a2e 100%);color:#e6edf3}
+.bg-blue{background:linear-gradient(135deg,#0c1929 0%,#1e3a5f 100%);color:#e6edf3}
+.bg-green{background:linear-gradient(135deg,#071a12 0%,#0d3320 100%);color:#e6edf3}
+.bg-purple{background:linear-gradient(135deg,#1a0a2e 0%,#2d1b4e 100%);color:#e6edf3}
+
+/* ━━━━━ Typography ━━━━━ */
+.slide-num{
+  position:absolute;bottom:20px;right:32px;
+  color:#484f58;font-size:13px;
+}
+.tag{
+  display:inline-block;font-size:11px;font-weight:700;letter-spacing:1px;
+  text-transform:uppercase;padding:4px 12px;border-radius:4px;margin-bottom:14px;
+}
+.tag-blue{background:#1e3a5f;color:#58a6ff}
+.tag-green{background:#0d3320;color:#3fb950}
+.tag-purple{background:#2d1b4e;color:#bc8cff}
+.tag-amber{background:#3d2e00;color:#d29922}
+.tag-red{background:#3d1111;color:#f87171}
+
+h1{font-size:42px;font-weight:700;line-height:1.2;margin-bottom:12px}
+h2{font-size:30px;font-weight:700;line-height:1.3;margin-bottom:10px}
+h3{font-size:20px;font-weight:600;line-height:1.4;margin-bottom:8px}
+.lead{font-size:18px;color:#8b949e;line-height:1.6;max-width:700px}
+.accent{color:#58a6ff}
+.green{color:#3fb950}
+.red{color:#f87171}
+.amber{color:#d29922}
+.purple{color:#bc8cff}
+.dim{color:#484f58}
+
+/* ━━━━━ Layout helpers ━━━━━ */
+.cols{display:flex;gap:32px;margin-top:24px;align-items:flex-start}
+.cols>*{flex:1}
+.gap-lg{gap:48px}
+.mt-sm{margin-top:12px}
+.mt-md{margin-top:24px}
+.mt-lg{margin-top:36px}
+.center{text-align:center;align-items:center}
+
+/* ━━━━━ Cards ━━━━━ */
+.card{
+  background:rgba(255,255,255,.04);border:1px solid #30363d;border-radius:12px;
+  padding:24px 26px;position:relative;overflow:hidden;
+}
+.card::before{content:'';position:absolute;top:0;left:0;right:0;height:3px}
+.card.c-blue::before{background:#3b82f6}
+.card.c-green::before{background:#10b981}
+.card.c-purple::before{background:#a855f7}
+.card.c-amber::before{background:#f59e0b}
+.card.c-red::before{background:#ef4444}
+.card .icon{font-size:32px;margin-bottom:10px}
+.card h3{color:#e6edf3;margin-bottom:6px}
+.card p{color:#8b949e;font-size:14px;line-height:1.6}
+.metric{font-size:36px;font-weight:800;line-height:1}
+.metric-sm{font-size:24px;font-weight:700}
+.metric-label{font-size:12px;color:#8b949e;margin-top:4px}
+
+/* ━━━━━ Lists ━━━━━ */
+ul.clean{list-style:none;padding:0}
+ul.clean li{padding:8px 0;font-size:16px;line-height:1.5;border-bottom:1px solid #21262d;display:flex;align-items:baseline;gap:10px}
+ul.clean li:last-child{border:none}
+ul.clean .bullet{flex-shrink:0;width:8px;height:8px;border-radius:50%;margin-top:6px}
+ul.clean .bullet-blue{background:#3b82f6}
+ul.clean .bullet-green{background:#10b981}
+ul.clean .bullet-red{background:#ef4444}
+ul.clean .bullet-amber{background:#f59e0b}
+
+/* ━━━━━ Table ━━━━━ */
+table{border-collapse:collapse;width:100%;font-size:14px}
+th,td{border:1px solid #30363d;padding:10px 14px;text-align:left}
+th{background:#21262d;color:#79c0ff;font-weight:600}
+tr:nth-child(even){background:rgba(255,255,255,.02)}
+
+/* ━━━━━ Diagrams ━━━━━ */
+.diagram{
+  background:rgba(0,0,0,.25);border:1px solid #30363d;border-radius:10px;
+  padding:20px;margin-top:16px;overflow-x:auto;
+}
+
+/* ━━━━━ Arrow / badge ━━━━━ */
+.arrow-down{text-align:center;font-size:28px;color:#58a6ff;margin:8px 0}
+.badge{display:inline-block;font-size:11px;padding:3px 10px;border-radius:10px;font-weight:600}
+.badge-ok{background:#1a3a2a;color:#3fb950}
+.badge-wait{background:#3d2e00;color:#d29922}
+
+/* ━━━━━ Step indicator ━━━━━ */
+.steps{display:flex;gap:0;margin:20px 0}
+.step{
+  flex:1;padding:16px 20px;position:relative;
+  background:rgba(255,255,255,.03);border:1px solid #30363d;
+  text-align:center;font-size:13px;line-height:1.5;
+}
+.step:first-child{border-radius:8px 0 0 8px}
+.step:last-child{border-radius:0 8px 8px 0}
+.step .step-num{
+  display:inline-flex;align-items:center;justify-content:center;
+  width:28px;height:28px;border-radius:50%;font-weight:700;font-size:14px;
+  margin-bottom:6px;
+}
+.step .step-num.sn-blue{background:#1e3a5f;color:#58a6ff}
+.step .step-num.sn-green{background:#0d3320;color:#3fb950}
+.step .step-num.sn-purple{background:#2d1b4e;color:#bc8cff}
+.step .step-num.sn-amber{background:#3d2e00;color:#d29922}
+
+/* ━━━━━ Navigation ━━━━━ */
+.nav-bar{
+  position:fixed;bottom:0;left:0;right:0;height:48px;
+  background:rgba(13,17,23,.9);border-top:1px solid #21262d;
+  display:flex;align-items:center;justify-content:space-between;
+  padding:0 24px;z-index:100;backdrop-filter:blur(8px);
+}
+.nav-bar button{
+  background:none;border:1px solid #30363d;color:#8b949e;border-radius:6px;
+  padding:6px 16px;font-size:13px;cursor:pointer;transition:all .15s;
+}
+.nav-bar button:hover{color:#e6edf3;border-color:#58a6ff}
+.nav-bar .page-info{color:#484f58;font-size:13px}
+.nav-bar .fs-btn{border:none;font-size:18px;padding:6px 10px}
+
+/* ━━━━━ Progress bar ━━━━━ */
+.progress{position:fixed;top:0;left:0;height:3px;background:#58a6ff;z-index:101;transition:width .3s}
+</style>
+</head>
+<body>
+
+<div class="progress" id="progress"></div>
+
+<div class="deck" id="deck">
+
+<!-- ══════════════════════════════════════ -->
+<!--  SLIDE 1: タイトル                    -->
+<!-- ══════════════════════════════════════ -->
+<div class="slide bg-gradient active">
+  <div>
+    <span class="tag tag-blue">情報セキュリティ基盤</span>
+    <h1>脆弱性管理の<span class="accent">AI自動化</span></h1>
+    <p class="lead mt-sm">
+      有償サービス (SIDfm) への依存を解消し、<br>
+      AIが脆弱性情報を<strong>自動収集・自動判断・自動通知</strong>する基盤を構築。
+    </p>
+    <div class="mt-lg dim" style="font-size:14px">
+      情報セキュリティチーム &mdash; 2026年3月
+    </div>
+  </div>
+  <div class="slide-num">1</div>
+</div>
+
+<!-- ══════════════════════════════════════ -->
+<!--  SLIDE 2: 課題                        -->
+<!-- ══════════════════════════════════════ -->
+<div class="slide bg-dark">
+  <div>
+    <span class="tag tag-red">課題</span>
+    <h2>現状の脆弱性管理における課題</h2>
+
+    <div class="cols mt-md">
+      <div class="card c-red">
+        <div class="icon">&#x26A0;&#xFE0F;</div>
+        <h3>単一ソースへの依存</h3>
+        <p>SIDfm 1社のみに依存。カバー範囲外の脆弱性を<strong class="red">見逃すリスク</strong>がある。</p>
+      </div>
+      <div class="card c-red">
+        <div class="icon">&#x1F91A;</div>
+        <h3>手作業のボトルネック</h3>
+        <p>メール確認 → SBOM照合 → 担当者連絡 → 記録。すべてが<strong class="red">手動</strong>で、対応が遅れがち。</p>
+      </div>
+      <div class="card c-red">
+        <div class="icon">&#x1F4E2;</div>
+        <h3>通知のノイズ</h3>
+        <p>自社に無関係な脆弱性も全件通知され、<strong class="red">本当に重要な情報が埋もれる</strong>。</p>
+      </div>
+      <div class="card c-red">
+        <div class="icon">&#x1F4B8;</div>
+        <h3>固定コスト</h3>
+        <p>年間ライセンス費用が継続的に発生。利用量に関わらず<strong class="red">固定費</strong>。</p>
+      </div>
+    </div>
+  </div>
+  <div class="slide-num">2</div>
+</div>
+
+<!-- ══════════════════════════════════════ -->
+<!--  SLIDE 3: 解決策                      -->
+<!-- ══════════════════════════════════════ -->
+<div class="slide bg-blue">
+  <div>
+    <span class="tag tag-green">解決策</span>
+    <h2>AIによる脆弱性管理の完全自動化</h2>
+    <p class="lead">人手に頼っていた4つの作業を、すべてAIが自動で実行します。</p>
+
+    <div class="steps mt-lg">
+      <div class="step">
+        <div class="step-num sn-blue">1</div><br>
+        <strong class="accent">自動収集</strong><br>
+        11の情報源を<br>30分ごとに巡回
+      </div>
+      <div class="step">
+        <div class="step-num sn-green">2</div><br>
+        <strong class="green">自動判断</strong><br>
+        自社SBOMと照合し<br>該当の有無を判定
+      </div>
+      <div class="step">
+        <div class="step-num sn-purple">3</div><br>
+        <strong class="purple">自動通知</strong><br>
+        担当者を特定して<br>Google Chatに通知
+      </div>
+      <div class="step">
+        <div class="step-num sn-amber">4</div><br>
+        <strong class="amber">AI分析</strong><br>
+        Chatで質問するだけで<br>AIが詳細を即回答
+      </div>
+    </div>
+
+    <div class="card mt-lg" style="border-color:#3fb950">
+      <p style="font-size:16px;color:#e6edf3;text-align:center">
+        <strong>人がやること:</strong> &nbsp;
+        &#x2460; Chatに届いた通知を確認する &nbsp;&nbsp;
+        &#x2461; 必要に応じてAIに質問する &nbsp;&nbsp;
+        <span class="dim">— それだけ。</span>
+      </p>
+    </div>
+  </div>
+  <div class="slide-num">3</div>
+</div>
+
+<!-- ══════════════════════════════════════ -->
+<!--  SLIDE 4: Before / After             -->
+<!-- ══════════════════════════════════════ -->
+<div class="slide bg-dark">
+  <div>
+    <span class="tag tag-green">比較</span>
+    <h2>Before / After</h2>
+
+    <table class="mt-md">
+      <tr>
+        <th style="width:140px">項目</th>
+        <th><span class="red">Before</span> (SIDfm)</th>
+        <th><span class="green">After</span> (本システム)</th>
+      </tr>
+      <tr>
+        <td><strong>情報源</strong></td>
+        <td>SIDfm 1社のみ</td>
+        <td>NVD / CISA / JVN / Cisco / Microsoft 他 <strong>11ソース</strong></td>
+      </tr>
+      <tr>
+        <td><strong>収集頻度</strong></td>
+        <td>SIDfmの更新タイミング依存</td>
+        <td><strong>30分ごと</strong>に自動巡回 (24時間365日)</td>
+      </tr>
+      <tr>
+        <td><strong>影響判断</strong></td>
+        <td>担当者が手動でSBOM照合</td>
+        <td>AIが<strong>自動でSBOM照合</strong>・該当判定</td>
+      </tr>
+      <tr>
+        <td><strong>担当者通知</strong></td>
+        <td>連絡先を調べて手動で連絡</td>
+        <td>SBOMから<strong>自動で特定・Chat通知</strong></td>
+      </tr>
+      <tr>
+        <td><strong>ノイズ</strong></td>
+        <td>全件通知 (自社に無関係なものも)</td>
+        <td>該当するものだけ通知。<strong>ノイズ排除</strong></td>
+      </tr>
+      <tr>
+        <td><strong>深掘り分析</strong></td>
+        <td>自分でNVD等を調査</td>
+        <td>Chatで<strong>@メンションするだけ</strong>でAIが即分析</td>
+      </tr>
+      <tr>
+        <td><strong>対応履歴</strong></td>
+        <td>Excel / メールに手動記録</td>
+        <td><strong>全件自動</strong>でDB記録・検索可能</td>
+      </tr>
+      <tr>
+        <td><strong>費用</strong></td>
+        <td>年間ライセンス<strong>固定費</strong></td>
+        <td>Google Cloud <strong>従量課金</strong> (サーバーレス)</td>
+      </tr>
+    </table>
+  </div>
+  <div class="slide-num">4</div>
+</div>
+
+<!-- ══════════════════════════════════════ -->
+<!--  SLIDE 5: 仕組み概要                  -->
+<!-- ══════════════════════════════════════ -->
+<div class="slide bg-gradient">
+  <div>
+    <span class="tag tag-purple">仕組み</span>
+    <h2>システムの動き</h2>
+    <p class="lead">技術的な詳細を省いた、業務目線の動作フロー。</p>
+
+    <div class="diagram">
+<pre class="mermaid">
+flowchart TB
+  A["世界中の脆弱性情報\n(NVD / CISA / ベンダー等\n11ソース)"]
+  A -->|"30分ごとに\n自動収集"| B["AIが自動で判定"]
+  B --> C{"自社に\n関係ある？"}
+  C -->|"関係あり"| D["担当者を自動特定"]
+  C -->|"関係なし"| E["記録だけして終了\n(通知しない)"]
+  D --> F["Google Chat で\n担当者に即通知"]
+  F --> G["対応状況を自動記録"]
+  H["担当者が追加で\n知りたいとき"] -->|"Chatで\n@メンション"| I["AIが詳しく\n分析して回答"]
+
+  style A fill:#1e3a5f,stroke:#3b82f6,color:#bfdbfe
+  style B fill:#2d1f3d,stroke:#a855f7,color:#d8b4fe
+  style C fill:#7f1d1d,stroke:#ef4444,color:#fecaca
+  style F fill:#065f46,stroke:#10b981,color:#d1fae5
+  style E fill:#1f2937,stroke:#6b7280,color:#d1d5db
+  style I fill:#2d1f3d,stroke:#a855f7,color:#d8b4fe
+</pre>
+    </div>
+  </div>
+  <div class="slide-num">5</div>
+</div>
+
+<!-- ══════════════════════════════════════ -->
+<!--  SLIDE 6: 情報源 11ソース            -->
+<!-- ══════════════════════════════════════ -->
+<div class="slide bg-dark">
+  <div>
+    <span class="tag tag-blue">カバレッジ</span>
+    <h2>11の情報ソース</h2>
+    <p class="lead">世界の公的データベースとベンダー公式APIを網羅的に監視。</p>
+
+    <div class="cols mt-md gap-lg">
+      <div>
+        <h3 class="accent" style="margin-bottom:12px">公的データベース (4種)</h3>
+        <ul class="clean">
+          <li><span class="bullet bullet-blue"></span><strong>NIST NVD</strong> — 米国標準の脆弱性DB (世界最大)</li>
+          <li><span class="bullet bullet-blue"></span><strong>CISA KEV</strong> — 実際に悪用されている脆弱性一覧</li>
+          <li><span class="bullet bullet-blue"></span><strong>JVN</strong> — 日本向け脆弱性情報</li>
+          <li><span class="bullet bullet-blue"></span><strong>OSV</strong> — Google運営。OSS特化</li>
+        </ul>
+
+        <h3 class="accent" style="margin:20px 0 12px">ベンダー公式 (4種)</h3>
+        <ul class="clean">
+          <li><span class="bullet bullet-green"></span><strong>Cisco</strong> — ネットワーク機器</li>
+          <li><span class="bullet bullet-green"></span><strong>Microsoft</strong> — Windows / Office 等</li>
+          <li><span class="bullet bullet-green"></span><strong>Fortinet</strong> — ファイアウォール / VPN</li>
+          <li><span class="bullet bullet-green"></span><strong>AlmaLinux</strong> — サーバーOS</li>
+        </ul>
+      </div>
+      <div>
+        <h3 class="accent" style="margin-bottom:12px">社内利用製品 (3種)</h3>
+        <ul class="clean">
+          <li><span class="bullet bullet-amber"></span><strong>Zabbix</strong> — 監視ツール</li>
+          <li><span class="bullet bullet-amber"></span><strong>MOTEX / LanScope</strong> — IT資産管理</li>
+          <li><span class="bullet bullet-amber"></span><strong>SKYSEA Client View</strong> — 端末管理</li>
+        </ul>
+
+        <div class="card c-blue mt-lg">
+          <div class="metric">30分</div>
+          <div class="metric-label">API ソースのポーリング間隔</div>
+          <p class="mt-sm">SIDfmのメール通知より速く、最新の脆弱性を自動で検知できます。</p>
+        </div>
+      </div>
+    </div>
+  </div>
+  <div class="slide-num">6</div>
+</div>
+
+<!-- ══════════════════════════════════════ -->
+<!--  SLIDE 7: Chat統合                    -->
+<!-- ══════════════════════════════════════ -->
+<div class="slide bg-purple">
+  <div>
+    <span class="tag tag-amber">運用</span>
+    <h2>Google Chat との統合</h2>
+    <p class="lead">通知を受け取るのも、分析を依頼するのも、すべてGoogle Chat上で完結。</p>
+
+    <div class="cols mt-lg gap-lg">
+      <div class="card c-green">
+        <h3>&#x1F514; 自動通知を受け取る</h3>
+        <p class="mt-sm">新しい脆弱性が自社に関係する場合、AIが自動でChatに通知カードを投稿。</p>
+        <ul class="clean mt-sm">
+          <li><span class="bullet bullet-green"></span>何の脆弱性か (CVE番号・概要)</li>
+          <li><span class="bullet bullet-green"></span>どのシステムに影響するか</li>
+          <li><span class="bullet bullet-green"></span>いつまでに対応すべきか</li>
+          <li><span class="bullet bullet-green"></span>どう対処すべきか (修正バージョン等)</li>
+        </ul>
+      </div>
+      <div class="card c-purple">
+        <h3>&#x1F4AD; AIに質問する</h3>
+        <p class="mt-sm">通知を見て詳しく知りたいときは、<strong>@メンション</strong>するだけ。</p>
+        <ul class="clean mt-sm">
+          <li><span class="bullet bullet-blue"></span>「この脆弱性の影響範囲は？」</li>
+          <li><span class="bullet bullet-blue"></span>「過去に同様の対応はあった？」</li>
+          <li><span class="bullet bullet-blue"></span>「起票用のテキストを作って」</li>
+          <li><span class="bullet bullet-blue"></span>「このCVEの最新情報を教えて」</li>
+        </ul>
+      </div>
+      <div class="card c-amber">
+        <h3>&#x1F3AF; 既存運用との互換</h3>
+        <p class="mt-sm">SIDfm通知がChatに届くフローもそのまま活用可能。</p>
+        <ul class="clean mt-sm">
+          <li><span class="bullet bullet-amber"></span>SIDfmメール → Chat転送</li>
+          <li><span class="bullet bullet-amber"></span>？リアクションで自動分析</li>
+          <li><span class="bullet bullet-amber"></span>起票コピペ文を自動生成</li>
+          <li><span class="bullet bullet-amber"></span>段階的に移行可能</li>
+        </ul>
+      </div>
+    </div>
+  </div>
+  <div class="slide-num">7</div>
+</div>
+
+<!-- ══════════════════════════════════════ -->
+<!--  SLIDE 8: 自動パイプライン詳細        -->
+<!-- ══════════════════════════════════════ -->
+<div class="slide bg-dark">
+  <div>
+    <span class="tag tag-blue">詳細</span>
+    <h2>自動検知パイプライン</h2>
+    <p class="lead">脆弱性の発見から通知まで、すべてが人手不要で自動実行されます。</p>
+
+    <div class="diagram">
+<pre class="mermaid">
+flowchart LR
+  A["定期巡回\n(30分ごと)"] -->|"11ソース\nから取得"| B["新着の\n脆弱性情報"]
+  B --> C{"重複\nチェック"}
+  C -->|"初出"| D["自社SBOMと照合"]
+  C -->|"既知"| E["スキップ"]
+  D -->|"該当あり"| F["担当者を自動特定\n→ Chatに通知"]
+  D -->|"該当なし"| G["記録のみ\n(通知しない)"]
+  F --> H["対応履歴を自動記録"]
+  G --> H
+
+  style A fill:#1e3a5f,stroke:#3b82f6,color:#bfdbfe
+  style C fill:#7f1d1d,stroke:#ef4444,color:#fecaca
+  style F fill:#065f46,stroke:#10b981,color:#d1fae5
+  style E fill:#1f2937,stroke:#6b7280,color:#d1d5db
+  style G fill:#1f2937,stroke:#6b7280,color:#d1d5db
+</pre>
+    </div>
+
+    <div class="cols mt-md">
+      <div class="card c-blue">
+        <div class="metric-sm accent">重複排除</div>
+        <p>複数ソースが同じ脆弱性を報告しても、1回だけ通知。二重対応を防止。</p>
+      </div>
+      <div class="card c-green">
+        <div class="metric-sm green">ノイズ排除</div>
+        <p>自社のソフトウェア台帳 (SBOM) に載っていなければ通知しない。</p>
+      </div>
+      <div class="card c-purple">
+        <div class="metric-sm purple">全件記録</div>
+        <p>通知した/しないに関わらず、全脆弱性情報をデータベースに自動記録。</p>
+      </div>
+    </div>
+  </div>
+  <div class="slide-num">8</div>
+</div>
+
+<!-- ══════════════════════════════════════ -->
+<!--  SLIDE 9: 稼働状況                    -->
+<!-- ══════════════════════════════════════ -->
+<div class="slide bg-green">
+  <div>
+    <span class="tag tag-green">進捗</span>
+    <h2>現在の稼働状況</h2>
+
+    <div class="cols mt-md gap-lg">
+      <div>
+        <table>
+          <tr><th>ソース</th><th>状態</th></tr>
+          <tr><td>CISA KEV (米国)</td><td><span class="badge badge-ok">稼働中</span></td></tr>
+          <tr><td>NVD (米国)</td><td><span class="badge badge-ok">稼働中</span></td></tr>
+          <tr><td>JVN (日本)</td><td><span class="badge badge-ok">稼働中</span></td></tr>
+          <tr><td>OSV (Google)</td><td><span class="badge badge-ok">稼働中</span></td></tr>
+          <tr><td>Cisco</td><td><span class="badge badge-ok">稼働中</span></td></tr>
+          <tr><td>Microsoft (MSRC)</td><td><span class="badge badge-ok">稼働中</span></td></tr>
+          <tr><td>Fortinet</td><td><span class="badge badge-ok">稼働中</span></td></tr>
+          <tr><td>AlmaLinux</td><td><span class="badge badge-ok">稼働中</span></td></tr>
+          <tr><td>Zabbix</td><td><span class="badge badge-wait">準備中</span></td></tr>
+          <tr><td>MOTEX</td><td><span class="badge badge-wait">準備中</span></td></tr>
+          <tr><td>SKYSEA</td><td><span class="badge badge-wait">準備中</span></td></tr>
+        </table>
+      </div>
+      <div>
+        <div class="card c-green" style="margin-bottom:16px">
+          <div class="metric green">8 / 11</div>
+          <div class="metric-label">ソース稼働中</div>
+          <p class="mt-sm">APIベースの8ソースは30分間隔で自動巡回中。残り3ソース (社内製品) はスクレイピング基盤のデプロイで対応予定。</p>
+        </div>
+        <div class="card c-blue" style="margin-bottom:16px">
+          <div class="metric accent">3,200+</div>
+          <div class="metric-label">件の脆弱性を自動登録済み</div>
+          <p class="mt-sm">NVD・CISA KEV等からの脆弱性情報を重複排除の上、データベースに蓄積中。</p>
+        </div>
+        <div class="card c-purple">
+          <div class="metric purple">E2E検証済み</div>
+          <div class="metric-label">収集 → 照合 → 通知 → 記録</div>
+          <p class="mt-sm">パイプライン全体の動作を本番環境で確認完了。</p>
+        </div>
+      </div>
+    </div>
+  </div>
+  <div class="slide-num">9</div>
+</div>
+
+<!-- ══════════════════════════════════════ -->
+<!--  SLIDE 10: 移行計画                   -->
+<!-- ══════════════════════════════════════ -->
+<div class="slide bg-dark">
+  <div>
+    <span class="tag tag-amber">計画</span>
+    <h2>移行ロードマップ</h2>
+
+    <div class="cols mt-lg gap-lg">
+      <div class="card c-green">
+        <div class="metric-sm green">Phase 1 — 完了</div>
+        <h3 class="mt-sm">基盤構築・並行稼働</h3>
+        <ul class="clean mt-sm">
+          <li><span class="bullet bullet-green"></span>11ソースアダプター実装</li>
+          <li><span class="bullet bullet-green"></span>重複排除・SBOM照合パイプライン</li>
+          <li><span class="bullet bullet-green"></span>自動通知・履歴記録</li>
+          <li><span class="bullet bullet-green"></span>8ソースで本番稼働開始</li>
+        </ul>
+      </div>
+      <div class="card c-blue">
+        <div class="metric-sm accent">Phase 2 — 進行中</div>
+        <h3 class="mt-sm">全ソース稼働・運用安定化</h3>
+        <ul class="clean mt-sm">
+          <li><span class="bullet bullet-blue"></span>スクレイピング3ソース稼働</li>
+          <li><span class="bullet bullet-blue"></span>SIDfmと並行運用で精度検証</li>
+          <li><span class="bullet bullet-blue"></span>通知フォーマット最適化</li>
+          <li><span class="bullet bullet-blue"></span>運用チームへの引き継ぎ</li>
+        </ul>
+      </div>
+      <div class="card c-amber">
+        <div class="metric-sm amber">Phase 3</div>
+        <h3 class="mt-sm">SIDfm廃止・完全移行</h3>
+        <ul class="clean mt-sm">
+          <li><span class="bullet bullet-amber"></span>SIDfm契約終了</li>
+          <li><span class="bullet bullet-amber"></span>新基盤の単独運用開始</li>
+          <li><span class="bullet bullet-amber"></span>KPIモニタリング体制</li>
+          <li><span class="bullet bullet-amber"></span>継続的なソース追加</li>
+        </ul>
+      </div>
+    </div>
+
+    <div class="card mt-lg" style="border-color:#f59e0b">
+      <p style="font-size:15px;color:#e6edf3;text-align:center">
+        <strong class="amber">移行方針:</strong> &nbsp;
+        SIDfmと並行運用して精度を検証した上で、段階的に切り替え。既存フローへの影響はゼロ。
+      </p>
+    </div>
+  </div>
+  <div class="slide-num">10</div>
+</div>
+
+<!-- ══════════════════════════════════════ -->
+<!--  SLIDE 11: まとめ                     -->
+<!-- ══════════════════════════════════════ -->
+<div class="slide bg-gradient center">
+  <div style="max-width:720px">
+    <span class="tag tag-green">まとめ</span>
+    <h1>脆弱性管理を<br><span class="accent">「受動」から「能動」へ</span></h1>
+    <p class="lead mt-md" style="margin-left:auto;margin-right:auto">
+      メールを待つのではなく、AIが世界中の情報源を能動的に監視。<br>
+      自社に関係のある脆弱性だけを、適切な担当者に、即座に届ける。
+    </p>
+
+    <div class="cols mt-lg" style="justify-content:center;max-width:600px;margin-left:auto;margin-right:auto">
+      <div style="text-align:center">
+        <div class="metric accent">11</div>
+        <div class="metric-label">情報ソース</div>
+      </div>
+      <div style="text-align:center">
+        <div class="metric green">30分</div>
+        <div class="metric-label">巡回間隔</div>
+      </div>
+      <div style="text-align:center">
+        <div class="metric purple">24/365</div>
+        <div class="metric-label">完全自動</div>
+      </div>
+      <div style="text-align:center">
+        <div class="metric amber">0</div>
+        <div class="metric-label">手作業</div>
+      </div>
+    </div>
+  </div>
+  <div class="slide-num">11</div>
+</div>
+
+</div><!-- /deck -->
+
+<!-- ━━━━━ Navigation bar ━━━━━ -->
+<nav class="nav-bar">
+  <button id="btnPrev">&larr; 前へ</button>
+  <span class="page-info" id="pageInfo">1 / 11</span>
+  <div>
+    <button class="fs-btn" id="btnFS" title="フルスクリーン">&#x26F6;</button>
+    <button id="btnNext">次へ &rarr;</button>
+  </div>
+</nav>
+
+<!-- ━━━━━ Script ━━━━━ -->
+<script>
+  // Mermaid
+  mermaid.initialize({
+    startOnLoad: false,
+    theme: 'dark',
+    themeVariables: {
+      darkMode: true, background: '#161b22',
+      primaryColor: '#1f6feb', primaryTextColor: '#c9d1d9',
+      primaryBorderColor: '#30363d', lineColor: '#58a6ff',
+      secondaryColor: '#21262d', tertiaryColor: '#161b22', fontSize: '15px'
+    },
+    flowchart: { curve: 'basis', padding: 15, htmlLabels: true }
+  });
+
+  const slides  = document.querySelectorAll('.slide');
+  const total   = slides.length;
+  const info    = document.getElementById('pageInfo');
+  const bar     = document.getElementById('progress');
+  let current   = 0;
+  const rendered = new Set();
+
+  async function renderMermaid(el) {
+    if (rendered.has(el)) return;
+    rendered.add(el);
+    const pres = el.querySelectorAll('pre.mermaid');
+    for (const pre of pres) {
+      const id = 'mm-' + Math.random().toString(36).slice(2, 8);
+      try {
+        const { svg } = await mermaid.render(id, pre.textContent);
+        pre.innerHTML = svg;
+      } catch (_) {}
+    }
+  }
+
+  function go(idx) {
+    if (idx < 0 || idx >= total) return;
+    slides[current].classList.remove('active');
+    current = idx;
+    slides[current].classList.add('active');
+    info.textContent = (current + 1) + ' / ' + total;
+    bar.style.width = ((current + 1) / total * 100) + '%';
+    renderMermaid(slides[current]);
+  }
+
+  document.getElementById('btnPrev').onclick = () => go(current - 1);
+  document.getElementById('btnNext').onclick = () => go(current + 1);
+  document.getElementById('btnFS').onclick   = () => {
+    if (!document.fullscreenElement) document.documentElement.requestFullscreen();
+    else document.exitFullscreen();
+  };
+
+  document.addEventListener('keydown', e => {
+    if (e.key === 'ArrowRight' || e.key === ' ')      { e.preventDefault(); go(current + 1); }
+    else if (e.key === 'ArrowLeft')                    { go(current - 1); }
+    else if (e.key === 'Home')                         { go(0); }
+    else if (e.key === 'End')                          { go(total - 1); }
+    else if (e.key === 'f' || e.key === 'F')           { document.getElementById('btnFS').click(); }
+  });
+
+  // Touch swipe
+  let tx = 0;
+  document.addEventListener('touchstart', e => { tx = e.changedTouches[0].clientX; }, { passive: true });
+  document.addEventListener('touchend',   e => {
+    const dx = e.changedTouches[0].clientX - tx;
+    if (Math.abs(dx) > 50) dx > 0 ? go(current - 1) : go(current + 1);
+  }, { passive: true });
+
+  // Init
+  renderMermaid(slides[0]);
+</script>
+</body>
+</html>

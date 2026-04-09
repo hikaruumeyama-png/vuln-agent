@@ -1,0 +1,797 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<title>vuln-agent アーキテクチャフロー図</title>
+<script src="https://cdn.jsdelivr.net/npm/mermaid@11/dist/mermaid.min.js"></script>
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body { font-family: 'Segoe UI', 'Meiryo', sans-serif; background: #0d1117; color: #c9d1d9; }
+
+  /* ── Header ── */
+  header { padding: 24px 32px 0; }
+  header h1 { color: #58a6ff; font-size: 22px; }
+  header p  { color: #8b949e; font-size: 14px; margin-top: 4px; }
+
+  /* ── Tab bar ── */
+  .tab-bar {
+    display: flex; gap: 0; padding: 16px 32px 0;
+    border-bottom: 1px solid #21262d;
+    overflow-x: auto; white-space: nowrap;
+    -webkit-overflow-scrolling: touch;
+  }
+  .tab-bar button {
+    background: none; border: none; color: #8b949e;
+    font-size: 13px; padding: 10px 18px; cursor: pointer;
+    border-bottom: 2px solid transparent;
+    transition: color .15s, border-color .15s;
+    flex-shrink: 0;
+  }
+  .tab-bar button:hover { color: #c9d1d9; }
+  .tab-bar button.active {
+    color: #58a6ff; border-bottom-color: #58a6ff; font-weight: 600;
+  }
+
+  /* ── Tab content ── */
+  .tab-panels { padding: 24px 32px 48px; }
+  .tab-panel  { display: none; }
+  .tab-panel.active { display: block; animation: fadeIn .25s ease; }
+  @keyframes fadeIn { from { opacity: 0; transform: translateY(6px); } to { opacity: 1; transform: none; } }
+
+  /* ── Reusable ── */
+  h2 { color: #79c0ff; font-size: 18px; margin-bottom: 6px; }
+  .subtitle { color: #8b949e; font-size: 13px; margin-bottom: 16px; line-height: 1.5; }
+  .diagram-box {
+    background: #161b22; border: 1px solid #30363d;
+    border-radius: 8px; padding: 20px; margin: 16px 0; overflow-x: auto;
+  }
+  .note {
+    background: #1c2128; border-left: 3px solid #58a6ff;
+    padding: 12px 16px; margin: 14px 0; font-size: 13px;
+    border-radius: 4px; line-height: 1.6;
+  }
+  .note strong { color: #79c0ff; }
+  table { border-collapse: collapse; width: 100%; margin: 12px 0; }
+  th, td { border: 1px solid #30363d; padding: 8px 12px; text-align: left; font-size: 13px; }
+  th { background: #21262d; color: #79c0ff; }
+  tr:nth-child(even) { background: #161b22; }
+  .badge {
+    display: inline-block; font-size: 11px; padding: 2px 8px;
+    border-radius: 10px; font-weight: 600;
+  }
+  .badge-ok   { background: #1a3a2a; color: #3fb950; }
+  .badge-wait { background: #3d2e00; color: #d29922; }
+  .badge-na   { background: #21262d; color: #8b949e; }
+
+  /* ── Executive summary cards ── */
+  .exec-grid {
+    display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+    gap: 16px; margin: 20px 0;
+  }
+  .exec-card {
+    background: #161b22; border: 1px solid #30363d; border-radius: 10px;
+    padding: 20px 22px; position: relative; overflow: hidden;
+  }
+  .exec-card::before {
+    content: ''; position: absolute; top: 0; left: 0; right: 0; height: 3px;
+  }
+  .exec-card.blue::before   { background: #3b82f6; }
+  .exec-card.green::before  { background: #10b981; }
+  .exec-card.purple::before { background: #a855f7; }
+  .exec-card.amber::before  { background: #f59e0b; }
+  .exec-card .icon { font-size: 28px; margin-bottom: 8px; }
+  .exec-card h3 { color: #e6edf3; font-size: 15px; margin-bottom: 6px; }
+  .exec-card p  { color: #8b949e; font-size: 13px; line-height: 1.6; }
+  .exec-card .metric { color: #58a6ff; font-size: 22px; font-weight: 700; margin: 6px 0 2px; }
+  .exec-card .metric-label { color: #8b949e; font-size: 12px; }
+
+  .compare-table { margin: 20px 0; }
+  .compare-table td:first-child { font-weight: 600; color: #79c0ff; white-space: nowrap; }
+  .compare-table .before { color: #f87171; }
+  .compare-table .after  { color: #34d399; }
+</style>
+</head>
+<body>
+
+<header>
+  <h1>vuln-agent Architecture Flow</h1>
+  <p>SIDfm代替 脆弱性インテリジェンス基盤 &mdash; 11ソース自動収集 / AI分析 / SBOM照合 / Chat通知</p>
+</header>
+
+<!-- ━━━━━━━━━━ Tab bar ━━━━━━━━━━ -->
+<nav class="tab-bar" id="tabBar">
+  <button class="active" data-tab="executive">概要</button>
+  <button data-tab="overview">全体図</button>
+  <button data-tab="auto-pipeline">自動検知パイプライン</button>
+  <button data-tab="chat-trigger">Chat通知 → AI分析</button>
+  <button data-tab="agent-dialog">エージェント対話</button>
+  <button data-tab="sbom-match">SBOM照合ロジック</button>
+  <button data-tab="deploy">デプロイ構成</button>
+  <button data-tab="sources">ソース一覧</button>
+</nav>
+
+<!-- ━━━━━━━━━━ Panels ━━━━━━━━━━ -->
+<div class="tab-panels">
+
+<!-- ────────────────────────────────────── -->
+<!--  0. 概要（管理職向け）                -->
+<!-- ────────────────────────────────────── -->
+<section class="tab-panel active" id="panel-executive">
+<h2>脆弱性管理の自動化 — なにが変わるのか</h2>
+<p class="subtitle">有償サービス (SIDfm) への依存を解消し、AIが脆弱性情報を自動で収集・判断・通知する仕組みに置き換えます。</p>
+
+<!-- KPI カード -->
+<div class="exec-grid">
+  <div class="exec-card blue">
+    <div class="icon">&#x1F4E1;</div>
+    <h3>情報ソース</h3>
+    <div class="metric">11種</div>
+    <div class="metric-label">NIST / CISA / JVN / Cisco / Microsoft 他</div>
+    <p>SIDfm (1社) に頼っていた情報源を、世界の公的DB + ベンダー公式APIに拡大。見逃しリスクを大幅に低減。</p>
+  </div>
+  <div class="exec-card green">
+    <div class="icon">&#x1F916;</div>
+    <h3>AI自動判断</h3>
+    <div class="metric">24時間365日</div>
+    <div class="metric-label">人手ゼロで収集・照合・通知</div>
+    <p>30分ごとに自動巡回。自社SBOMと照合し、関係のある脆弱性だけを担当者に通知。ノイズを排除。</p>
+  </div>
+  <div class="exec-card purple">
+    <div class="icon">&#x1F4AC;</div>
+    <h3>Google Chat統合</h3>
+    <div class="metric">既存運用を踏襲</div>
+    <div class="metric-label">Chatで受け取り → Chatで分析依頼</div>
+    <p>通知も分析もGoogle Chat上で完結。@メンションするだけでAIが影響度・対応期限・担当者を即回答。</p>
+  </div>
+  <div class="exec-card amber">
+    <div class="icon">&#x1F4B0;</div>
+    <h3>コスト効果</h3>
+    <div class="metric">SIDfm廃止</div>
+    <div class="metric-label">年間ライセンス費用を削減</div>
+    <p>公開情報 + Google Cloudのサーバーレス基盤で運用。従量課金のため、固定費から変動費に転換。</p>
+  </div>
+</div>
+
+<!-- Before / After -->
+<h2 style="margin-top:32px;">Before / After 比較</h2>
+<div class="diagram-box">
+<pre class="mermaid">
+flowchart LR
+  subgraph BEFORE["Before: SIDfm依存"]
+    direction TB
+    B1["SIDfm\n(有償サービス)"] -->|メール| B2["担当者が\nメールを確認"]
+    B2 --> B3["手動で\nSBOM照合"]
+    B3 --> B4["手動で\n担当者に連絡"]
+    B4 --> B5["対応完了を\n手動で記録"]
+  end
+
+  subgraph AFTER["After: AI自動化"]
+    direction TB
+    A1["11の公的DB\n+ ベンダーAPI"] -->|"30分自動巡回"| A2["AIが自動で\nSBOM照合"]
+    A2 -->|"該当あり"| A3["Chatに\n自動通知"]
+    A2 -->|"該当なし"| A2X["ノイズ排除\n(通知しない)"]
+    A3 --> A4["AIが分析\n期限・担当も提示"]
+    A4 --> A5["履歴を\n自動記録"]
+  end
+
+  BEFORE ~~~~ AFTER
+
+  style BEFORE fill:#1a1a2e,stroke:#f87171,color:#fca5a5
+  style AFTER fill:#1a2e1a,stroke:#34d399,color:#6ee7b7
+</pre>
+</div>
+
+<table class="compare-table">
+  <tr>
+    <th style="width:160px">項目</th>
+    <th>Before (SIDfm)</th>
+    <th>After (本システム)</th>
+  </tr>
+  <tr>
+    <td>情報源</td>
+    <td class="before">SIDfm 1社のみ</td>
+    <td class="after">NVD / CISA / JVN / Cisco / Microsoft 他 11ソース</td>
+  </tr>
+  <tr>
+    <td>収集方法</td>
+    <td class="before">メール受信 → 人が確認</td>
+    <td class="after">30分ごとに自動巡回</td>
+  </tr>
+  <tr>
+    <td>影響判断</td>
+    <td class="before">手動でSBOMと突合</td>
+    <td class="after">AIが自動でSBOM照合・該当判定</td>
+  </tr>
+  <tr>
+    <td>担当者通知</td>
+    <td class="before">手動で連絡先を調べて連絡</td>
+    <td class="after">SBOM登録情報から自動で担当者特定・Chat通知</td>
+  </tr>
+  <tr>
+    <td>ノイズ</td>
+    <td class="before">自社に無関係な通知も全て受信</td>
+    <td class="after">SBOM非該当は通知せず、ログのみ</td>
+  </tr>
+  <tr>
+    <td>深掘り分析</td>
+    <td class="before">自分でNVDやベンダーサイトを調査</td>
+    <td class="after">Chatで@メンションするだけでAIが即分析</td>
+  </tr>
+  <tr>
+    <td>対応履歴</td>
+    <td class="before">Excel / メールに手動記録</td>
+    <td class="after">全件自動でデータベース記録</td>
+  </tr>
+  <tr>
+    <td>費用</td>
+    <td class="before">年間ライセンス固定費</td>
+    <td class="after">Google Cloud従量課金 (サーバーレス)</td>
+  </tr>
+</table>
+
+<!-- シンプルフロー図 -->
+<h2 style="margin-top:32px;">システムの動き（概要）</h2>
+<p class="subtitle">技術的な詳細を省いた、業務目線でのシステム動作フロー。</p>
+<div class="diagram-box">
+<pre class="mermaid">
+flowchart TB
+  A["世界中の脆弱性情報\n(NVD / CISA / ベンダー等)"]
+
+  A -->|"30分ごとに\n自動収集"| B["AIが自動で判定"]
+
+  B --> C{"自社に\n関係ある？"}
+
+  C -->|"関係あり"| D["担当者を特定"]
+  C -->|"関係なし"| E["記録だけして\n何もしない"]
+
+  D --> F["Google Chatで\n担当者に通知"]
+  F --> G["通知内容"]
+  G --> G1["何の脆弱性か"]
+  G --> G2["どのシステムに影響か"]
+  G --> G3["いつまでに対応すべきか"]
+  G --> G4["どう対処すべきか"]
+
+  F --> H["対応状況を\n自動で記録"]
+
+  I["担当者が追加で\n質問したいとき"] -->|"Chatで\n@メンション"| J["AIが詳しく\n分析して回答"]
+
+  style A fill:#1e3a5f,stroke:#3b82f6,color:#bfdbfe
+  style B fill:#2d1f3d,stroke:#a855f7,color:#d8b4fe
+  style C fill:#7f1d1d,stroke:#ef4444,color:#fecaca
+  style F fill:#065f46,stroke:#10b981,color:#d1fae5
+  style E fill:#1f2937,stroke:#6b7280,color:#d1d5db
+  style J fill:#2d1f3d,stroke:#a855f7,color:#d8b4fe
+</pre>
+</div>
+
+<div class="note">
+  <strong>ポイント:</strong> 人がやることは「Chatに届いた通知を見る」と「必要に応じて@メンションで質問する」だけ。<br>
+  情報収集・影響判断・担当者特定・通知・履歴記録はすべてAIが自動で行います。
+</div>
+</section>
+
+<!-- ────────────────────────────────────── -->
+<!--  1. 全体図                            -->
+<!-- ────────────────────────────────────── -->
+<section class="tab-panel" id="panel-overview">
+<h2>システム全体図</h2>
+<p class="subtitle">左: 外部ソースからの自動収集パイプライン / 右: Chat・Web経由のAI対話。Google Chatが通知先かつ分析トリガー源として中心にある。</p>
+
+<div class="diagram-box">
+<pre class="mermaid">
+graph TB
+  subgraph External["外部脆弱性ソース (11種)"]
+    direction LR
+    S1["CISA KEV"] ~~~ S2["NVD"] ~~~ S3["JVN"] ~~~ S4["OSV"]
+    S5["Cisco"] ~~~ S6["MSRC"] ~~~ S7["Fortinet"] ~~~ S8["AlmaLinux"]
+    S9["Zabbix"] ~~~ S10["MOTEX"] ~~~ S11["SKYSEA"]
+  end
+
+  subgraph Scheduler["Cloud Scheduler (11ジョブ)"]
+    CS1["API 30分間隔"]
+    CS2["Scraping 6時間間隔"]
+  end
+
+  subgraph Poller["vuln-feed-poller"]
+    PA["アダプター"] --> PF["fetch_recent()"] --> PN["VulnEntry正規化"]
+  end
+
+  DD["重複排除\nBigQuery vuln_dedup"]
+  PS["Pub/Sub"]
+
+  subgraph Intake["vuln-intake-worker"]
+    IM["SBOM照合"] -->|該当| IN["Chat通知"]
+    IM -->|非該当| IH["ログのみ"]
+  end
+
+  subgraph Agent["Vertex AI Agent Engine"]
+    AG["Gemini 2.5 Flash/Pro\n+ 30 ツール"]
+  end
+
+  GC["Google Chat\nスペース"]
+  SIDFM["SIDfm / ベンダー\nメール通知"]
+
+  subgraph UI["ユーザーインターフェース"]
+    WEB["Web UI\n(テキスト+音声)"]
+    CW["Chat Webhook"]
+    WE["Workspace Events"]
+  end
+
+  subgraph Data["BigQuery"]
+    BQ1["sbom_packages"]
+    BQ2["owner_mapping"]
+    BQ3["履歴"]
+  end
+
+  External --> Scheduler
+  CS1 --> PA
+  CS2 --> PA
+  PN --> DD
+  DD -->|NEW| PS
+  PS --> IM
+  IN --> GC
+  IN --> BQ3
+  IH --> BQ3
+  IM -.-> BQ1
+  IM -.-> BQ2
+
+  SIDFM -->|"Gmail連携 / 手動貼付"| GC
+  GC -->|"@メンション"| CW
+  GC -->|"リアクション / Gmail"| WE
+
+  WEB --> AG
+  CW --> AG
+  WE --> AG
+  AG -.-> BQ1
+  AG -.-> BQ2
+  AG -.-> BQ3
+  AG -->|"分析結果 / 通知"| GC
+
+  style External fill:#1f2937,stroke:#6366f1,color:#c7d2fe
+  style Poller fill:#1a2332,stroke:#3b82f6,color:#93c5fd
+  style Intake fill:#1a2332,stroke:#10b981,color:#6ee7b7
+  style Agent fill:#2d1f3d,stroke:#a855f7,color:#d8b4fe
+  style UI fill:#1f2937,stroke:#f59e0b,color:#fcd34d
+  style Data fill:#1a2820,stroke:#22c55e,color:#86efac
+  style Scheduler fill:#1f2937,stroke:#6366f1,color:#c7d2fe
+</pre>
+</div>
+</section>
+
+<!-- ────────────────────────────────────── -->
+<!--  2. 自動検知パイプライン              -->
+<!-- ────────────────────────────────────── -->
+<section class="tab-panel" id="panel-auto-pipeline">
+<h2>自動脆弱性検知パイプライン</h2>
+<p class="subtitle">Cloud Schedulerが定期的にPollerを起動。各ソースから差分取得 → 重複排除 → Pub/Sub → Intake → SBOM照合 → Chat通知。人手不要の完全自動。</p>
+
+<div class="diagram-box">
+<pre class="mermaid">
+flowchart LR
+  A["Cloud Scheduler\n(30分 / 6時間)"] -->|"HTTP POST\n{source_id}"| B
+
+  subgraph B["vuln-feed-poller (Cloud Functions)"]
+    B1["アダプター選択\n(11種)"] --> B2["fetch_recent(since)"]
+    B2 --> B3["VulnEntry正規化"]
+  end
+
+  B3 --> C{"重複チェック\nvuln_dedup"}
+  C -->|"NEW (初出)"| D["Pub/Sub\npublish"]
+  C -->|"SKIP (既知)"| E["sources_seen\n更新のみ"]
+
+  D --> F
+
+  subgraph F["vuln-intake-worker (Cloud Functions)"]
+    F1["VulnEntry\nデコード"] --> F2["SBOM照合\n(PURL / 製品名)"]
+    F2 -->|該当あり| F3["担当者特定\n→ Chat通知"]
+    F2 -->|該当なし| F4["ログのみ\n(通知しない)"]
+  end
+
+  F3 --> G["Google Chat\nカード通知"]
+  F3 --> H["BigQuery\n履歴記録"]
+  F4 --> H
+
+  style A fill:#4c1d95,stroke:#8b5cf6,color:#e0e7ff
+  style C fill:#7f1d1d,stroke:#ef4444,color:#fecaca
+  style G fill:#065f46,stroke:#10b981,color:#d1fae5
+  style D fill:#1e3a5f,stroke:#3b82f6,color:#bfdbfe
+</pre>
+</div>
+
+<div class="note">
+  <strong>重複排除:</strong> 複数ソースが同じCVEを報告しても初回のみ通知。2回目以降は sources_seen に追記して追跡のみ。<br>
+  <strong>SBOM非該当:</strong> 自社に無関係な脆弱性は通知せずログ記録のみ。ノイズを排除。
+</div>
+</section>
+
+<!-- ────────────────────────────────────── -->
+<!--  3. Chat通知 → AI分析                 -->
+<!-- ────────────────────────────────────── -->
+<section class="tab-panel" id="panel-chat-trigger">
+<h2>Chat通知起点のAI分析フロー</h2>
+<p class="subtitle">Google Chatに届いた脆弱性通知に対して、ユーザーの@メンションやリアクションをトリガーにAIが自動分析。既存のSIDfm運用パターンを踏襲。</p>
+
+<div class="diagram-box">
+<pre class="mermaid">
+flowchart TB
+  subgraph Source["通知の発生源"]
+    SRC1["SIDfmメール\n→ Gmail連携\n→ Chatに自動転送"]
+    SRC2["ベンダー通知を\nユーザーが\nChatに手動貼付"]
+    SRC3["新パイプライン\nvuln-intake-worker\nが自動投稿"]
+  end
+
+  GC["Google Chat スペース\n(脆弱性通知が届く)"]
+
+  SRC1 --> GC
+  SRC2 --> GC
+  SRC3 --> GC
+
+  GC --> TR1["@VulnAgent\nメンション"]
+  GC --> TR2["？リアクション\n付与"]
+  GC --> TR3["Gmail連携\nカードメッセージ\n(自動検知)"]
+
+  TR1 -->|"HTTP POST"| CW["Chat Webhook\nchat_webhook/main.py"]
+  TR2 -->|"Workspace Events API"| WE["Workspace Events Webhook\nworkspace_events_webhook/main.py"]
+  TR3 -->|"Workspace Events API"| WE
+
+  CW --> AG
+
+  subgraph AG["Agent Engine 分析 (対話型)"]
+    direction TB
+    AG1["CVE / CVSS / 製品名 抽出"]
+    AG2["NVD API照会 (CVSS検証)"]
+    AG3["SBOM照合 (該当確認)"]
+    AG4["履歴照会 (過去対応)"]
+    AG5["担当者特定"]
+    AG6["深刻度・期限判定"]
+  end
+
+  WE --> TP
+
+  subgraph TP["起票パイプライン (自動定型)"]
+    direction TB
+    TP1["ソース事実抽出"]
+    TP2["SBOM登録確認"]
+    TP3["悪用状況分析"]
+    TP4["組織ルール適用"]
+    TP5["起票テキスト生成"]
+  end
+
+  AG --> R1["同一スレッドに返信\n結論 / 根拠 / 推奨アクション"]
+  TP --> R2["同一スレッドに返信\n起票コピペ文 / 対応要否"]
+
+  R1 -->|該当時| NOTIFY["担当者Chatスペースに\nカード通知送信"]
+  R2 -->|該当時| NOTIFY
+
+  style Source fill:#1f2937,stroke:#f59e0b,color:#fcd34d
+  style AG fill:#2d1f3d,stroke:#a855f7,color:#d8b4fe
+  style TP fill:#2d1f3d,stroke:#a855f7,color:#d8b4fe
+  style GC fill:#065f46,stroke:#10b981,color:#d1fae5
+  style NOTIFY fill:#065f46,stroke:#10b981,color:#d1fae5
+  style CW fill:#1a2332,stroke:#3b82f6,color:#93c5fd
+  style WE fill:#1a2332,stroke:#3b82f6,color:#93c5fd
+</pre>
+</div>
+
+<div class="note">
+  <strong>2つの経路:</strong><br>
+  &bull; <strong>Chat Webhook (@メンション)</strong> &rarr; Agent Engine がリアルタイムで対話的に分析。追加質問にも対応可能。<br>
+  &bull; <strong>Workspace Events (リアクション / Gmail)</strong> &rarr; 起票パイプラインが定型フォーマットで自動分析。PCチーム向けコピペ用テキストを生成。
+</div>
+</section>
+
+<!-- ────────────────────────────────────── -->
+<!--  4. エージェント対話                   -->
+<!-- ────────────────────────────────────── -->
+<section class="tab-panel" id="panel-agent-dialog">
+<h2>AIエージェント対話フロー</h2>
+<p class="subtitle">3つの経路 (Web UI / Chat / Workspace Events) から入ったリクエストをモデルルーティングし、30+ツールで分析して構造化レスポンスを返す。</p>
+
+<div class="diagram-box">
+<pre class="mermaid">
+flowchart TB
+  subgraph Trigger["トリガー (3経路)"]
+    T1["Web UI\n(テキスト / 音声)"]
+    T2["Google Chat\n@メンション"]
+    T3["Workspace Events\n(リアクション / Gmail)"]
+  end
+
+  T1 -->|WebSocket| LG["Live Gateway\n(FastAPI + Gemini Live)"]
+  T2 -->|HTTP| CW["Chat Webhook"]
+  T3 -->|HTTP| WE["Workspace Events"]
+
+  LG --> MR
+  CW --> MR
+  WE --> MR
+
+  MR{"モデル\nルーティング"}
+  MR -->|"シンプル\n(&lt;180文字)"| FLASH["Gemini 2.5 Flash"]
+  MR -->|"複雑な分析"| PRO["Gemini 2.5 Pro"]
+
+  FLASH --> AE
+  PRO --> AE
+
+  subgraph AE["Agent Engine (ツール実行)"]
+    direction LR
+    subgraph SBOM_T["SBOM"]
+      T_S1["PURL検索"]
+      T_S2["製品名検索"]
+      T_S3["担当者特定"]
+    end
+    subgraph INTEL["外部情報"]
+      T_I1["NVD API"]
+      T_I2["OSV API"]
+      T_I3["Web検索"]
+    end
+    subgraph ACTION["アクション"]
+      T_A1["Chat通知"]
+      T_A2["履歴記録/照会"]
+      T_A3["A2A連携"]
+      T_A4["BQクエリ"]
+    end
+  end
+
+  AE --> OUT
+
+  subgraph OUT["構造化レスポンス (4セクション)"]
+    R1["結論"]
+    R2["根拠 (使用ツール)"]
+    R3["不確実性"]
+    R4["次アクション"]
+  end
+
+  style Trigger fill:#1f2937,stroke:#f59e0b,color:#fcd34d
+  style AE fill:#2d1f3d,stroke:#a855f7,color:#d8b4fe
+  style MR fill:#7f1d1d,stroke:#ef4444,color:#fecaca
+  style OUT fill:#1a2820,stroke:#22c55e,color:#86efac
+</pre>
+</div>
+</section>
+
+<!-- ────────────────────────────────────── -->
+<!--  5. SBOM照合ロジック                  -->
+<!-- ────────────────────────────────────── -->
+<section class="tab-panel" id="panel-sbom-match">
+<h2>SBOM照合 → 通知判定フロー</h2>
+<p class="subtitle">脆弱性の affected_products を SBOM と突合。PURL → 製品名 → ベンダー名の順で照合し、該当があれば担当者を特定して通知カードを送信。</p>
+
+<div class="diagram-box">
+<pre class="mermaid">
+flowchart TB
+  V["新規脆弱性\n(VulnEntry)"] --> P1{"PURLあり?"}
+
+  P1 -->|Yes| S1["search_sbom_by_purl()"]
+  P1 -->|No| P2{"製品名あり?"}
+
+  P2 -->|Yes| S2["search_sbom_by_product()"]
+  P2 -->|No| P3{"ベンダー名あり?"}
+
+  P3 -->|Yes| S3["search_sbom_by_product(vendor)"]
+  P3 -->|No| NONE["該当なし"]
+
+  S1 --> MERGE["結果マージ\n(重複除去)"]
+  S2 --> MERGE
+  S3 --> MERGE
+
+  MERGE --> CHK{"マッチあり?"}
+
+  CHK -->|Yes| OWNER["担当者特定\n(owner_mapping\nパターンマッチ)"]
+  CHK -->|No| NONE
+
+  OWNER --> NOTIFY["Chat通知カード"]
+
+  NOTIFY --> C1["CVE-ID + タイトル"]
+  NOTIFY --> C2["深刻度 + CVSS"]
+  NOTIFY --> C3["影響システム一覧"]
+  NOTIFY --> C4["対応期限\n(内部 / 公開リソース別)"]
+  NOTIFY --> C5["修正バージョン"]
+  NOTIFY --> C6["CVEリンク\nベンダーアドバイザリ"]
+
+  NONE --> LOG["ログのみ記録\n(通知しない)"]
+
+  style V fill:#4c1d95,stroke:#8b5cf6,color:#e0e7ff
+  style NOTIFY fill:#065f46,stroke:#10b981,color:#d1fae5
+  style NONE fill:#1f2937,stroke:#6b7280,color:#d1d5db
+  style CHK fill:#7f1d1d,stroke:#ef4444,color:#fecaca
+</pre>
+</div>
+
+<div class="note">
+  <strong>照合優先順位:</strong> PURL (パッケージURL) が最も正確。次に製品名+バージョン範囲。最後にベンダー名 (製品名がない場合のフォールバック)。<br>
+  <strong>担当者特定:</strong> owner_mapping テーブルで glob パターンマッチ。最も具体的なパターンを優先 (完全一致 > ワイルドカード)。
+</div>
+</section>
+
+<!-- ────────────────────────────────────── -->
+<!--  6. デプロイ構成                       -->
+<!-- ────────────────────────────────────── -->
+<section class="tab-panel" id="panel-deploy">
+<h2>GCPデプロイ構成</h2>
+<p class="subtitle">Cloud Functions Gen2 / Cloud Run / Vertex AI Agent Engine / BigQuery / Pub/Sub / Cloud Scheduler を組み合わせたサーバーレス構成。</p>
+
+<div class="diagram-box">
+<pre class="mermaid">
+graph TB
+  subgraph CF["Cloud Functions Gen2"]
+    CF1["vuln-feed-poller\n(HTTP)"]
+    CF2["vuln-intake-worker\n(Pub/Sub)"]
+    CF3["chat-webhook\n(HTTP)"]
+    CF4["workspace-events\n(HTTP)"]
+  end
+
+  subgraph CR["Cloud Run"]
+    CR1["live-gateway\n(WebSocket + 音声)"]
+    CR2["vuln-scraper\n(Playwright + Gemini)"]
+  end
+
+  subgraph AI["AI / ML"]
+    AI1["Vertex AI\nAgent Engine"]
+    AI2["Gemini 2.5\nFlash / Pro"]
+    AI3["Gemini Live API\n(音声対話)"]
+  end
+
+  subgraph Store["データストア"]
+    BQ["BigQuery (5テーブル)\nsbom_packages\nowner_mapping\nincident_response_history\nvuln_dedup\nvuln_poll_state"]
+    SM["Secret Manager\n(15+ シークレット)"]
+    GCS["Cloud Storage\n(Web UI)"]
+  end
+
+  subgraph Msg["メッセージング / スケジュール"]
+    SCHED["Cloud Scheduler\n(11ジョブ)"]
+    PUBSUB["Pub/Sub\n(1トピック)"]
+    GCHAT["Google Chat API"]
+  end
+
+  SCHED --> CF1
+  CF1 --> PUBSUB
+  PUBSUB --> CF2
+  CF2 --> GCHAT
+  CF3 --> AI1
+  CF4 --> AI1
+  CR1 --> AI3
+  CR1 --> AI1
+  AI1 --> AI2
+  AI1 --> BQ
+  CF1 --> BQ
+  CF2 --> BQ
+  AI1 --> GCHAT
+
+  style CF fill:#1a2332,stroke:#3b82f6,color:#93c5fd
+  style CR fill:#1a2332,stroke:#06b6d4,color:#a5f3fc
+  style AI fill:#2d1f3d,stroke:#a855f7,color:#d8b4fe
+  style Store fill:#1a2820,stroke:#22c55e,color:#86efac
+  style Msg fill:#1f2937,stroke:#f59e0b,color:#fcd34d
+</pre>
+</div>
+</section>
+
+<!-- ────────────────────────────────────── -->
+<!--  7. ソース一覧                        -->
+<!-- ────────────────────────────────────── -->
+<section class="tab-panel" id="panel-sources">
+<h2>脆弱性ソース一覧 (11種)</h2>
+<p class="subtitle">4公開DB + 4ベンダーAPI + 3スクレイピング。APIソースは30分、スクレイピングは6時間間隔でポーリング。</p>
+
+<table>
+  <tr>
+    <th>ソース</th><th>種別</th><th>間隔</th>
+    <th>APIキー</th><th>データ形式</th><th>状態</th>
+  </tr>
+  <tr>
+    <td>CISA KEV</td><td>公開DB</td><td>30分</td>
+    <td>不要</td><td>JSON カタログ</td>
+    <td><span class="badge badge-ok">稼働中</span></td>
+  </tr>
+  <tr>
+    <td>NVD</td><td>公開DB</td><td>30分</td>
+    <td>登録済み</td><td>REST API v2.0</td>
+    <td><span class="badge badge-ok">稼働中</span></td>
+  </tr>
+  <tr>
+    <td>JVN</td><td>公開DB</td><td>30分</td>
+    <td>不要</td><td>RSS / Atom</td>
+    <td><span class="badge badge-ok">稼働中</span></td>
+  </tr>
+  <tr>
+    <td>OSV</td><td>公開DB</td><td>30分</td>
+    <td>不要</td><td>REST API</td>
+    <td><span class="badge badge-ok">稼働中</span></td>
+  </tr>
+  <tr>
+    <td>Cisco CSAF</td><td>ベンダーAPI</td><td>30分</td>
+    <td>登録済み</td><td>OAuth2 + CSAF</td>
+    <td><span class="badge badge-ok">稼働中</span></td>
+  </tr>
+  <tr>
+    <td>MSRC</td><td>ベンダーAPI</td><td>30分</td>
+    <td>不要 (任意)</td><td>CVRF XML</td>
+    <td><span class="badge badge-ok">稼働中</span></td>
+  </tr>
+  <tr>
+    <td>Fortinet</td><td>ベンダーAPI</td><td>30分</td>
+    <td>不要</td><td>RSS フィード</td>
+    <td><span class="badge badge-ok">稼働中</span></td>
+  </tr>
+  <tr>
+    <td>AlmaLinux</td><td>ベンダーAPI</td><td>30分</td>
+    <td>不要</td><td>Errata JSON</td>
+    <td><span class="badge badge-ok">稼働中</span></td>
+  </tr>
+  <tr>
+    <td>Zabbix</td><td>スクレイピング</td><td>6時間</td>
+    <td>-</td><td>Playwright + Gemini</td>
+    <td><span class="badge badge-wait">Scraper未デプロイ</span></td>
+  </tr>
+  <tr>
+    <td>MOTEX</td><td>スクレイピング</td><td>6時間</td>
+    <td>-</td><td>Playwright + Gemini</td>
+    <td><span class="badge badge-wait">Scraper未デプロイ</span></td>
+  </tr>
+  <tr>
+    <td>SKYSEA</td><td>スクレイピング</td><td>6時間</td>
+    <td>-</td><td>Playwright + Gemini</td>
+    <td><span class="badge badge-wait">Scraper未デプロイ</span></td>
+  </tr>
+</table>
+
+<div class="note">
+  <strong>スクレイピング3ソース</strong>は vuln-scraper (Cloud Run) のデプロイが必要。Playwright で対象ページを取得し、Gemini Flash で脆弱性情報を構造化抽出する。
+</div>
+</section>
+
+</div><!-- /tab-panels -->
+
+<!-- ━━━━━━━━━━ Scripts ━━━━━━━━━━ -->
+<script>
+  // Mermaid
+  mermaid.initialize({
+    startOnLoad: false,
+    theme: 'dark',
+    themeVariables: {
+      darkMode: true,
+      background: '#161b22',
+      primaryColor: '#1f6feb',
+      primaryTextColor: '#c9d1d9',
+      primaryBorderColor: '#30363d',
+      lineColor: '#58a6ff',
+      secondaryColor: '#21262d',
+      tertiaryColor: '#161b22',
+      fontSize: '14px'
+    },
+    flowchart: { curve: 'basis', padding: 15, htmlLabels: true }
+  });
+
+  // Tab switching
+  const bar    = document.getElementById('tabBar');
+  const buttons = bar.querySelectorAll('button');
+  const panels  = document.querySelectorAll('.tab-panel');
+
+  // Render mermaid for the active panel
+  async function renderPanel(panel) {
+    const pres = panel.querySelectorAll('pre.mermaid:not([data-processed])');
+    for (const pre of pres) {
+      const id = 'mermaid-' + Math.random().toString(36).slice(2, 9);
+      const { svg } = await mermaid.render(id, pre.textContent);
+      pre.innerHTML = svg;
+      pre.setAttribute('data-processed', 'true');
+    }
+  }
+
+  function activateTab(tabName) {
+    buttons.forEach(b => b.classList.toggle('active', b.dataset.tab === tabName));
+    panels.forEach(p => {
+      const isTarget = p.id === 'panel-' + tabName;
+      p.classList.toggle('active', isTarget);
+      if (isTarget) renderPanel(p);
+    });
+  }
+
+  bar.addEventListener('click', e => {
+    if (e.target.tagName === 'BUTTON') activateTab(e.target.dataset.tab);
+  });
+
+  // Initial render
+  renderPanel(document.querySelector('.tab-panel.active'));
+</script>
+</body>
+</html>

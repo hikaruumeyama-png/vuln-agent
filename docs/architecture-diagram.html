@@ -1,0 +1,854 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Vuln-Agent Architecture Diagram</title>
+<script src="https://unpkg.com/react@18/umd/react.production.min.js" crossorigin></script>
+<script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js" crossorigin></script>
+<script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+<style>
+  :root {
+    --bg: #ffffff; --surface: #f7f8fa; --border: #e0e3ea;
+    --text: #1a1d27; --text-dim: #5f6577; --text-light: #8b8fa3;
+    --gcp-blue: #4285f4; --gcp-bg: #e8f0fe; --gcp-border: #c5d8f8;
+    --external: #d93025; --trigger: #e8710a; --core: #1a73e8;
+    --tools: #7b1fa2; --data: #0d652d; --output: #007b83; --infra: #b06000;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body {
+    font-family: 'Segoe UI','Inter',-apple-system,BlinkMacSystemFont,sans-serif;
+    background: #eef0f4; color: var(--text); min-height: 100vh;
+    display: flex; justify-content: center; align-items: flex-start;
+    padding: 24px;
+  }
+
+  /* Tab bar */
+  .tab-bar {
+    display: flex; gap: 2px; background: #e0e3ea; border-radius: 10px 10px 0 0;
+    padding: 4px 4px 0; overflow-x: auto;
+  }
+  .tab-btn {
+    padding: 8px 16px; border: none; background: transparent; cursor: pointer;
+    font-size: 13px; font-weight: 500; color: var(--text-dim);
+    border-radius: 8px 8px 0 0; transition: all .2s; white-space: nowrap;
+    position: relative;
+  }
+  .tab-btn:hover { background: rgba(255,255,255,.6); }
+  .tab-btn.active {
+    background: #fff; color: var(--text); font-weight: 600;
+    box-shadow: 0 -2px 6px rgba(0,0,0,.06);
+  }
+  .tab-btn.active::after {
+    content: ''; position: absolute; bottom: 0; left: 12px; right: 12px;
+    height: 3px; border-radius: 3px 3px 0 0;
+  }
+
+  /* Slide container */
+  .slide-wrap {
+    width: 1280px; max-width: 100%;
+    background: #fff; border-radius: 0 0 12px 12px;
+    box-shadow: 0 4px 24px rgba(0,0,0,.08);
+    overflow: hidden;
+  }
+  .slide-area {
+    width: 1280px; max-width: 100%; aspect-ratio: 16/9;
+    position: relative; overflow: hidden; padding: 36px 48px;
+    display: flex; flex-direction: column;
+  }
+  .slide-title {
+    font-size: 26px; font-weight: 700; margin-bottom: 4px;
+  }
+  .slide-subtitle {
+    font-size: 14px; color: var(--text-dim); margin-bottom: 20px;
+  }
+
+  /* Nav buttons */
+  .nav-bar {
+    display: flex; justify-content: space-between; align-items: center;
+    padding: 12px 20px; background: var(--surface); border-top: 1px solid var(--border);
+  }
+  .nav-btn {
+    padding: 8px 20px; border: 1px solid var(--border); border-radius: 8px;
+    background: #fff; cursor: pointer; font-size: 13px; font-weight: 500;
+    color: var(--text); transition: all .15s;
+  }
+  .nav-btn:hover { background: var(--gcp-bg); border-color: var(--gcp-blue); color: var(--gcp-blue); }
+  .nav-btn:disabled { opacity: .35; cursor: default; background: #fff; border-color: var(--border); color: var(--text-dim); }
+  .nav-indicator { font-size: 13px; color: var(--text-dim); font-weight: 500; }
+
+  /* GCP badge */
+  .gcp-badge {
+    display: inline-block; padding: 2px 8px; border-radius: 4px;
+    font-size: 10px; font-weight: 600; letter-spacing: .3px;
+    background: var(--gcp-bg); color: var(--gcp-blue); border: 1px solid var(--gcp-border);
+    white-space: nowrap;
+  }
+
+  /* Overview animated arrows */
+  @keyframes flowDash { to { stroke-dashoffset: -24; } }
+  .flow-arrow { animation: flowDash 1s linear infinite; }
+
+  /* Overview node hover */
+  .overview-node { transition: transform .2s, box-shadow .2s; cursor: pointer; }
+  .overview-node:hover { transform: translateY(-4px) scale(1.04); box-shadow: 0 8px 28px rgba(0,0,0,.12) !important; }
+
+  /* Chevron pipeline */
+  .chevron {
+    display: flex; align-items: center; justify-content: center; flex-direction: column;
+    color: #fff; font-weight: 600; font-size: 13px; text-align: center;
+    padding: 0 24px; min-width: 120px; height: 72px;
+    position: relative;
+  }
+  .chevron-first { clip-path: polygon(0 0, calc(100% - 20px) 0, 100% 50%, calc(100% - 20px) 100%, 0 100%); }
+  .chevron-mid { clip-path: polygon(0 0, calc(100% - 20px) 0, 100% 50%, calc(100% - 20px) 100%, 0 100%, 20px 50%); }
+  .chevron-last { clip-path: polygon(0 0, 100% 0, 100% 100%, 0 100%, 20px 50%); border-radius: 0 8px 8px 0; }
+
+  /* Metro dots */
+  .metro-dot {
+    width: 48px; height: 48px; border-radius: 50%; display: flex;
+    align-items: center; justify-content: center; font-size: 22px;
+    border: 3px solid #fff; box-shadow: 0 2px 8px rgba(0,0,0,.12);
+    position: relative; z-index: 2; flex-shrink: 0;
+  }
+  .cicd-line {
+    display: flex; align-items: center; gap: 0; position: relative;
+  }
+  .cicd-line::before {
+    content: ''; position: absolute; top: 50%; left: 24px; right: 24px;
+    height: 4px; border-radius: 2px; z-index: 1;
+  }
+  .metro-segment { display: flex; flex-direction: column; align-items: center; gap: 6px; z-index: 2; }
+  .metro-connector { width: 48px; height: 4px; z-index: 1; flex-shrink: 0; }
+</style>
+</head>
+<body>
+<div id="root"></div>
+<script type="text/babel">
+const { useState, useCallback, useMemo } = React;
+
+/* ── Color palette ── */
+const COLORS = {
+  external: '#d93025', trigger: '#e8710a', core: '#1a73e8',
+  tools: '#7b1fa2', data: '#0d652d', output: '#007b83', infra: '#b06000',
+  gcpBlue: '#4285f4',
+};
+
+/* ── Slide metadata ── */
+const SLIDES = [
+  { id: 0, label: '全体図', color: COLORS.core, layout: 'overview' },
+  { id: 1, label: 'Layer 1: 外部ソース', color: COLORS.external, layout: 'convergence' },
+  { id: 2, label: 'Layer 2: トリガー', color: COLORS.trigger, layout: 'swimlane' },
+  { id: 3, label: 'Layer 3: コア処理', color: COLORS.core, layout: 'chevron' },
+  { id: 4, label: 'Layer 4: ツール', color: COLORS.tools, layout: 'radial' },
+  { id: 5, label: 'Layer 5: データ', color: COLORS.data, layout: 'grid' },
+  { id: 6, label: 'Layer 6: アウトプット', color: COLORS.output, layout: 'columns' },
+  { id: 7, label: 'Layer 7: インフラ', color: COLORS.infra, layout: 'metro' },
+];
+
+/* ── GCP Badge component ── */
+const GcpBadge = ({ text, style }) => (
+  <span className="gcp-badge" style={style}>{text}</span>
+);
+
+/* ────────────────────────────────────────────────────────
+   Slide 0: Overview — Large hero flow
+──────────────────────────────────────────────────────── */
+const OverviewSlide = ({ onNavigate }) => {
+  const nodes = [
+    { emoji: '\u{1F4E7}', label: '脆弱性通知', gcp: 'Google Chat', target: 1 },
+    { emoji: '\u26A1', label: 'イベント検知', gcp: 'Cloud Functions', target: 2 },
+    { emoji: '\u{1F9E0}', label: 'AI解析', gcp: 'Vertex AI', target: 3 },
+    { emoji: '\u{1F4E6}', label: 'SBOM突合', gcp: 'BigQuery', target: 4 },
+    { emoji: '\u{1F464}', label: '担当者特定', gcp: 'BigQuery / Sheets', target: 5 },
+    { emoji: '\u{1F4AC}', label: '担当者へ通知', gcp: 'Chat API', target: 6 },
+  ];
+
+  const nodeW = 140, nodeH = 130, gap = 48;
+  const totalW = nodes.length * nodeW + (nodes.length - 1) * gap;
+  const startX = (1184 - totalW) / 2;
+  const cy = 220;
+
+  return (
+    <div style={{ flex: 1, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', position: 'relative' }}>
+      {/* Radial gradient background */}
+      <div style={{ position: 'absolute', inset: 0, background: 'radial-gradient(ellipse at 50% 40%, rgba(66,133,244,.06) 0%, transparent 70%)', pointerEvents: 'none' }} />
+
+      {/* SVG arrows */}
+      <svg style={{ position: 'absolute', inset: 0, width: '100%', height: '100%', pointerEvents: 'none' }}>
+        <defs>
+          {nodes.slice(0, -1).map((_, i) => (
+            <linearGradient key={i} id={`grad${i}`} x1="0" y1="0" x2="1" y2="0">
+              <stop offset="0%" stopColor={COLORS.core} stopOpacity=".3" />
+              <stop offset="100%" stopColor={COLORS.core} stopOpacity=".7" />
+            </linearGradient>
+          ))}
+          <marker id="arrowHead" markerWidth="8" markerHeight="6" refX="7" refY="3" orient="auto">
+            <polygon points="0 0, 8 3, 0 6" fill={COLORS.core} opacity=".6" />
+          </marker>
+        </defs>
+        {nodes.slice(0, -1).map((_, i) => {
+          const x1 = startX + i * (nodeW + gap) + nodeW;
+          const x2 = startX + (i + 1) * (nodeW + gap);
+          const y = cy + 40;
+          return (
+            <line key={i} x1={x1} y1={y} x2={x2} y2={y}
+              stroke={`url(#grad${i})`} strokeWidth="3"
+              strokeDasharray="8 4" className="flow-arrow"
+              markerEnd="url(#arrowHead)" />
+          );
+        })}
+      </svg>
+
+      {/* Nodes */}
+      <div style={{ display: 'flex', gap: gap, position: 'relative', zIndex: 1 }}>
+        {nodes.map((n, i) => (
+          <div key={i} className="overview-node" onClick={() => onNavigate(n.target)}
+            style={{
+              width: nodeW, background: '#fff', borderRadius: 16,
+              boxShadow: '0 3px 16px rgba(0,0,0,.07)', border: '1px solid #e8eaed',
+              display: 'flex', flexDirection: 'column', alignItems: 'center',
+              padding: '20px 10px 16px', gap: 6,
+            }}>
+            <div style={{ fontSize: 48, lineHeight: 1 }}>{n.emoji}</div>
+            <div style={{ fontSize: 15, fontWeight: 700, color: COLORS.core }}>{n.label}</div>
+            <GcpBadge text={n.gcp} />
+          </div>
+        ))}
+      </div>
+
+      <div style={{ marginTop: 28, fontSize: 13, color: 'var(--text-light)', position: 'relative', zIndex: 1 }}>
+        各ノードをクリックすると対応レイヤーの詳細へ移動します
+      </div>
+    </div>
+  );
+};
+
+/* ────────────────────────────────────────────────────────
+   Slide 1: External Sources — Convergence / fan-in
+──────────────────────────────────────────────────────── */
+const ConvergenceSlide = () => {
+  const rows = [
+    {
+      label: 'メール / Chat',
+      items: [
+        { emoji: '\u{1F4E7}', text: 'SIDfm メール' },
+        { emoji: '\u{1F4EC}', text: 'Google Groups' },
+        { emoji: '\u{1F4AC}', text: 'Chat スペース' },
+      ],
+    },
+    {
+      label: '脆弱性フィード',
+      items: [
+        { text: 'NVD' }, { text: 'CISA' }, { text: 'JVN' }, { text: 'MSRC' },
+        { text: 'OSV' }, { text: 'Fortinet' }, { text: 'Cisco' }, { text: 'Alma' },
+        { text: 'MOTEX' }, { text: 'SKYSEA' }, { text: 'Zabbix' },
+      ],
+      isFeedGrid: true,
+    },
+    {
+      label: 'ユーザー操作',
+      items: [
+        { emoji: '\u{1F464}', text: 'ユーザー' },
+        { emoji: '\u{1F4AC}', text: '@mention' },
+        { emoji: '\u2753', text: 'リアクション' },
+      ],
+    },
+  ];
+
+  const rowY = [90, 220, 350];
+  const targetX = 980, targetY = 220;
+
+  return (
+    <div style={{ flex: 1, position: 'relative' }}>
+      {/* SVG bezier paths */}
+      <svg style={{ position: 'absolute', inset: 0, width: '100%', height: '100%', pointerEvents: 'none' }}>
+        <defs>
+          <marker id="convArrow" markerWidth="8" markerHeight="6" refX="7" refY="3" orient="auto">
+            <polygon points="0 0, 8 3, 0 6" fill={COLORS.external} opacity=".5" />
+          </marker>
+        </defs>
+        {rowY.map((y, i) => (
+          <path key={i}
+            d={`M 680 ${y + 25} C 800 ${y + 25}, 860 ${targetY + 30}, ${targetX - 60} ${targetY + 30}`}
+            fill="none" stroke={COLORS.external} strokeWidth="2" strokeOpacity=".3"
+            strokeDasharray="6 4" markerEnd="url(#convArrow)" />
+        ))}
+      </svg>
+
+      {/* Source rows */}
+      {rows.map((row, ri) => (
+        <div key={ri} style={{ position: 'absolute', left: 0, top: rowY[ri], display: 'flex', alignItems: 'center', gap: 12 }}>
+          <div style={{
+            width: 120, padding: '8px 12px', background: `${COLORS.external}0a`, borderRadius: 8,
+            border: `1px solid ${COLORS.external}22`, fontSize: 12, fontWeight: 600, color: COLORS.external, textAlign: 'center',
+          }}>
+            {row.label}
+          </div>
+          {row.isFeedGrid ? (
+            <div style={{ display: 'flex', flexWrap: 'wrap', gap: 4, maxWidth: 440 }}>
+              <div style={{ fontSize: 12, fontWeight: 600, color: 'var(--text-dim)', width: '100%', marginBottom: 2 }}>
+                {'\u{1F310}'} 11 脆弱性フィード
+              </div>
+              {row.items.map((item, ii) => (
+                <div key={ii} style={{
+                  width: 62, height: 28, display: 'flex', alignItems: 'center', justifyContent: 'center',
+                  fontSize: 10, fontWeight: 600, background: '#fff4f3', border: `1px solid ${COLORS.external}33`,
+                  borderRadius: 4, color: COLORS.external,
+                }}>{item.text}</div>
+              ))}
+            </div>
+          ) : (
+            <div style={{ display: 'flex', gap: 10 }}>
+              {row.items.map((item, ii) => (
+                <div key={ii} style={{
+                  display: 'flex', alignItems: 'center', gap: 6, padding: '8px 14px',
+                  background: '#fff', borderRadius: 10, border: '1px solid #e8eaed',
+                  boxShadow: '0 2px 6px rgba(0,0,0,.04)', fontSize: 13, fontWeight: 500,
+                }}>
+                  {item.emoji && <span style={{ fontSize: 20 }}>{item.emoji}</span>}
+                  <span>{item.text}</span>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+      ))}
+
+      {/* Target node */}
+      <div style={{
+        position: 'absolute', left: targetX - 60, top: targetY - 20,
+        width: 150, padding: '24px 16px', borderRadius: 16,
+        background: `linear-gradient(135deg, ${COLORS.external}, #e85d4f)`,
+        color: '#fff', textAlign: 'center', boxShadow: '0 6px 24px rgba(217,48,37,.25)',
+      }}>
+        <div style={{ fontSize: 36, marginBottom: 6 }}>{'\u26A1'}</div>
+        <div style={{ fontSize: 15, fontWeight: 700 }}>Webhook 起動</div>
+        <div style={{ marginTop: 8 }}>
+          <GcpBadge text="Cloud Functions" style={{ background: 'rgba(255,255,255,.2)', color: '#fff', border: '1px solid rgba(255,255,255,.3)' }} />
+        </div>
+      </div>
+    </div>
+  );
+};
+
+/* ────────────────────────────────────────────────────────
+   Slide 2: Triggers — Swimlane diagram
+──────────────────────────────────────────────────────── */
+const SwimlaneSlide = () => {
+  const lanes = [
+    {
+      color: '#e8710a', tint: 'rgba(232,113,10,.03)', icon: '\u{1F4E7}', name: 'メール自動解析',
+      steps: ['Gmail投稿', 'WS Webhook', 'Ticket Pipeline', 'スレッド返信'],
+      gcp: ['Cloud Functions'],
+    },
+    {
+      color: '#7b1fa2', tint: 'rgba(123,31,162,.03)', icon: '\u{1F504}', name: 'フィード収集',
+      steps: ['Scheduler', 'Feed Poller', 'Pub/Sub', 'Intake Worker'],
+      gcp: ['Cloud Functions', 'Cloud Scheduler', 'Pub/Sub'],
+    },
+    {
+      color: '#1a73e8', tint: 'rgba(26,115,232,.03)', icon: '\u{1F399}\uFE0F', name: 'リアルタイム対話',
+      steps: ['ユーザー', 'Live Gateway', 'Gemini Live', 'Web UI'],
+      gcp: ['Cloud Run', 'Vertex AI'],
+    },
+  ];
+
+  return (
+    <div style={{ flex: 1, display: 'flex', flexDirection: 'column', gap: 0 }}>
+      {lanes.map((lane, li) => (
+        <div key={li} style={{
+          flex: 1, display: 'flex', background: lane.tint,
+          borderBottom: li < lanes.length - 1 ? '1px dashed #d0d3db' : 'none',
+        }}>
+          {/* Header */}
+          <div style={{
+            width: 160, display: 'flex', flexDirection: 'column', alignItems: 'center',
+            justifyContent: 'center', gap: 6, borderRight: `3px solid ${lane.color}`,
+            padding: '12px 8px',
+          }}>
+            <div style={{ fontSize: 32 }}>{lane.icon}</div>
+            <div style={{ fontSize: 13, fontWeight: 700, color: lane.color, textAlign: 'center' }}>{lane.name}</div>
+            <div style={{ display: 'flex', flexWrap: 'wrap', gap: 3, justifyContent: 'center' }}>
+              {lane.gcp.map((g, gi) => <GcpBadge key={gi} text={g} />)}
+            </div>
+          </div>
+
+          {/* Steps */}
+          <div style={{ flex: 1, display: 'flex', alignItems: 'center', padding: '0 24px', gap: 8 }}>
+            {lane.steps.map((step, si) => (
+              <React.Fragment key={si}>
+                <div style={{
+                  padding: '10px 18px', borderRadius: 10, background: '#fff',
+                  border: `1.5px solid ${lane.color}33`, fontSize: 13, fontWeight: 600,
+                  color: lane.color, boxShadow: '0 2px 6px rgba(0,0,0,.04)',
+                  whiteSpace: 'nowrap',
+                }}>
+                  {step}
+                </div>
+                {si < lane.steps.length - 1 && (
+                  <svg width="32" height="16" viewBox="0 0 32 16" style={{ flexShrink: 0 }}>
+                    <line x1="0" y1="8" x2="24" y2="8" stroke={lane.color} strokeWidth="2" strokeOpacity=".4" />
+                    <polygon points="24,3 32,8 24,13" fill={lane.color} opacity=".4" />
+                  </svg>
+                )}
+              </React.Fragment>
+            ))}
+          </div>
+        </div>
+      ))}
+    </div>
+  );
+};
+
+/* ────────────────────────────────────────────────────────
+   Slide 3: Core Processing — Chevron pipeline
+──────────────────────────────────────────────────────── */
+const ChevronSlide = () => {
+  const stages = [
+    { icon: '\u{1F4C4}', label: 'Parse' },
+    { icon: '\u{1F4E6}', label: 'SBOM Check' },
+    { icon: '\u{1F50D}', label: 'Version Filter' },
+    { icon: '\u{1F9E0}', label: 'AI Analysis', highlight: true },
+    { icon: '\u{1F4DD}', label: 'Render' },
+    { icon: '\u2705', label: 'Audit' },
+    { icon: '\u{1F4CB}', label: 'Result' },
+  ];
+
+  const baseHue = 215;
+
+  return (
+    <div style={{ flex: 1, display: 'flex', flexDirection: 'column', justifyContent: 'center', gap: 40 }}>
+      {/* Main pipeline */}
+      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+        {stages.map((s, i) => {
+          const lightness = 62 - i * 5;
+          const bg = `hsl(${baseHue}, 78%, ${lightness}%)`;
+          const isFirst = i === 0;
+          const isLast = i === stages.length - 1;
+          const cls = isFirst ? 'chevron chevron-first' : isLast ? 'chevron chevron-last' : 'chevron chevron-mid';
+          return (
+            <div key={i} className={cls} style={{
+              background: bg,
+              minWidth: s.highlight ? 140 : 120,
+              height: s.highlight ? 82 : 72,
+              boxShadow: s.highlight ? `0 0 20px ${COLORS.core}44` : 'none',
+              marginLeft: i > 0 ? -2 : 0,
+            }}>
+              <span style={{ fontSize: 22, lineHeight: 1 }}>{s.icon}</span>
+              <span style={{ fontSize: 12, marginTop: 2 }}>{s.label}</span>
+            </div>
+          );
+        })}
+      </div>
+
+      {/* GCP badges */}
+      <div style={{ display: 'flex', justifyContent: 'center', gap: 8 }}>
+        <GcpBadge text="Vertex AI" />
+        <GcpBadge text="Gemini 2.5" />
+      </div>
+
+      {/* Model Router */}
+      <div style={{
+        display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 24,
+      }}>
+        {/* Left branch */}
+        <div style={{
+          padding: '10px 20px', borderRadius: 10, background: '#e8f5e9',
+          border: '1.5px solid #4caf50', fontSize: 13, fontWeight: 600, color: '#2e7d32',
+          textAlign: 'center',
+        }}>
+          Score {'<'} 4<br />{'\u26A1'} Flash
+        </div>
+
+        {/* Diamond router */}
+        <div style={{ position: 'relative' }}>
+          <svg width="100" height="70" viewBox="0 0 100 70">
+            <polygon points="50,5 95,35 50,65 5,35" fill="#fff" stroke={COLORS.core} strokeWidth="2" />
+            <text x="50" y="32" textAnchor="middle" fontSize="10" fontWeight="600" fill={COLORS.core}>Model</text>
+            <text x="50" y="45" textAnchor="middle" fontSize="10" fontWeight="600" fill={COLORS.core}>Router</text>
+          </svg>
+          {/* Arrows from diamond */}
+          <svg style={{ position: 'absolute', left: -60, top: 25 }} width="60" height="20" viewBox="0 0 60 20">
+            <line x1="55" y1="10" x2="5" y2="10" stroke="#4caf50" strokeWidth="2" strokeDasharray="4 3" />
+            <polygon points="5,5 0,10 5,15" fill="#4caf50" />
+          </svg>
+          <svg style={{ position: 'absolute', right: -60, top: 25 }} width="60" height="20" viewBox="0 0 60 20">
+            <line x1="5" y1="10" x2="55" y2="10" stroke={COLORS.core} strokeWidth="2" strokeDasharray="4 3" />
+            <polygon points="55,5 60,10 55,15" fill={COLORS.core} />
+          </svg>
+        </div>
+
+        {/* Right branch */}
+        <div style={{
+          padding: '10px 20px', borderRadius: 10, background: '#e3f2fd',
+          border: `1.5px solid ${COLORS.core}`, fontSize: 13, fontWeight: 600, color: COLORS.core,
+          textAlign: 'center',
+        }}>
+          Score {'\u2265'} 4<br />{'\u{1F9E0}'} Pro
+        </div>
+      </div>
+    </div>
+  );
+};
+
+/* ────────────────────────────────────────────────────────
+   Slide 4: Agent Tools — Hub and spoke radial
+──────────────────────────────────────────────────────── */
+const RadialSlide = () => {
+  const spokes = [
+    { emoji: '\u{1F4E6}', name: 'SBOM Tools', fn: 'search_sbom()', gcp: 'BigQuery, Sheets API', dashed: false },
+    { emoji: '\u{1F4AC}', name: 'Chat Tools', fn: 'send_card()', gcp: 'Chat API', dashed: false },
+    { emoji: '\u{1F4CA}', name: 'History Tools', fn: 'record_incident()', gcp: 'BigQuery', dashed: false },
+    { emoji: '\u{1F517}', name: 'A2A Tools', fn: 'delegate_task()', gcp: 'Vertex AI', dashed: false },
+    { emoji: '\u{1F6E1}\uFE0F', name: 'Vuln Intel', fn: 'query_nvd()', gcp: 'NVD, OSV', dashed: false },
+    { emoji: '\u{1F6D1}', name: 'Guardrails', fn: 'validate()', gcp: 'Built-in', dashed: true },
+  ];
+
+  const cx = 540, cy = 250, radius = 190;
+
+  return (
+    <div style={{ flex: 1, position: 'relative' }}>
+      {/* SVG lines */}
+      <svg style={{ position: 'absolute', inset: 0, width: '100%', height: '100%', pointerEvents: 'none' }}>
+        {spokes.map((s, i) => {
+          const angle = (i * 60 - 90) * (Math.PI / 180);
+          const sx = cx + Math.cos(angle) * radius;
+          const sy = cy + Math.sin(angle) * radius;
+          return (
+            <line key={i} x1={cx} y1={cy} x2={sx} y2={sy}
+              stroke={s.dashed ? COLORS.tools : `${COLORS.tools}66`}
+              strokeWidth="2" strokeDasharray={s.dashed ? '6 4' : 'none'} />
+          );
+        })}
+      </svg>
+
+      {/* Center hub */}
+      <div style={{
+        position: 'absolute', left: cx - 60, top: cy - 60, width: 120, height: 120,
+        borderRadius: '50%', background: COLORS.core, color: '#fff',
+        display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center',
+        boxShadow: `0 0 0 6px ${COLORS.core}22, 0 0 0 12px ${COLORS.core}11, 0 8px 32px rgba(0,0,0,.15)`,
+        zIndex: 2,
+      }}>
+        <div style={{ fontSize: 36 }}>{'\u{1F9E0}'}</div>
+        <div style={{ fontSize: 12, fontWeight: 700, marginTop: 2 }}>Agent Engine</div>
+      </div>
+
+      {/* Spokes */}
+      {spokes.map((s, i) => {
+        const angle = (i * 60 - 90) * (Math.PI / 180);
+        const sx = cx + Math.cos(angle) * radius;
+        const sy = cy + Math.sin(angle) * radius;
+        return (
+          <div key={i} style={{
+            position: 'absolute', left: sx - 72, top: sy - 48, width: 144,
+            background: '#fff', borderRadius: 12, padding: '12px 10px',
+            border: s.dashed ? `2px dashed ${COLORS.tools}66` : `1.5px solid ${COLORS.tools}33`,
+            boxShadow: '0 2px 10px rgba(0,0,0,.06)', textAlign: 'center', zIndex: 2,
+          }}>
+            <div style={{ fontSize: 24, marginBottom: 2 }}>{s.emoji}</div>
+            <div style={{ fontSize: 12, fontWeight: 700, color: COLORS.tools }}>{s.name}</div>
+            <div style={{ fontSize: 10, color: 'var(--text-dim)', fontFamily: 'monospace', marginTop: 2 }}>{s.fn}</div>
+            <GcpBadge text={s.gcp} style={{ marginTop: 4, fontSize: 9 }} />
+          </div>
+        );
+      })}
+    </div>
+  );
+};
+
+/* ────────────────────────────────────────────────────────
+   Slide 5: Data Layer — Block grid
+──────────────────────────────────────────────────────── */
+const GridSlide = () => {
+  const cards = [
+    { emoji: '\u{1F4E6}', title: 'sbom_packages', desc: 'ソフトウェア部品表マスタ', gcp: 'BigQuery', borderColor: COLORS.data },
+    { emoji: '\u{1F464}', title: 'owner_mapping', desc: '製品→担当者マッピング', gcp: 'BigQuery', borderColor: COLORS.data },
+    { emoji: '\u{1F4CB}', title: 'incident_history', desc: '脆弱性対応の履歴', gcp: 'BigQuery', borderColor: COLORS.data },
+    { emoji: '\u{1F6E1}\uFE0F', title: 'vuln_dedup', desc: '重複通知フィルタ', gcp: 'BigQuery', borderColor: '#689f38' },
+    { emoji: '\u{1F504}', title: 'poll_state', desc: 'フィードポーリング状態', gcp: 'BigQuery', borderColor: '#f9a825' },
+    { emoji: '\u{1F511}', title: 'Secrets', desc: 'APIキー・認証情報', gcp: 'Secret Manager', borderColor: '#f9a825' },
+    { emoji: '\u{1F4E8}', title: 'Pub/Sub', desc: '非同期メッセージング', gcp: 'Cloud Pub/Sub', borderColor: COLORS.core },
+    { emoji: '\u{1F4BE}', title: 'Cloud Storage', desc: 'レポート・添付ファイル', gcp: 'Cloud Storage', borderColor: '#f9a825' },
+    { emoji: '\u{1F4C4}', title: 'Google Sheets', desc: 'SBOM簡易データソース', gcp: 'Sheets API', borderColor: COLORS.core },
+  ];
+
+  return (
+    <div style={{ flex: 1, display: 'flex', flexDirection: 'column', justifyContent: 'center', position: 'relative' }}>
+      {/* Dotted connection lines behind grid */}
+      <svg style={{ position: 'absolute', inset: 0, width: '100%', height: '100%', pointerEvents: 'none', zIndex: 0 }}>
+        <line x1="250" y1="140" x2="560" y2="140" stroke="#ccc" strokeWidth="1" strokeDasharray="3 3" />
+        <line x1="560" y1="140" x2="870" y2="140" stroke="#ccc" strokeWidth="1" strokeDasharray="3 3" />
+        <line x1="250" y1="270" x2="560" y2="270" stroke="#ccc" strokeWidth="1" strokeDasharray="3 3" />
+        <line x1="250" y1="140" x2="250" y2="270" stroke="#ccc" strokeWidth="1" strokeDasharray="3 3" />
+        <line x1="560" y1="140" x2="560" y2="400" stroke="#ccc" strokeWidth="1" strokeDasharray="3 3" />
+      </svg>
+
+      <div style={{
+        display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 16,
+        maxWidth: 900, margin: '0 auto', width: '100%', position: 'relative', zIndex: 1,
+      }}>
+        {cards.map((c, i) => (
+          <div key={i} style={{
+            background: '#fff', borderRadius: 10, padding: '16px 14px',
+            borderTop: `4px solid ${c.borderColor}`, border: `1px solid #e8eaed`,
+            borderTopWidth: 4, borderTopColor: c.borderColor,
+            boxShadow: '0 2px 8px rgba(0,0,0,.04)',
+            display: 'flex', flexDirection: 'column', gap: 4,
+          }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+              <span style={{ fontSize: 22 }}>{c.emoji}</span>
+              <span style={{ fontSize: 14, fontWeight: 700, color: 'var(--text)' }}>{c.title}</span>
+            </div>
+            <div style={{ fontSize: 11, color: 'var(--text-dim)', lineHeight: 1.4 }}>{c.desc}</div>
+            <GcpBadge text={c.gcp} style={{ alignSelf: 'flex-start', marginTop: 4 }} />
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+};
+
+/* ────────────────────────────────────────────────────────
+   Slide 6: Output — 3-column comparison panels
+──────────────────────────────────────────────────────── */
+const ColumnsSlide = () => {
+  const panels = [
+    {
+      color: COLORS.output, icon: '\u{1F4AC}', title: 'Chat 通知フロー',
+      steps: ['TicketResult生成', 'スレッド返信\n(カード形式)', 'トップレベル\nサマリ投稿', '担当者が確認'],
+      flex: 1.15,
+    },
+    {
+      color: COLORS.core, icon: '\u{1F5A5}\uFE0F', title: 'Web UI フロー',
+      steps: ['ブラウザアクセス', 'OIDC認証', 'WebSocket接続', 'リアルタイム対話'],
+      flex: 1,
+    },
+    {
+      color: COLORS.infra, icon: '\u2699\uFE0F', title: 'Admin フロー',
+      steps: ['管理画面アクセス', 'SBOM CRUD', 'フィード状態確認'],
+      flex: 1,
+    },
+  ];
+
+  return (
+    <div style={{ flex: 1, display: 'flex', gap: 20, padding: '0 8px' }}>
+      {panels.map((p, pi) => (
+        <div key={pi} style={{
+          flex: p.flex, background: '#fff', borderRadius: 12,
+          border: `1px solid #e8eaed`, overflow: 'hidden',
+          display: 'flex', flexDirection: 'column',
+          boxShadow: '0 2px 10px rgba(0,0,0,.05)',
+        }}>
+          {/* Header */}
+          <div style={{
+            padding: '14px 16px', borderBottom: `3px solid ${p.color}`,
+            background: `${p.color}08`, textAlign: 'center',
+          }}>
+            <span style={{ fontSize: 24, marginRight: 8 }}>{p.icon}</span>
+            <span style={{ fontSize: 15, fontWeight: 700, color: p.color }}>{p.title}</span>
+          </div>
+
+          {/* Steps */}
+          <div style={{ flex: 1, padding: '20px 16px', display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 0 }}>
+            {p.steps.map((step, si) => (
+              <React.Fragment key={si}>
+                {/* Numbered circle + label */}
+                <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+                  <div style={{
+                    width: 32, height: 32, borderRadius: '50%', background: p.color,
+                    color: '#fff', display: 'flex', alignItems: 'center', justifyContent: 'center',
+                    fontSize: 14, fontWeight: 700, flexShrink: 0,
+                  }}>{si + 1}</div>
+                  <div style={{ fontSize: 13, fontWeight: 600, color: 'var(--text)', whiteSpace: 'pre-line', lineHeight: 1.3 }}>
+                    {step}
+                  </div>
+                </div>
+                {/* Down arrow */}
+                {si < p.steps.length - 1 && (
+                  <svg width="16" height="28" viewBox="0 0 16 28" style={{ margin: '4px 0 4px -36px' }}>
+                    <line x1="8" y1="2" x2="8" y2="22" stroke={p.color} strokeWidth="2" strokeOpacity=".4" />
+                    <polygon points="3,20 8,27 13,20" fill={p.color} opacity=".4" />
+                  </svg>
+                )}
+              </React.Fragment>
+            ))}
+          </div>
+        </div>
+      ))}
+    </div>
+  );
+};
+
+/* ────────────────────────────────────────────────────────
+   Slide 7: Infrastructure — Metro / timeline
+──────────────────────────────────────────────────────── */
+const MetroSlide = () => {
+  const pipelines = [
+    {
+      label: 'CI/CD パイプライン',
+      color: COLORS.infra,
+      dots: [
+        { emoji: '\u{1F4BB}', label: 'git push' },
+        { emoji: '\u{1F3D7}\uFE0F', label: 'Cloud Build' },
+        { emoji: '\u{1F9E0}', label: 'Agent Engine\ndeploy' },
+        { emoji: '\u26A1', label: 'Functions x5' },
+        { emoji: '\u{1F399}\uFE0F', label: 'Cloud Run' },
+        { emoji: '\u{1F5A5}\uFE0F', label: 'UI deploy' },
+      ],
+      scale: 1,
+    },
+    {
+      label: '定期実行',
+      color: '#7b1fa2',
+      dots: [
+        { emoji: '\u23F0', label: 'Cloud Scheduler' },
+        { emoji: '\u{1F504}', label: 'Feed Poll\n(毎時)' },
+        { emoji: '\u{1F504}', label: 'Subscription\n更新 (6h毎)' },
+      ],
+      scale: 0.85,
+    },
+    {
+      label: 'セキュリティ',
+      color: '#0d652d',
+      dots: [
+        { emoji: '\u{1F511}', label: 'Service Account' },
+        { emoji: '\u{1F6E1}\uFE0F', label: 'IAM 7 Roles' },
+        { emoji: '\u2699\uFE0F', label: '全コンポーネント\n利用' },
+      ],
+      scale: 0.85,
+    },
+  ];
+
+  return (
+    <div style={{ flex: 1, display: 'flex', flexDirection: 'column', justifyContent: 'center', gap: 32, padding: '0 20px' }}>
+      {pipelines.map((pl, pli) => (
+        <div key={pli} style={{ transform: `scale(${pl.scale})`, transformOrigin: 'left center' }}>
+          <div style={{ fontSize: 12, fontWeight: 700, color: pl.color, marginBottom: 10, letterSpacing: '.5px' }}>
+            {pl.label}
+          </div>
+          <div className="cicd-line" style={{ display: 'flex', alignItems: 'center', gap: 0, position: 'relative' }}>
+            {/* Continuous line */}
+            <div style={{
+              position: 'absolute', top: '50%', left: 24, right: 24,
+              height: 4, background: `${pl.color}33`, borderRadius: 2, zIndex: 1,
+              transform: 'translateY(-50%)',
+            }} />
+
+            {pl.dots.map((dot, di) => (
+              <React.Fragment key={di}>
+                <div className="metro-segment" style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 6, zIndex: 2 }}>
+                  <div className="metro-dot" style={{ background: pl.color, color: '#fff' }}>
+                    {dot.emoji}
+                  </div>
+                  <div style={{
+                    fontSize: 11, fontWeight: 600, color: 'var(--text)',
+                    textAlign: 'center', whiteSpace: 'pre-line', lineHeight: 1.3, minWidth: 80,
+                  }}>
+                    {dot.label}
+                  </div>
+                </div>
+                {di < pl.dots.length - 1 && (
+                  <div style={{
+                    width: pli === 0 ? 80 : 120, height: 4, zIndex: 1, flexShrink: 0,
+                  }} />
+                )}
+              </React.Fragment>
+            ))}
+          </div>
+        </div>
+      ))}
+    </div>
+  );
+};
+
+/* ────────────────────────────────────────────────────────
+   SlideContent dispatcher
+──────────────────────────────────────────────────────── */
+const SlideContent = ({ slide, onNavigate }) => {
+  const titleBar = (
+    <div>
+      <div className="slide-title" style={{ color: slide.color }}>
+        {slide.label}
+      </div>
+      <div className="slide-subtitle">
+        {slide.id === 0 && 'Vuln-Agent エンドツーエンド処理フロー'}
+        {slide.id === 1 && '脆弱性情報の入力ソースとイベント検知'}
+        {slide.id === 2 && 'イベントからパイプラインへの起動トリガー'}
+        {slide.id === 3 && 'パース → SBOM突合 → AI解析 → レンダリング'}
+        {slide.id === 4 && 'Agent Engineが利用するツール群'}
+        {slide.id === 5 && 'データストア・設定・メッセージング'}
+        {slide.id === 6 && '通知チャネルと出力フロー'}
+        {slide.id === 7 && 'デプロイパイプラインと運用基盤'}
+      </div>
+    </div>
+  );
+
+  return (
+    <div className="slide-area">
+      {titleBar}
+      {slide.layout === 'overview' && <OverviewSlide onNavigate={onNavigate} />}
+      {slide.layout === 'convergence' && <ConvergenceSlide />}
+      {slide.layout === 'swimlane' && <SwimlaneSlide />}
+      {slide.layout === 'chevron' && <ChevronSlide />}
+      {slide.layout === 'radial' && <RadialSlide />}
+      {slide.layout === 'grid' && <GridSlide />}
+      {slide.layout === 'columns' && <ColumnsSlide />}
+      {slide.layout === 'metro' && <MetroSlide />}
+    </div>
+  );
+};
+
+/* ────────────────────────────────────────────────────────
+   App
+──────────────────────────────────────────────────────── */
+const App = () => {
+  const [activeTab, setActiveTab] = useState(0);
+
+  const goTo = useCallback((idx) => {
+    if (idx >= 0 && idx < SLIDES.length) setActiveTab(idx);
+  }, []);
+
+  const slide = SLIDES[activeTab];
+
+  return (
+    <div style={{ width: 1280 }}>
+      {/* Dynamic active tab underline color */}
+      <div dangerouslySetInnerHTML={{__html: `<style>.tab-btn.active::after{background:${slide.color}}</style>`}} />
+
+      {/* Tab bar */}
+      <div className="tab-bar">
+        {SLIDES.map((s) => (
+          <button key={s.id}
+            className={`tab-btn ${activeTab === s.id ? 'active' : ''}`}
+            onClick={() => setActiveTab(s.id)}
+          >
+            {s.label}
+          </button>
+        ))}
+      </div>
+
+      {/* Slide */}
+      <div className="slide-wrap">
+        <SlideContent slide={slide} onNavigate={goTo} />
+
+        {/* Navigation */}
+        <div className="nav-bar">
+          <button className="nav-btn" disabled={activeTab === 0} onClick={() => goTo(activeTab - 1)}>
+            ← Prev
+          </button>
+          <span className="nav-indicator">{activeTab + 1} / {SLIDES.length}</span>
+          <button className="nav-btn" disabled={activeTab === SLIDES.length - 1} onClick={() => goTo(activeTab + 1)}>
+            Next →
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+};
+
+ReactDOM.createRoot(document.getElementById('root')).render(<App />);
+</script>
+</body>
+</html>
